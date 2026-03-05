@@ -1,6 +1,5 @@
 # Claude Code internal state (created when used as CLAUDE_CONFIG_DIR)
 .claude.json
-.mcp.json
 backups/
 debug/
 plans/
