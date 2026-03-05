@@ -2,86 +2,69 @@
 name: slack
 description: |
   Slack communication tools for sending messages, reactions, reading threads, and uploading snippets.
-  This skill is always active — use these scripts to respond to users in Slack.
+  This skill is always active — use these MCP tools to respond to users in Slack.
 ---
 
 # Slack Communication Skill
 
-All scripts are in `$SLACK_SCRIPTS_DIR`. Channel and thread context are provided via environment variables (`SLACK_CHANNEL`, `SLACK_THREAD_TS`, `SLACK_MESSAGE_TS`).
+All Slack tools are available as MCP tools (prefixed `mcp__slack__`). Channel and thread context are automatically configured.
 
-## Scripts
+## Tools
 
-### send-message.ts — Send a message (primary response method)
+### send_message — Send a message (primary response method)
+- `text` (required): Message text with Slack markdown
+- `channel`: Override channel (default: current)
+- `thread_ts`: Override thread (default: current)
 
-```bash
-npx tsx $SLACK_SCRIPTS_DIR/send-message.ts "Your message here"
-```
+### add_reaction — Add emoji reaction
+- `name` (required): Emoji name without colons (e.g., `eyes`, `white_check_mark`)
+- `channel`: Override channel
+- `timestamp`: Override message (default: original message)
 
-Parameters:
-- **positional** (required): Message text
-- `--text "msg"`: Alternative way to pass message text
-- `--channel C123`: Override channel (default: `$SLACK_CHANNEL`)
-- `--thread_ts 123.456`: Override thread (default: `$SLACK_THREAD_TS`)
+Gracefully handles `already_reacted`.
 
-### add-reaction.ts — Add emoji reaction
+### remove_reaction — Remove emoji reaction
+- `name` (required): Emoji name without colons
+- `channel`: Override channel
+- `timestamp`: Override message (default: original message)
 
-```bash
-npx tsx $SLACK_SCRIPTS_DIR/add-reaction.ts emoji_name
-```
+Gracefully handles `no_reaction`.
 
-Parameters:
-- **positional** (required): Emoji name without colons (e.g., `eyes`, `white_check_mark`)
-- `--channel C123`: Override channel
-- `--message_ts 123.456`: Override message timestamp (default: `$SLACK_MESSAGE_TS`)
+### read_thread — Read thread history
+- `limit`: Max messages (default: 20)
+- `channel`: Override channel
+- `thread_ts`: Override thread
 
-### remove-reaction.ts — Remove emoji reaction
+Returns messages with `user`, `text`, `ts`, `is_bot`, and `files` (if any).
 
-```bash
-npx tsx $SLACK_SCRIPTS_DIR/remove-reaction.ts emoji_name
-```
+### read_channel — Read channel history
+- `limit`: Max messages (default: 20)
+- `channel`: Override channel
 
-Same parameters as add-reaction.
+Returns messages with `user`, `text`, `ts`, `is_bot`, `thread_ts`, `reply_count`.
 
-### read-thread.ts — Read thread history
+### upload_snippet — Upload code/text snippet
+- `title` (required): Snippet title
+- `content` (required): Snippet content
+- `filetype`: File type (default: `text`). Common: `javascript`, `python`, `json`, `markdown`, `csv`
 
-```bash
-npx tsx $SLACK_SCRIPTS_DIR/read-thread.ts [limit]
-```
+Use for sharing code blocks, logs, or long text instead of pasting into a message.
 
-Parameters:
-- **positional** (optional): Max messages to return (default: 20)
-- `--channel C123`: Override channel
-- `--thread_ts 123.456`: Override thread
+### download_file — Download Slack files
+- `url` (required): Slack file URL (`url_private` from file objects in messages)
 
-Returns JSON with `messages` array containing `user`, `text`, `ts`, `is_bot` fields.
+Returns file content as text.
 
-### set-status.ts — Set typing indicator
+### upload_file — Upload local files
+- `filepath` (required): Absolute path to the local file
+- `title`: File title (default: filename)
+- `channel`: Override channel
+- `thread_ts`: Override thread
 
-```bash
-npx tsx $SLACK_SCRIPTS_DIR/set-status.ts "Thinking..."
-```
-
-Parameters:
-- **positional** (required): Status text (empty string clears status)
-
-### upload-snippet.ts — Upload code/text snippet
-
-```bash
-npx tsx $SLACK_SCRIPTS_DIR/upload-snippet.ts "title" "content" [filetype]
-```
-
-Parameters:
-- **positional 1** (required): Snippet title
-- **positional 2** (required): Snippet content
-- **positional 3** (optional): File type (default: `text`). Common: `javascript`, `python`, `json`, `markdown`
-
-Use this for sharing code blocks, logs, or long text instead of pasting into a message.
-
-## Output Format
-
-All scripts output JSON:
-- Success: `{"ok": true, ...data}`
-- Failure: `{"ok": false, "error": "message"}`
+### set_status — Set typing indicator
+- `text` (required): Status text (e.g., "Searching..."). Empty string clears.
+- `channel`: Override channel
+- `thread_ts`: Override thread
 
 ## Formatting
 
