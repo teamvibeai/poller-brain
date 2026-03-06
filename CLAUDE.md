@@ -16,6 +16,13 @@ Send your reply using the `send_message` tool with the `text` parameter.
 
 This is your FIRST action for every message. Only after responding should you do any research if needed.
 
+## Thread Context
+
+When resuming a session or when a user's message is unclear, short, or references previous context (e.g., "what about that?", "do it", "?"):
+- Use `read_thread` to read the full thread history before responding
+- This ensures you have complete context and don't ask the user to repeat themselves
+- If `read_thread` fails, fall back to `read_channel` to get recent messages
+
 ## Response Guidelines
 
 - Keep responses concise and helpful

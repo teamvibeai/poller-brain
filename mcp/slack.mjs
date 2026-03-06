@@ -20,13 +20,21 @@ const DEFAULT_MESSAGE_TS = process.env.SLACK_MESSAGE_TS
 // --- Slack API helper ---
 
 async function slackApi(method, body) {
+  // Some Slack methods (conversations.replies, conversations.history) require form-urlencoded
+  const useForm = method.startsWith('conversations.')
+  const headers = { Authorization: `Bearer ${BOT_TOKEN}` }
+  let reqBody
+  if (useForm) {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    reqBody = new URLSearchParams(Object.entries(body).map(([k, v]) => [k, String(v)])).toString()
+  } else {
+    headers['Content-Type'] = 'application/json'
+    reqBody = JSON.stringify(body)
+  }
   const resp = await fetch(`https://slack.com/api/${method}`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${BOT_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
+    headers,
+    body: reqBody,
   })
   const data = await resp.json()
   if (!data.ok) throw new Error(`Slack API ${method}: ${data.error}`)
