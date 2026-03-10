@@ -50,7 +50,11 @@ If `$PERSISTENT_STORAGE_PATH` is set, you can use it for files that should persi
 
 ## Memory & Persistence
 
-Your working directory is a git repo — files are auto-committed after each session.
+Your working directory is a git repo. Changes are pushed after each session, but
+**you must commit your own changes** before finishing. When you create or modify files:
+- Run `git add <files>` and `git commit -m "brief description"` before your session ends
+- The system will push your commits automatically — you don't need to push
+
 Claude Code's auto-memory is ephemeral (lost on re-clone). Write things down explicitly.
 
 ### How to Remember
