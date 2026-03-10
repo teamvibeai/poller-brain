@@ -1,10 +1,15 @@
-# Claude Code internal state (created when used as CLAUDE_CONFIG_DIR)
-.claude.json
-backups/
-debug/
-plans/
-plugins/
-projects/
-session-env/
-shell-snapshots/
-credentials/
+# Ignore everything by default
+*
+
+# Whitelist: only track intentional base-brain files
+!.gitignore
+!CLAUDE.md
+!settings.json
+!mcp/
+!mcp/**
+!skills/
+!skills/**
+!commands/
+!commands/**
+!agents/
+!agents/**
