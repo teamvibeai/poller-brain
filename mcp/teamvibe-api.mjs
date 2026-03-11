@@ -48,7 +48,6 @@ const TOOLS = [
       type: 'object',
       properties: {
         scheduleId: { type: 'string', description: 'Schedule ID to update (omit to create new)' },
-        channelId: { type: 'string', description: 'Channel ID (default: current channel)' },
         scheduleType: { type: 'string', enum: ['CRON', 'ONE_TIME'], description: 'CRON for recurring, ONE_TIME for single execution' },
         cronExpression: { type: 'string', description: 'Cron expression for recurring schedules (e.g., "0 9 * * 1-5" for weekdays at 9am)' },
         scheduledAt: { type: 'string', description: 'ISO datetime for one-time schedules (e.g., "2026-03-15T09:00:00Z")' },
@@ -87,7 +86,7 @@ async function handleTool(name, args) {
     case 'create_scheduled_message': {
       const body = {
         workspaceId: WORKSPACE_ID,
-        channelId: args.channelId || CHANNEL_ID,
+        channelId: CHANNEL_ID,
         scheduleType: args.scheduleType || 'CRON',
         promptTemplate: args.promptTemplate,
       }
