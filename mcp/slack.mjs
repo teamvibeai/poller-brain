@@ -167,14 +167,14 @@ async function handleTool(name, args) {
       const channel = args.channel || DEFAULT_CHANNEL
       const thread_ts = args.thread_ts || DEFAULT_THREAD_TS
       if (!channel) throw new Error('channel required')
-      if (!thread_ts) throw new Error('thread_ts required')
-      const result = await slackApi('chat.postMessage', {
+      const body = {
         channel,
-        thread_ts,
         text: args.text,
         unfurl_links: false,
         unfurl_media: false,
-      })
+      }
+      if (thread_ts) body.thread_ts = thread_ts
+      const result = await slackApi('chat.postMessage', body)
       return { ok: true, ts: result.ts }
     }
 
