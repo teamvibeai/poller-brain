@@ -21,12 +21,12 @@ const DEFAULT_MESSAGE_TS = process.env.SLACK_MESSAGE_TS
 
 async function slackApi(method, body) {
   // Some Slack methods (conversations.replies, conversations.history) require form-urlencoded
-  const useForm = method.startsWith('conversations.')
+  const useForm = method.startsWith('conversations.') || method.startsWith('files.')
   const headers = { Authorization: `Bearer ${BOT_TOKEN}` }
   let reqBody
   if (useForm) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    reqBody = new URLSearchParams(Object.entries(body).map(([k, v]) => [k, String(v)])).toString()
+    reqBody = new URLSearchParams(Object.entries(body).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)])).toString()
   } else {
     headers['Content-Type'] = 'application/json'
     reqBody = JSON.stringify(body)
