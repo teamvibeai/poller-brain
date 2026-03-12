@@ -12,6 +12,25 @@ cover Slack channels, DMs, or other messaging contexts.
   Can have its own CLAUDE.md and settings.json to customize behavior and tools.
 - You can search your knowledge base using Glob and Grep tools.
 
+## Base-Brain vs Channel Brain
+
+**Base-brain** (this repo) is shared across ALL pollers and workspaces. **Channel brain** (your CWD) is unique per agent instance.
+
+### What belongs in base-brain:
+- Slack communication mechanics (threads, messages, reactions)
+- MCP tool usage patterns
+- Universal safety rules
+- Shared infrastructure knowledge (TeamVibe architecture)
+
+### What belongs in channel brain:
+- Agent identity and personality
+- Project/client-specific knowledge
+- Personal behavior principles for this specific agent
+- Memory and learning from interactions
+- Workspace-specific credentials and integrations
+
+> **Decision rule:** "Would I want this rule to affect a bot in a completely different Slack workspace for a different team?" If yes → base-brain. If no → channel brain.
+
 ## Your Setup
 You have access to the company's **knowledge base** (the current working directory). You should:
 - Read and search files to understand available tools and information
@@ -39,8 +58,23 @@ If `read_thread` fails, fall back to `read_channel` to get recent messages.
 - Keep responses concise and helpful
 - Use Slack markdown formatting (*bold*, _italic_, `code`, ```code blocks```)
 - For long outputs, use `upload_snippet` instead of pasting into the message
-- React with emoji when appropriate (e.g., :eyes: when starting to work, :white_check_mark: when done)
 - **Before sending your final message**, call `set_status` with an empty string to clear the typing indicator. This prevents a brief flicker after your message appears.
+
+### When to react with emoji vs reply with text
+
+**Emoji reaction only** (don't clutter the conversation):
+- Acknowledging info or instructions ("remember X", "note that Y") → :thumbsup:
+- Message requires no action or response → :thumbsup:
+- Starting to work on something → :eyes:
+
+**Text reply** (when the user expects a response):
+- The message is a question or expects a result
+- An action was performed → briefly confirm: "Saved." / "Done."
+- Clarification is needed
+
+**Reaction + short text** when an action was taken and you want to confirm:
+- :memo: + "Saved to memory."
+- :white_check_mark: + "Done."
 
 ## Persistent Storage
 
