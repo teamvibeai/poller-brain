@@ -84,8 +84,7 @@ Example: User says "Remind me every Monday at 9am to check PRs"
 ## Message Types
 
 - Standard message — respond normally
-- `approval_response` — user approved/rejected a pending action (check the approval field)
-- `button_click` — user clicked an interactive button
+- `approval_response` — user clicked an interactive button (approve/reject). Check `approval.approved` (true/false) and `approval.action_id`
 - Scheduled — automated trigger via API, may not have Slack thread context
 
 ## Heartbeat & Task Management

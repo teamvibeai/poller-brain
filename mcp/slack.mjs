@@ -46,11 +46,12 @@ async function slackApi(method, body) {
 const TOOLS = [
   {
     name: 'send_message',
-    description: 'Send a message to the Slack thread. Supports full Slack markdown.',
+    description: 'Send a message to the Slack thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
     inputSchema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes)' },
+        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). Also used as fallback for blocks.' },
+        blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions with buttons). See https://api.slack.com/block-kit', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
       },
@@ -173,6 +174,7 @@ async function handleTool(name, args) {
         unfurl_links: false,
         unfurl_media: false,
       }
+      if (args.blocks) body.blocks = args.blocks
       if (thread_ts) body.thread_ts = thread_ts
       const result = await slackApi('chat.postMessage', body)
       return { ok: true, ts: result.ts }
