@@ -122,7 +122,7 @@ const TOOLS = [
   },
   {
     name: 'download_file',
-    description: 'Download a file from Slack (e.g., files shared in messages). Returns the file content as text.',
+    description: 'Download a file from Slack. For small text files (<100KB), returns content inline. For larger or binary files (images, PDFs), saves to /tmp and returns the file path — use the Read tool to view the file.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -283,8 +283,26 @@ async function handleTool(name, args) {
         headers: { Authorization: `Bearer ${BOT_TOKEN}` },
       })
       if (!resp.ok) throw new Error(`Download failed: ${resp.status} ${resp.statusText}`)
-      const text = await resp.text()
-      return { ok: true, content: text, size: text.length }
+
+      const contentType = resp.headers.get('content-type') || ''
+      const contentLength = parseInt(resp.headers.get('content-length') || '0', 10)
+      const isText = contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml')
+      const MAX_INLINE_SIZE = 100 * 1024 // 100KB
+
+      if (isText && contentLength < MAX_INLINE_SIZE) {
+        const text = await resp.text()
+        return { ok: true, content: text, size: text.length }
+      }
+
+      // Save to disk for large/binary files
+      const { writeFileSync } = await import('fs')
+      const { randomUUID } = await import('crypto')
+      const urlPath = new URL(args.url).pathname
+      const filename = urlPath.split('/').pop() || 'file'
+      const tmpPath = `/tmp/slack_${randomUUID().slice(0, 8)}_${filename}`
+      const buffer = Buffer.from(await resp.arrayBuffer())
+      writeFileSync(tmpPath, buffer)
+      return { ok: true, filepath: tmpPath, size: buffer.length, content_type: contentType, hint: 'Use the Read tool to view this file' }
     }
 
     case 'upload_file': {
