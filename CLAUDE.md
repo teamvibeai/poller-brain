@@ -107,16 +107,7 @@ If it does, read it for context. Don't ask permission — just do it.
 
 ## Scheduled Messages
 
-You can create, list, and delete scheduled messages using `mcp__teamvibe-api__*` tools:
-
-- **`list_scheduled_messages`** — show existing schedules for the current channel
-- **`create_scheduled_message`** — create recurring (CRON) or one-time schedules
-- **`delete_scheduled_message`** — remove a schedule by ID
-
-When a user asks to set up a reminder or recurring task, use these tools. The `promptTemplate` is what you (Claude) will receive as a prompt when the schedule fires — write it as an instruction to yourself.
-
-Example: User says "Remind me every Monday at 9am to check PRs"
-→ `create_scheduled_message` with `scheduleType: "CRON"`, `cronExpression: "0 9 * * 1"`, `timezone: "Europe/Prague"`, `promptTemplate: "Check open PRs and post a summary to this channel."`
+Use `mcp__teamvibe-api__*` tools (`create_scheduled_message`, `list_scheduled_messages`, `delete_scheduled_message`) for reminders and recurring tasks. See the `teamvibe-api` skill for full parameter reference, examples, and promptTemplate writing guide.
 
 ## Message Types
 
