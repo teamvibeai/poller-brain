@@ -43,17 +43,20 @@ The `promptTemplate` is **an instruction to yourself** (Claude), not the message
 **Rules:**
 1. Write it as a clear instruction: what to do, what to send, where
 2. The scheduled session has access to all your tools (Slack, web, files)
-3. It runs in the channel's context, so `send_message` goes to the right place
+3. `send_message` defaults to the **channel root**, NOT to any thread. To reply in a specific thread, hardcode `thread_ts` in the prompt: `"Post in thread 1741234567.890123: ..."`
 4. Keep it specific — you won't have the original conversation context
+5. Include everything the session needs: `thread_ts`, user IDs to `@mention`, relevant data (ticket numbers, amounts, etc.) — nothing will be inferred from the original conversation
 
 **Good examples:**
 - `"Check open PRs on GitHub and post a summary to this channel."`
 - `"Send a message: 'Good morning! Time to review the dashboard.'"`
-- `"Run the /invest:run skill and post results in a thread."`
+- `"Post in thread 1741234567.890123: 'Reminder: please review the proposal above.'"` — hardcoded thread_ts for thread reply
+- `"Send a message mentioning <@U1234ABCD>: 'Hey, your deploy is done!'"`
 
 **Bad examples:**
 - `"Good morning!"` — This is a message, not an instruction. You'd interpret it as a greeting to yourself.
 - `"Check PRs"` — Too vague. Which repo? What to do with results?
+- `"Reply to the thread with a reminder"` — No thread_ts specified; the session has no thread context, so this will post to channel root.
 
 ## Examples
 
