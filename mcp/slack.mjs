@@ -146,6 +146,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'update_message',
+    description: 'Update an existing message. Use after button_click events to change button states, show confirmations, or update content in-place.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ts: { type: 'string', description: 'Timestamp of the message to update (required)' },
+        text: { type: 'string', description: 'New fallback text for the message' },
+        blocks: { type: 'array', description: 'New Block Kit blocks to replace existing ones', items: { type: 'object' } },
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+      required: ['ts', 'text'],
+    },
+  },
+  {
     name: 'set_status',
     description: 'Set the typing indicator text (e.g., "Searching...", "Analyzing..."). Use empty string to clear.',
     inputSchema: {
@@ -340,6 +354,16 @@ async function handleTool(name, args) {
         thread_ts,
       })
       return { ok: true, filename }
+    }
+
+    case 'update_message': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      if (!channel) throw new Error('channel required')
+      if (!args.ts) throw new Error('ts required')
+      const body = { channel, ts: args.ts, text: args.text }
+      if (args.blocks) body.blocks = args.blocks
+      const result = await slackApi('chat.update', body)
+      return { ok: true, ts: result.ts }
     }
 
     case 'set_status': {
