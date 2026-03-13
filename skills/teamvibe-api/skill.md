@@ -20,8 +20,8 @@ Create or update a schedule.
 | `promptTemplate` | **yes** | Instruction to yourself — what to do when the schedule fires (see below) |
 | `scheduleType` | no | `CRON` (recurring, default) or `ONE_TIME` |
 | `cronExpression` | for CRON | Standard cron (e.g., `0 9 * * 1-5` = weekdays 9am) |
-| `scheduledAt` | for ONE_TIME | ISO 8601 datetime (e.g., `2026-03-15T09:00:00Z`) |
-| `timezone` | no | IANA timezone (default: UTC). Use `Europe/Prague` for Czech users |
+| `scheduledAt` | for ONE_TIME | ISO 8601 datetime **in UTC** (e.g., `2026-03-15T09:00:00Z`). Must include `Z` suffix. |
+| `timezone` | for CRON only | IANA timezone for cron evaluation (default: UTC). **Ignored for ONE_TIME.** |
 | `endDate` | no | Optional end date for recurring schedules |
 | `scheduleId` | no | Pass existing ID to update a schedule |
 | `status` | no | `ACTIVE` (default) or `PAUSED` |
@@ -77,11 +77,12 @@ User: "In 30 minutes, remind me to call John"
 ```json
 {
   "scheduleType": "ONE_TIME",
-  "scheduledAt": "<current time + 30 min in ISO 8601>",
-  "timezone": "Europe/Prague",
+  "scheduledAt": "<current time + 30 min in UTC, with Z suffix>",
   "promptTemplate": "Send a reminder message: 'Hey, time to call John!'"
 }
 ```
+
+**Important:** `scheduledAt` must always be in UTC. If the user says "at 10:00 Prague time" (CET = UTC+1), convert it: `scheduledAt: "2026-03-15T09:00:00Z"`. Do NOT pass `timezone` for ONE_TIME — it is ignored.
 
 ### Updating an existing schedule
 
@@ -92,8 +93,9 @@ User: "Change that PR check to 9am instead"
 
 ## Timezone
 
-- Default is UTC. Most Czech users want `Europe/Prague`.
-- If the user doesn't specify, ask once and remember in MEMORY.md.
+- **CRON:** `timezone` controls when the cron expression fires. Default is UTC. Most Czech users want `Europe/Prague`.
+- **ONE_TIME:** `timezone` is **not used**. `scheduledAt` must be UTC (with `Z` suffix). Convert local times to UTC before sending.
+- If the user doesn't specify their timezone for CRON schedules, ask once and remember in MEMORY.md.
 - Common timezones: `Europe/Prague`, `America/New_York`, `America/Los_Angeles`, `Asia/Tokyo`
 
 ## Common cron patterns
