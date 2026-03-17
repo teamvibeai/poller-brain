@@ -95,7 +95,7 @@ Keep it under 100 lines. Update it when core memories change significantly.
 
 ## Migration
 
-On session startup, check if migration is needed. Run migration **once**, then it's done.
+Migration runs during **maintenance heartbeat** (not regular sessions — don't slow down user interactions). See `MAINTENANCE.md` for the trigger. Run migration **once**, then it's done.
 
 ### How to detect
 
