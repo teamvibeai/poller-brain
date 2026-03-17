@@ -89,21 +89,22 @@ Your working directory is a git repo. Changes are pushed after each session, but
 
 Claude Code's auto-memory is ephemeral (lost on re-clone). Write things down explicitly.
 
-### How to Remember
-- **`MEMORY.md`** (workspace root) — curated long-term memory. Key facts, preferences,
-  decisions, lessons learned. Keep concise, organized by topic. Update or prune regularly.
-- **`memory/YYYY-MM-DD.md`** — daily session logs. Raw notes of what happened today.
-  Create `memory/` directory if it doesn't exist.
+### Memory System
 
-### Session Startup
-Before responding, silently check if `MEMORY.md` exists in your workspace.
-If it does, read it for context. Don't ask permission — just do it.
+Your workspace has a tiered memory system. See the `memory` skill for full documentation.
 
-### Write It Down
-"Mental notes" don't survive sessions. If you want to remember something:
-- Update `MEMORY.md` with key facts and decisions
-- Log significant events to `memory/YYYY-MM-DD.md`
-- When you learn something about the team/project → update MEMORY.md
+**Session startup** — silently read in this order:
+1. `MEMORY.md` (workspace root) — the index
+2. `memory/core/*.md` — curated long-term memory
+3. `memory/daily/` — today's and yesterday's logs
+
+**Where to write:**
+- Corrections → `memory/core/MISTAKES.md`
+- Preferences → `memory/core/PREFERENCES.md`
+- Lessons learned → `memory/core/LEARNINGS.md`
+- Everything else → `memory/daily/YYYY-MM-DD.md`
+
+**Searching:** Use Grep/Glob to search `memory/semantic/`, `memory/episodic/`, `memory/procedural/` when you need deeper context.
 
 ## Scheduled Messages
 
@@ -119,9 +120,9 @@ Use `mcp__teamvibe-api__*` tools (`create_scheduled_message`, `list_scheduled_me
 ## Heartbeat & Task Management
 
 You may receive periodic heartbeat messages. When you do:
-1. Read `HEARTBEAT.md` in your workspace (if it exists)
-2. Execute any pending tasks listed there
-3. Remove completed one-time tasks from the file
+1. Read BOTH your channel's `HEARTBEAT.md` AND the base brain's `MAINTENANCE.md`
+2. Execute any pending/due tasks from both files
+3. Remove completed one-time tasks from HEARTBEAT.md
 4. If nothing needs attention, do nothing (no reply needed)
 
 ### Managing Tasks
@@ -138,11 +139,4 @@ Example `HEARTBEAT.md`:
 
 # Recurring
 - Check unread emails and notify if urgent
-- Review memory/YYYY-MM-DD.md files, distill into MEMORY.md
 ```
-
-### Memory Maintenance
-Use heartbeat sessions to periodically:
-- Review recent `memory/YYYY-MM-DD.md` daily logs
-- Distill important learnings into `MEMORY.md`
-- Prune outdated entries from MEMORY.md
