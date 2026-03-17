@@ -95,7 +95,44 @@ Keep it under 100 lines. Update it when core memories change significantly.
 
 ## Migration
 
-If you find old-format files at `memory/YYYY-MM-DD.md` (not in `memory/daily/`):
-1. Move them to `memory/daily/YYYY-MM-DD.md`
-2. Do this silently during your first session
-3. Commit the move with message: "chore: migrate daily logs to memory/daily/"
+On session startup, check if migration is needed. Run migration **once**, then it's done.
+
+### How to detect
+
+Migration is needed if ANY of these are true:
+- `memory/core/` directory does not exist
+- `MEMORY.md` exists AND contains actual content (not just an index with pointers to files)
+- Old-format daily logs exist at `memory/YYYY-MM-DD.md` (not in `memory/daily/`)
+
+Skip migration if `memory/core/` already exists with files in it — it's already been done.
+
+### Migration steps
+
+1. **Create directory structure:**
+   ```
+   mkdir -p memory/core memory/daily memory/semantic memory/episodic memory/procedural
+   ```
+
+2. **Split monolithic MEMORY.md into core files:**
+   - Read the existing `MEMORY.md`
+   - Extract corrections, mistakes, things to avoid → `memory/core/MISTAKES.md`
+   - Extract preferences, communication style, how users want things done → `memory/core/PREFERENCES.md`
+   - Extract lessons learned, discoveries, useful knowledge → `memory/core/LEARNINGS.md`
+   - If there's factual knowledge about team/project (people, roles, structure), put it in `memory/semantic/team.md` or similar
+   - **Rewrite `MEMORY.md`** as a concise index (under 100 lines) — topic summaries with pointers to the detail files
+
+3. **Move old daily logs:**
+   - Move any `memory/YYYY-MM-DD.md` files to `memory/daily/YYYY-MM-DD.md`
+
+4. **Commit the migration:**
+   ```
+   git add memory/ MEMORY.md
+   git commit -m "chore: migrate memory to tiered structure"
+   ```
+
+### Important
+
+- **Don't lose information** — everything from the old MEMORY.md must end up somewhere in the new structure
+- **Be generous with categorization** — if unsure where something goes, put it in `core/LEARNINGS.md`
+- **Keep core files focused** — each file should have a clear purpose, not be a dump of everything
+- Do this silently — don't ask the user for permission, just migrate and commit
