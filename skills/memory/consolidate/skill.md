@@ -3,7 +3,7 @@ name: memory-consolidate
 description: |
   Memory consolidation skill. Run during maintenance heartbeat to process daily
   logs into long-term memory. Should be invoked when memory/.last_consolidation
-  is 7+ days old or missing.
+  is 1+ days old or missing.
 ---
 
 # Memory Consolidation
@@ -13,7 +13,7 @@ Process recent daily logs and promote important information to long-term memory.
 ## When to Run
 
 Check `memory/.last_consolidation` for the date of last consolidation.
-If it's 7+ days old or missing, run consolidation.
+If it's 1+ days old or missing, run consolidation.
 
 ## Algorithm
 

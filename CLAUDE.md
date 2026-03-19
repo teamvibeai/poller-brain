@@ -98,11 +98,13 @@ Your workspace has a tiered memory system. See the `memory` skill for full docum
 2. `memory/core/*.md` — curated long-term memory
 3. `memory/daily/` — today's and yesterday's logs
 
-**Where to write:**
+**Where to write (regular sessions — ONLY these two locations):**
 - Corrections → `memory/core/MISTAKES.md`
 - Preferences → `memory/core/PREFERENCES.md`
 - Lessons learned → `memory/core/LEARNINGS.md`
-- Everything else → `memory/daily/YYYY-MM-DD.md`
+- **Everything else** → `memory/daily/YYYY-MM-DD.md` (daily log)
+
+**NEVER write to `memory/semantic/`, `memory/episodic/`, or `memory/procedural/` during regular sessions.** Those are populated only during maintenance consolidation.
 
 **Searching:** Use Grep/Glob to search `memory/semantic/`, `memory/episodic/`, `memory/procedural/` when you need deeper context.
 

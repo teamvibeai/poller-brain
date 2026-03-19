@@ -53,9 +53,9 @@ Commit: {hash}
 
 - **Memory migration**: If `memory/core/` directory does not exist, run the migration described in the `memory` skill. This splits the old monolithic MEMORY.md into the tiered structure. Only needed once per brain.
 
-## Weekly
+## Daily
 
-- **Memory consolidation**: Check `memory/.last_consolidation`. If 7+ days old (or missing), run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
+- **Memory consolidation**: Check `memory/.last_consolidation`. If 1+ days old (or missing), run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
 
 ## Monthly
 

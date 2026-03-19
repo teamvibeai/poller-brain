@@ -53,20 +53,25 @@ Format: use timestamps and brief entries. Create the file if it doesn't exist.
 - 15:10 — User corrected: reports should go to #general, not #reports
 ```
 
-## Importance Signals — What Goes Where
+## Where to Write During Regular Sessions
 
-**Write immediately to core/ when you encounter:**
+During regular sessions (non-maintenance), you may ONLY write to two places:
+
+### 1. `memory/core/` — for high-signal corrections and preferences
+
 - Explicit corrections ("no, do it this way") → `memory/core/MISTAKES.md`
 - Stated preferences ("I prefer...", "always do...") → `memory/core/PREFERENCES.md`
 - Lessons from failures or successes → `memory/core/LEARNINGS.md`
 
-**Write to daily log for everything else:**
-- Routine observations, task progress, conversation notes
+### 2. `memory/daily/YYYY-MM-DD.md` — for EVERYTHING else
 
-**Promote to semantic/episodic/procedural during consolidation:**
-- Factual knowledge (team structure, project details) → `memory/semantic/`
-- Significant events (launches, incidents, decisions) → `memory/episodic/`
-- Workflows and procedures learned → `memory/procedural/`
+ALL other observations, facts, events, and knowledge go into the daily log. This includes:
+- Factual info about the team or project (e.g., "Alice is the frontend lead")
+- Notable events (e.g., "production went down for 2h")
+- Workflows and procedures you figured out
+- Task progress, conversation notes, routine observations
+
+**Do NOT write directly to `memory/semantic/`, `memory/episodic/`, or `memory/procedural/` during regular sessions.** Those directories are populated ONLY during maintenance consolidation (see the consolidation skill). Writing there directly bypasses the consolidation process and creates unreviewed, unstructured content.
 
 ## Routing Logic
 
@@ -77,9 +82,9 @@ When you learn something new, route it:
 | User corrects you | `core/MISTAKES.md` | "No, the API key goes in the header, not query param" |
 | User states preference | `core/PREFERENCES.md` | "Always use bullet points in summaries" |
 | You discover something useful | `core/LEARNINGS.md` | "The staging DB resets every Sunday" |
-| Factual info about team/project | `daily/` → later `semantic/` | "Alice is the frontend lead" |
-| Something notable happened | `daily/` → later `episodic/` | "Production went down for 2h due to DNS" |
-| You figure out how to do something | `daily/` → later `procedural/` | "Deploy requires SSO login first" |
+| Factual info about team/project | `daily/YYYY-MM-DD.md` | "Alice is the frontend lead" |
+| Something notable happened | `daily/YYYY-MM-DD.md` | "Production went down for 2h due to DNS" |
+| You figure out how to do something | `daily/YYYY-MM-DD.md` | "Deploy requires SSO login first" |
 
 ## Searching Deeper Memory
 
