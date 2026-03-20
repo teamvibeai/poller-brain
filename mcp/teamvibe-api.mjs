@@ -55,6 +55,17 @@ const TOOLS = [
         timezone: { type: 'string', description: 'IANA timezone (default: UTC). Examples: Europe/Prague, America/New_York' },
         promptTemplate: { type: 'string', description: 'The prompt/instruction that will be executed at the scheduled time' },
         status: { type: 'string', enum: ['ACTIVE', 'PAUSED'], description: 'Schedule status (default: ACTIVE)' },
+        origin: {
+          type: 'object',
+          description: 'Origin context for response routing. Auto-populated from Slack env vars if not provided.',
+          properties: {
+            source: { type: 'string', enum: ['slack', 'heartbeat', 'email', 'api'] },
+            channel: { type: 'string' },
+            thread_ts: { type: 'string' },
+            from: { type: 'string' },
+            subject: { type: 'string' },
+          },
+        },
       },
       required: ['promptTemplate'],
     },
@@ -96,6 +107,18 @@ async function handleTool(name, args) {
       if (args.endDate) body.endDate = args.endDate
       if (args.timezone) body.timezone = args.timezone
       if (args.status) body.status = args.status
+
+      // Auto-populate origin from environment if not explicitly provided
+      if (args.origin) {
+        body.origin = args.origin
+      } else if (process.env.SLACK_CHANNEL) {
+        body.origin = {
+          source: 'slack',
+          channel: process.env.SLACK_CHANNEL,
+          thread_ts: process.env.SLACK_THREAD_TS || undefined,
+        }
+      }
+
       return await apiCall('POST', '/scheduled-messages', body)
     }
 
