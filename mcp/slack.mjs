@@ -139,6 +139,7 @@ const TOOLS = [
       properties: {
         filepath: { type: 'string', description: 'Absolute path to the local file' },
         title: { type: 'string', description: 'File title (default: filename)' },
+        initial_comment: { type: 'string', description: 'Text message posted alongside the file (appears as one message instead of separate file + text)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
       },
@@ -348,11 +349,13 @@ async function handleTool(name, args) {
       if (!uploadResp.ok) throw new Error(`Upload failed: ${uploadResp.statusText}`)
 
       // Step 3: Complete upload
-      await slackApi('files.completeUploadExternal', {
+      const completeBody = {
         files: [{ id: upload.file_id, title }],
         channel_id: channel,
         thread_ts,
-      })
+      }
+      if (args.initial_comment) completeBody.initial_comment = args.initial_comment
+      await slackApi('files.completeUploadExternal', completeBody)
       return { ok: true, filename }
     }
 
