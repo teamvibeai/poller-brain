@@ -49,6 +49,79 @@ Commit: {hash}
 - The **Context** section is optional — omit it for routine/scheduled operations where the trigger is self-explanatory.
 - Commit the report in the same commit as the maintenance changes it describes.
 
+### Machine-readable report
+
+Every maintenance operation MUST also produce a JSON report alongside the markdown report.
+
+**Location:** `reports/YYYY-MM-DD-{operation-name}.json`
+
+The JSON file is written at the same time as the markdown report, in the same commit.
+
+**Schema:**
+
+```json
+{
+  "operationType": "consolidation",
+  "operationCounts": {
+    "created": 0,
+    "modified": 0,
+    "deleted": 0
+  },
+  "filesChanged": [
+    "memory/core/patterns.md",
+    "memory/daily/2026-03-27.md"
+  ],
+  "decisions": [
+    "Merged 3 daily logs into weekly summary",
+    "Promoted recurring pattern to core memory"
+  ],
+  "selfAssessment": {
+    "reduce-log-count": true,
+    "update-relevant-tiers": true,
+    "meaningful-decisions": true,
+    "no-data-loss": true
+  },
+  "brainCommitSha": "abc123def456789..."
+}
+```
+
+**Field descriptions:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `operationType` | `string` | One of: `consolidation`, `reflection` |
+| `operationCounts` | `object` | Count of files created, modified, deleted |
+| `filesChanged` | `string[]` | Relative paths of all files changed |
+| `decisions` | `string[]` | Plain-text list of decisions made during this run |
+| `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
+| `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
+
+**Rules:**
+- The `brainCommitSha` MUST be obtained by running `git rev-parse HEAD` in the brain repo.
+- The `selfAssessment` keys MUST match the criterion IDs defined in the Eval Criteria section below.
+- The JSON file MUST be valid JSON (no trailing commas, no comments).
+- Commit the JSON report in the same commit as the markdown report and the maintenance changes.
+
+## Eval Criteria
+
+These criteria are used for self-assessment in the JSON report's `selfAssessment` field. Each criterion is binary: `true` (pass) or `false` (fail). Assess honestly.
+
+### Consolidation Criteria
+
+| ID | Criterion | Pass condition |
+|----|-----------|----------------|
+| `reduce-log-count` | Did consolidation reduce the number of daily log files? | At least one daily log was processed/archived |
+| `update-relevant-tiers` | Were all relevant memory tiers updated? | Changes propagated to appropriate tier (daily -> core, daily -> episodic, etc.) |
+| `meaningful-decisions` | Were decisions documented and non-trivial? | At least one decision in the report describes a real choice (not "did routine maintenance") |
+
+### Reflection Criteria
+
+| ID | Criterion | Pass condition |
+|----|-----------|----------------|
+| `assess-memory-quality` | Did reflection assess current memory quality? | Report includes specific observations about memory strengths or gaps |
+| `actionable-recommendations` | Were recommendations actionable? | At least one recommendation is specific enough to act on in the next maintenance cycle |
+| `no-data-loss` | Was no valuable information lost? | No files deleted that contained unique information not captured elsewhere |
+
 ## One-Time
 
 - **Memory migration**: If `memory/core/` directory does not exist, run the migration described in the `memory` skill. This splits the old monolithic MEMORY.md into the tiered structure. Only needed once per brain.
