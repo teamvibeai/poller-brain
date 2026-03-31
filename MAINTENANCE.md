@@ -30,7 +30,7 @@ trigger: {heartbeat|scheduled|auto}
 - ACTION  path/to/file — brief description
 
 ## Decisions
-{Choices made this run, not generic rules.}
+{At least one real choice made this run — not "did routine maintenance". Document the actual decision and why. Examples of meaningful decisions: "Deleted memory/daily/2026-02-10.md because all facts were already captured in semantic/"; "Moved project X deadline from episodic to semantic because it recurred 3 times"; "Skipped promoting a note about error Y because it was a one-off with no lasting impact". Generic phrases like "ran consolidation as scheduled" or "processed logs" do NOT qualify.}
 
 ## Consequences
 - ✅ {Positive impact}
