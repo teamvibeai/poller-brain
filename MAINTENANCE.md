@@ -75,6 +75,14 @@ The JSON file is written at the same time as the markdown report, in the same co
     "Merged 3 daily logs into weekly summary",
     "Promoted recurring pattern to core memory"
   ],
+  "observations": [
+    "Core memory has strong coverage of communication patterns but lacks project-specific context",
+    "Daily logs from last week contain redundant entries about standup format"
+  ],
+  "recommendations": [
+    "Add a project-context section to core memory to capture recurring project references",
+    "Consolidate standup-related entries into a single communication pattern"
+  ],
   "selfAssessment": {
     "reduce-log-count": true,
     "update-relevant-tiers": true,
@@ -93,6 +101,8 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `operationCounts` | `object` | Count of files created, modified, deleted |
 | `filesChanged` | `string[]` | Relative paths of all files changed |
 | `decisions` | `string[]` | Plain-text list of decisions made during this run |
+| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion) |
+| `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion) |
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
