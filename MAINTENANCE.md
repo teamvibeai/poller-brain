@@ -89,6 +89,11 @@ The JSON file is written at the same time as the markdown report, in the same co
     "meaningful-decisions": true,
     "no-data-loss": true
   },
+  "processImprovements": [
+    "[self-critique] What is not working in my own maintenance process? What am I ignoring?",
+    "[proposal] Concrete change proposal with rationale",
+    "[blocked] Things I have identified but cannot fix myself (need base-brain change or admin input)"
+  ],
   "brainCommitSha": "abc123def456789..."
 }
 ```
@@ -101,9 +106,10 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `operationCounts` | `object` | Count of files created, modified, deleted |
 | `filesChanged` | `string[]` | Relative paths of all files changed |
 | `decisions` | `string[]` | Plain-text list of decisions made during this run |
-| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion) |
+| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion). Each entry MUST name a concrete finding — "memory looks good" does NOT qualify. |
 | `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion) |
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
+| `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry is prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. Reflection operations MUST also check the previous reflection's recommendations and note which were acted on. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
@@ -142,4 +148,4 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 
 ## Monthly
 
-- **Memory reflection**: Check `memory/episodic/reflection-*.md` for the last reflection date. If 30+ days old (or none exist), run the memory-reflect skill to assess memory quality. **Produce a report.**
+- **Memory reflection**: Check `memory/episodic/reflection-*.md` for the last reflection date. If 30+ days old (or none exist), run the memory-reflect skill to assess memory quality. **Produce a report.** The JSON report MUST include at least two specific `observations` (concrete strengths or gaps found, not generic statements) and at least one `processImprovements` entry noting what is or isn't working in the maintenance process.
