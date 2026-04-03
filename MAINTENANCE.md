@@ -83,6 +83,11 @@ The JSON file is written at the same time as the markdown report, in the same co
     "Add a project-context section to core memory to capture recurring project references",
     "Consolidate standup-related entries into a single communication pattern"
   ],
+  "processImprovements": [
+    "[self-critique] Daily logs are thin — entries lack enough context to be useful weeks later",
+    "[proposal] HEARTBEAT.md should auto-populate pending items from consolidation findings",
+    "[blocked] Need base-brain change to add recurring reflection follow-up tracking"
+  ],
   "selfAssessment": {
     "reduce-log-count": true,
     "update-relevant-tiers": true,
@@ -101,8 +106,9 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `operationCounts` | `object` | Count of files created, modified, deleted |
 | `filesChanged` | `string[]` | Relative paths of all files changed |
 | `decisions` | `string[]` | Plain-text list of decisions made during this run |
-| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion) |
+| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion). Each entry MUST name a concrete finding — e.g. "semantic/team-members.md has complete profiles for all 4 active members", "No procedural doc exists for the weekly-standup workflow despite it recurring 5+ times". Generic phrases like "memory looks good" do NOT qualify. |
 | `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion) |
+| `processImprovements` | `string[]` | Self-critique and improvement proposals for the maintenance process itself. Each entry should be prefixed with one of: `[self-critique]` (what is not working in my maintenance process), `[proposal]` (concrete change with rationale), or `[blocked]` (identified but can't fix without admin/base-brain change). Also include a `[follow-up]` entry per previous recommendation that was either acted on or ignored. |
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
