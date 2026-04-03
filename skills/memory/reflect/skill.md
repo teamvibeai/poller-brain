@@ -83,12 +83,13 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
 
 **JSON:** `reports/YYYY-MM-DD-memory-reflection.json` — populate every field:
 
-- `observations`: List specific findings from this reflection. Each entry should name a concrete memory strength or gap found. Examples:
+- `observations`: List specific findings from this reflection. **REQUIRED: include at least 2 entries.** Each entry must name a concrete memory strength or gap found, referencing a specific file or memory area. Examples:
   - "semantic/team-members.md has complete profiles for all 4 active members"
   - "memory/core/LEARNINGS.md has grown to 80 lines — approaching prune threshold"
   - "No procedural documentation exists for the weekly-standup workflow despite it recurring 5+ times"
   - "episodic/ covers last 3 months well; older events missing"
   - Leave no entry vague — "memory looks good" does NOT qualify.
+  - Do NOT leave this array empty — if nothing is wrong, document what is working well (e.g., "core/MISTAKES.md has 5 entries with specific lessons, well-maintained").
 - `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
   - "Split semantic/projects.md into per-project files — currently 120 lines"
   - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
