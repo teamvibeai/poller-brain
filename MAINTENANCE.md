@@ -101,8 +101,8 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `operationCounts` | `object` | Count of files created, modified, deleted |
 | `filesChanged` | `string[]` | Relative paths of all files changed |
 | `decisions` | `string[]` | Plain-text list of decisions made during this run |
-| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion) |
-| `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion) |
+| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion). Must name concrete files/tiers and describe their state — e.g. "memory/core/LEARNINGS.md has strong API pattern coverage but no project-context entries", "memory/semantic/ is empty — no long-term knowledge has been promoted yet", "memory/episodic/ contains 3 months of archives with no contradiction resolutions documented". Generic phrases like "memory looks good" do NOT qualify. |
+| `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion). Each item must be specific enough to act on — e.g. "Add a project-context section to memory/core/", "Split memory/core/LEARNINGS.md into API and workflow files". If you identify a problem that would benefit ALL agents (not just this channel), prefix it with `[base-brain]` — e.g. "[base-brain] Add deduplication guidance to the memory-consolidate skill". |
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
