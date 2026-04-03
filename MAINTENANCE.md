@@ -100,7 +100,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `operationType` | `string` | One of: `consolidation`, `reflection` |
 | `operationCounts` | `object` | Count of files created, modified, deleted |
 | `filesChanged` | `string[]` | Relative paths of all files changed |
-| `decisions` | `string[]` | Plain-text list of real choices made this run. Each entry must describe a specific decision and its rationale — not generic phrases like "ran consolidation" or "processed logs". Example: "Deleted memory/daily/2026-02-10.md because all facts were already captured in semantic/". At least one entry is required. |
+| `decisions` | `string[]` | Plain-text list of decisions made during this run |
 | `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion) |
 | `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion) |
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
