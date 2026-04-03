@@ -123,6 +123,7 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `reduce-log-count` | Did consolidation reduce the number of daily log files? | At least one daily log was processed/archived |
 | `update-relevant-tiers` | Were all relevant memory tiers updated? | Changes propagated to appropriate tier (daily -> core, daily -> episodic, etc.) |
 | `meaningful-decisions` | Were decisions documented and non-trivial? | At least one decision in the report describes a real choice (not "did routine maintenance") |
+| `process-self-critique` | Did the consolidation report include process self-critique? | Report contains at least one entry questioning whether the current maintenance process is working, identifying a meta-level gap or recurring problem (not just operational status) |
 
 ### Reflection Criteria
 
@@ -131,6 +132,8 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `assess-memory-quality` | Did reflection assess current memory quality? | Report includes specific observations about memory strengths or gaps |
 | `actionable-recommendations` | Were recommendations actionable? | At least one recommendation is specific enough to act on in the next maintenance cycle |
 | `no-data-loss` | Was no valuable information lost? | No files deleted that contained unique information not captured elsewhere |
+| `concrete-improvement-proposal` | Did reflection produce at least one concrete process change proposal? | Report includes at least one specific proposal for changing the maintenance process, with a stated rationale (what should change and why), not merely an observation that something is broken |
+| `previous-recommendations-reviewed` | Did reflection review follow-through on previous recommendations? | Report explicitly references at least one recommendation from a prior maintenance cycle and states whether it was implemented, partially addressed, or remains pending |
 
 ## One-Time
 
