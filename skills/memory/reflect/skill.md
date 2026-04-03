@@ -11,6 +11,12 @@ Periodic self-assessment of memory quality. Run monthly.
 
 ## Checklist
 
+### 0. Previous Recommendations Review
+
+Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Check which recommendations from that report were acted on since then.
+
+**Action:** Note in this reflection which prior recommendations were implemented, which were ignored, and why. This feeds the `processImprovements` field.
+
 ### 1. Staleness Check
 
 Scan all memory files for information that may be outdated:
@@ -93,6 +99,10 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
   - "Split semantic/projects.md into per-project files — currently 120 lines"
   - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
 - `selfAssessment`: Include at minimum `assess-memory-quality`, `actionable-recommendations`, `no-data-loss`.
+- `processImprovements`: Required for reflection reports. Include at least one entry per prefix type (`[self-critique]`, `[proposal]`, `[blocked]`). Reference prior recommendations that went unacted on. Examples:
+  - `[self-critique] Reflection is running 45 days late — monthly schedule not enforced by any heartbeat check`
+  - `[proposal] Add a 30-day check for last reflection date to HEARTBEAT.md so it triggers automatically`
+  - `[blocked] Cannot self-fix thin daily logs — agents need base-brain guidance on minimum daily log content`
 
 ## Commit
 

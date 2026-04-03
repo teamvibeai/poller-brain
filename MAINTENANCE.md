@@ -89,6 +89,11 @@ The JSON file is written at the same time as the markdown report, in the same co
     "meaningful-decisions": true,
     "no-data-loss": true
   },
+  "processImprovements": [
+    "[self-critique] What is not working in my maintenance process? What am I ignoring?",
+    "[proposal] Concrete change proposal with rationale",
+    "[blocked] Things I cannot fix myself — need base-brain change or admin input"
+  ],
   "brainCommitSha": "abc123def456789..."
 }
 ```
@@ -104,6 +109,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion) |
 | `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion) |
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
+| `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
