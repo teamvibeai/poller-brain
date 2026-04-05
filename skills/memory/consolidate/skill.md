@@ -71,6 +71,24 @@ Write the current date to `memory/.last_consolidation`:
 YYYY-MM-DD
 ```
 
+### 8. Process Self-Critique
+
+Before writing the report, reflect on whether the maintenance process itself is working. This is **required** — the JSON report's `processImprovements` field must contain at least one `[self-critique]` entry per consolidation run.
+
+Ask yourself:
+- Has HEARTBEAT.md been empty for multiple cycles without escalation?
+- Are daily logs accumulating faster than consolidation processes them?
+- Are the same themes or corrections appearing repeatedly, suggesting consolidation isn't retaining them?
+- Is any memory tier consistently skipped (no episodic entries, no procedural updates)?
+- Are there issues I've noticed but haven't acted on?
+
+Write your answer as a `[self-critique]` entry even if things seem fine (e.g., "No recurring problems observed this cycle — memory tier coverage looks balanced"). The entry must reflect on process effectiveness, not just confirm that maintenance ran.
+
+Example entries:
+- `"[self-critique] HEARTBEAT.md has been empty for 3 weeks and I have not flagged this to the user — escalation is overdue"`
+- `"[self-critique] The same error pattern about API timeouts has appeared in 4 daily logs but has not been promoted to core memory — the consolidation threshold may be too conservative"`
+- `"[self-critique] No episodic memories have been written in 30 days despite several incidents in daily logs — I am systematically under-using that tier"`
+
 ## Scoring Guidance
 
 When deciding what to promote, weigh:
