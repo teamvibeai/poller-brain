@@ -64,7 +64,25 @@ For daily logs older than 30 days:
 - Delete the individual daily files that were summarized
 - Keep the weekly summary concise (key events and learnings only)
 
-### 7. Update Timestamp
+### 7. Process Self-Critique
+
+Before finishing, explicitly question whether the maintenance process itself is working. Include at least one `[self-critique]` entry in your consolidation report's `processImprovements` field (or in the decisions/observations section) that reflects on the process, not just the outcome.
+
+Ask yourself:
+- Has HEARTBEAT.md been empty for multiple cycles without escalation?
+- Are the same types of issues appearing repeatedly across consolidation runs?
+- Are any memory tiers never being updated, suggesting the routing logic isn't working?
+- Is there information that keeps getting missed or lost despite the current process?
+- Are there tasks or follow-ups added but never acted on?
+
+Example qualifying entries:
+- `[self-critique] HEARTBEAT.md has been empty for 3 consecutive weeks — I should escalate or remove stale placeholders`
+- `[self-critique] The same team project facts are re-extracted each cycle because they're not being promoted to semantic memory`
+- `[self-critique] No episodic memories have been created in 2 weeks despite significant events being logged daily`
+
+Generic statements like "consolidation ran as scheduled" do NOT qualify. The entry must reflect on whether the process is effective.
+
+### 8. Update Timestamp
 
 Write the current date to `memory/.last_consolidation`:
 ```
