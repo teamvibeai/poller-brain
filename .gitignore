@@ -16,5 +16,7 @@
 !MAINTENANCE.md
 !memory/
 !memory/.last_consolidation
+!scripts/
+!scripts/**
 !reports/
 !reports/**

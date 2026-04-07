@@ -147,7 +147,7 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 
 ## Daily
 
-- **Memory consolidation**: Check `memory/.last_consolidation`. If 1+ days old (or missing), run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
+- **Memory consolidation**: Run `bash scripts/maintenance-guard.sh` first. If it exits non-zero, skip consolidation entirely (no report needed). If it exits 0, run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
 
 ## Monthly
 
