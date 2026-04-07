@@ -14,5 +14,7 @@
 !agents/
 !agents/**
 !MAINTENANCE.md
+!memory/
+!memory/.last_consolidation
 !reports/
 !reports/**
