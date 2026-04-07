@@ -79,9 +79,26 @@ When deciding what to promote, weigh:
 - **Explicit signals** — user corrections and stated preferences are always high priority
 - **Impact** — does this affect how you should behave in future sessions?
 
+### 8. Produce Report
+
+Create both a markdown and JSON report per the MAINTENANCE.md reporting convention.
+
+**Markdown report:** `reports/YYYY-MM-DD-memory-consolidation.md`
+
+**JSON report:** `reports/YYYY-MM-DD-memory-consolidation.json`
+
+The JSON report MUST include a `processImprovements` field with at least one genuine `[self-critique]` entry. This entry must question whether the maintenance process is actually working — not just confirm that it ran. Examples of valid self-critique:
+
+- `[self-critique] Daily logs are accumulating faster than consolidation can process them — the 30-day compression threshold may be too lenient`
+- `[self-critique] The same recurring patterns keep appearing in daily logs, suggesting they aren't being promoted to semantic memory effectively`
+- `[self-critique] Core memory entries are growing stale — no mechanism exists to detect when promoted facts become outdated`
+- `[self-critique] Consolidation is running but memory retrieval quality hasn't been validated — promoted facts may not be surfaced in practice`
+
+**Do NOT use generic filler** like "ran consolidation as scheduled" or repeat the operational status. The self-critique must identify a real gap, recurring problem, or process weakness observed during this consolidation run.
+
 ## Commit
 
-After consolidation, commit all changes:
+After consolidation, commit all changes (including reports) in a single commit:
 ```
 chore: consolidate memory (YYYY-MM-DD)
 ```
