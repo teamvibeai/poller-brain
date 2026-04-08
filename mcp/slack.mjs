@@ -17,6 +17,13 @@ const DEFAULT_CHANNEL = process.env.SLACK_CHANNEL
 const DEFAULT_THREAD_TS = process.env.SLACK_THREAD_TS
 const DEFAULT_MESSAGE_TS = process.env.SLACK_MESSAGE_TS
 
+const API_URL = process.env.TEAMVIBE_API_URL
+const TOKEN = process.env.TEAMVIBE_POLLER_TOKEN
+const WORKSPACE_ID = process.env.TEAMVIBE_WORKSPACE_ID
+const CHANNEL_ID = process.env.TEAMVIBE_CHANNEL_ID
+const BOT_ID = process.env.TEAMVIBE_BOT_ID
+const POLLER_ID = process.env.TEAMVIBE_POLLER_ID
+
 // --- Slack API helper ---
 
 async function slackApi(method, body) {
@@ -54,6 +61,19 @@ const TOOLS = [
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions with buttons). See https://api.slack.com/block-kit', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
+        modals: {
+          type: 'array',
+          description: 'Modal form definitions to attach as buttons. Each opens a Slack modal when clicked.',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Button label (default: "Open Form")' },
+              view: { type: 'object', description: 'Slack Block Kit view object with type, title, blocks, submit, close' },
+              callbackId: { type: 'string', description: 'Identifier for matching submissions to requests' },
+            },
+            required: ['view'],
+          },
+        },
       },
       required: ['text'],
     },
@@ -183,13 +203,57 @@ async function handleTool(name, args) {
       const channel = args.channel || DEFAULT_CHANNEL
       const thread_ts = args.thread_ts || DEFAULT_THREAD_TS
       if (!channel) throw new Error('channel required')
+
+      let blocks = args.blocks ? [...args.blocks] : []
+
+      // Handle modal definitions — register each with the API, generate buttons
+      if (args.modals?.length && API_URL && TOKEN) {
+        const buttons = []
+        for (const modal of args.modals) {
+          try {
+            const resp = await fetch(`${API_URL}/modal-definitions`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                workspaceId: WORKSPACE_ID,
+                channelId: CHANNEL_ID,
+                botId: BOT_ID,
+                pollerId: POLLER_ID,
+                slackChannel: channel,
+                threadTs: thread_ts || '',
+                callbackId: modal.callbackId || modal.view?.callback_id,
+                viewDefinition: modal.view,
+              }),
+            })
+            const data = await resp.json()
+            if (!resp.ok) throw new Error(data.error || `API error ${resp.status}`)
+
+            buttons.push({
+              type: 'button',
+              text: { type: 'plain_text', text: modal.label || 'Open Form' },
+              action_id: `modal:${data.modalDefId}`,
+              value: `modal_def_id:${data.modalDefId}`,
+            })
+          } catch (e) {
+            console.error('Failed to register modal:', e.message)
+          }
+        }
+
+        if (buttons.length) {
+          blocks.push({ type: 'actions', elements: buttons })
+        }
+      }
+
       const body = {
         channel,
         text: args.text,
         unfurl_links: false,
         unfurl_media: false,
       }
-      if (args.blocks) body.blocks = args.blocks
+      if (blocks.length) body.blocks = blocks
       if (thread_ts) body.thread_ts = thread_ts
       const result = await slackApi('chat.postMessage', body)
       return { ok: true, ts: result.ts }
