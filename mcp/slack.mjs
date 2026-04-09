@@ -205,9 +205,24 @@ async function handleTool(name, args) {
       if (!channel) throw new Error('channel required')
 
       let blocks = args.blocks ? [...args.blocks] : []
+      const hasModals = args.modals?.length && API_URL && TOKEN
 
-      // Handle modal definitions — register each with the API, generate buttons
-      if (args.modals?.length && API_URL && TOKEN) {
+      // Send the message first (without modal buttons if top-level)
+      // We need the message ts for thread context when there's no thread_ts
+      const body = {
+        channel,
+        text: args.text,
+        unfurl_links: false,
+        unfurl_media: false,
+      }
+      if (blocks.length) body.blocks = blocks
+      if (thread_ts) body.thread_ts = thread_ts
+      const result = await slackApi('chat.postMessage', body)
+
+      // Register modal definitions after sending — use message ts as thread context
+      // when no thread_ts exists (top-level channel messages)
+      if (hasModals) {
+        const effectiveThreadTs = thread_ts || result.ts
         const buttons = []
         for (const modal of args.modals) {
           try {
@@ -223,7 +238,7 @@ async function handleTool(name, args) {
                 botId: BOT_ID,
                 pollerId: POLLER_ID,
                 slackChannel: channel,
-                threadTs: thread_ts || '',
+                threadTs: effectiveThreadTs,
                 callbackId: modal.callbackId || modal.view?.callback_id,
                 viewDefinition: modal.view,
               }),
@@ -242,20 +257,18 @@ async function handleTool(name, args) {
           }
         }
 
+        // Update the message to add modal buttons
         if (buttons.length) {
-          blocks.push({ type: 'actions', elements: buttons })
+          const updatedBlocks = [...blocks, { type: 'actions', elements: buttons }]
+          await slackApi('chat.update', {
+            channel,
+            ts: result.ts,
+            text: args.text,
+            blocks: updatedBlocks,
+          })
         }
       }
 
-      const body = {
-        channel,
-        text: args.text,
-        unfurl_links: false,
-        unfurl_media: false,
-      }
-      if (blocks.length) body.blocks = blocks
-      if (thread_ts) body.thread_ts = thread_ts
-      const result = await slackApi('chat.postMessage', body)
       return { ok: true, ts: result.ts }
     }
 
