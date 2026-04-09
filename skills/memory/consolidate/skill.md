@@ -80,14 +80,29 @@ Ask yourself:
 - Are daily logs accumulating faster than consolidation processes them?
 - Are the same themes or corrections appearing repeatedly, suggesting consolidation isn't retaining them?
 - Is any memory tier consistently skipped (no episodic entries, no procedural updates)?
+- Are there tasks or follow-ups added but never acted on?
+- Are core memory entries growing stale with no mechanism to detect it?
 - Are there issues I've noticed but haven't acted on?
 
 Write your answer as a `[self-critique]` entry even if things seem fine (e.g., "No recurring problems observed this cycle — memory tier coverage looks balanced"). The entry must reflect on process effectiveness, not just confirm that maintenance ran.
+
+**Do NOT use generic filler** like "ran consolidation as scheduled" or "maintenance completed normally". The entry must identify a real gap, recurring problem, or process weakness observed during this run.
 
 Example entries:
 - `"[self-critique] HEARTBEAT.md has been empty for 3 weeks and I have not flagged this to the user — escalation is overdue"`
 - `"[self-critique] The same error pattern about API timeouts has appeared in 4 daily logs but has not been promoted to core memory — the consolidation threshold may be too conservative"`
 - `"[self-critique] No episodic memories have been written in 30 days despite several incidents in daily logs — I am systematically under-using that tier"`
+- `"[self-critique] The same team project facts are re-extracted each cycle because they're not being promoted to semantic memory"`
+- `"[self-critique] Consolidation is running but memory retrieval quality hasn't been validated — promoted facts may not be surfaced in practice"`
+
+### 9. Produce Report
+
+Create both a markdown and JSON report:
+
+- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md`
+- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json`
+
+The JSON report MUST include the `processImprovements` field with the `[self-critique]` entry from Step 8.
 
 ## Scoring Guidance
 
@@ -99,7 +114,7 @@ When deciding what to promote, weigh:
 
 ## Commit
 
-After consolidation, commit all changes:
+After consolidation, commit all changes (including reports):
 ```
 chore: consolidate memory (YYYY-MM-DD)
 ```
