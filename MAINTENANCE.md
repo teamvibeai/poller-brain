@@ -149,6 +149,7 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 
 - **Memory consolidation**: Run `bash scripts/maintenance-guard.sh` first. If it exits non-zero, skip consolidation entirely (no report needed). If it exits 0, run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
   - **Tier coverage check**: Before completing consolidation, verify that each memory tier was explicitly considered: `memory/semantic/` (facts/knowledge), `memory/episodic/` (significant events), `memory/procedural/` (workflows), `memory/core/` (corrections, preferences, lessons). If any daily log contains information relevant to a tier, that tier MUST be updated. Do not stop after updating one tier — check all four.
+  - **Log removal**: After processing a daily log's contents into long-term memory, **delete the source daily log file** (`memory/daily/YYYY-MM-DD.md`). This is required — consolidation is only complete when processed logs are removed. Do not leave processed logs in place. The `reduce-log-count` criterion fails if no daily log files are deleted during consolidation.
 
 ## Twice Weekly
 
