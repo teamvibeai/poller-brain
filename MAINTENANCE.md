@@ -149,6 +149,7 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 
 - **Memory consolidation**: Run `bash scripts/maintenance-guard.sh` first. If it exits non-zero, skip consolidation entirely (no report needed). If it exits 0, run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
   - **Tier coverage check**: Before completing consolidation, verify that each memory tier was explicitly considered: `memory/semantic/` (facts/knowledge), `memory/episodic/` (significant events), `memory/procedural/` (workflows), `memory/core/` (corrections, preferences, lessons). If any daily log contains information relevant to a tier, that tier MUST be updated. Do not stop after updating one tier — check all four.
+  - **Log age check**: Before writing the report, check whether any `memory/daily/*.md` files are dated more than 30 days ago. If none are, self-assess `reduce-log-count: true` — the outcome is satisfied and no archiving action is required. Only archive logs if files genuinely older than 30 days exist. Record the outcome explicitly in the report: either "archived N stale logs" or "no daily logs older than 30 days found".
 
 ## Twice Weekly
 
