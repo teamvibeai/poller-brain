@@ -126,7 +126,7 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 
 | ID | Criterion | Pass condition |
 |----|-----------|----------------|
-| `reduce-log-count` | Did consolidation reduce the number of daily log files? | At least one daily log was processed/archived |
+| `reduce-log-count` | Did consolidation leave no stale daily logs? | No daily log files older than 30 days remain after consolidation. If no logs are old enough to archive, this is a pass. |
 | `update-relevant-tiers` | Were all relevant memory tiers updated? | Changes propagated to appropriate tier (daily -> core, daily -> episodic, etc.) |
 | `meaningful-decisions` | Were decisions documented and non-trivial? | At least one decision in the report describes a real choice (not "did routine maintenance") |
 | `process-self-critique` | Did the consolidation report include process self-critique? | Report contains at least one entry questioning whether the current maintenance process is working, identifying a meta-level gap or recurring problem (not just operational status) |
