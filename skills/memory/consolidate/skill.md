@@ -57,12 +57,13 @@ Route new/updated facts to appropriate locations:
 After promoting facts, update `MEMORY.md` to reflect the current state of memory.
 Keep it concise — topic summaries with pointers to detail files.
 
-### 6. Compress Old Daily Logs
+### 6. Archive Old Daily Logs
 
-For daily logs older than 30 days:
-- Create `memory/daily/weekly-YYYY-Www.md` summaries (one per week)
-- Delete the individual daily files that were summarized
-- Keep the weekly summary concise (key events and learnings only)
+For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older than 30 days:
+- **Delete them.** Their content has already been promoted to long-term memory in steps 2–4.
+- Do NOT create weekly summary files (`weekly-*.md`) — they accumulate in `memory/daily/` and eventually become stale files themselves, causing this step to fail in future runs.
+- If any weekly summary files from a previous approach still exist in `memory/daily/` and are older than 30 days, delete those too.
+- After deletion, verify no files dated more than 30 days ago remain in `memory/daily/`.
 
 ### 7. Update Timestamp
 
