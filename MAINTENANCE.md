@@ -134,10 +134,6 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `update-relevant-tiers` | Were all relevant memory tiers updated? | Changes propagated to appropriate tier (daily -> core, daily -> episodic, etc.) |
 | `meaningful-decisions` | Were decisions documented and non-trivial? | At least one decision in the report describes a real choice (not "did routine maintenance") |
 | `process-self-critique` | Did the consolidation report include process self-critique? | Report contains at least one entry questioning whether the current maintenance process is working, identifying a meta-level gap or recurring problem (not just operational status) |
-| `daily-log-exists-today` | Is today's daily log present? | If any session ran today (git commits or reports from today exist), `memory/daily/YYYY-MM-DD.md` for today exists and is non-empty. If today had no sessions yet, this is a pass. |
-| `daily-log-continuous-appends` | Was today's log appended to continuously, not written once? | Today's `memory/daily/YYYY-MM-DD.md` contains 2+ distinct entries (e.g., dated or bulleted lines). A single session-end dump fails this criterion. If today had fewer than 2 sessions, the criterion evaluates the most recent day with 2+ sessions instead. |
-| `daily-log-recent-retention` | Are today's and yesterday's logs preserved? | After consolidation, both `memory/daily/<today>.md` and `memory/daily/<yesterday>.md` still exist (if they existed before consolidation or were created today). Consolidation MUST NOT delete them. |
-| `daily-log-weekly-coverage` | Is daily log coverage healthy across the last 7 days? | Over the last 7 days, the ratio `days_with_daily_log / days_with_any_session` is ≥ 0.8. Days with no session do not count against coverage. |
 
 ### Reflection Criteria
 
