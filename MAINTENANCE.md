@@ -87,7 +87,11 @@ The JSON file is written at the same time as the markdown report, in the same co
     "reduce-log-count": true,
     "update-relevant-tiers": true,
     "meaningful-decisions": true,
-    "no-data-loss": true
+    "no-data-loss": true,
+    "daily-log-exists-today": true,
+    "daily-log-continuous-appends": true,
+    "daily-log-recent-retention": true,
+    "daily-log-weekly-coverage": true
   },
   "processImprovements": [
     "[self-critique] What is not working in my maintenance process? What am I ignoring?",
@@ -150,6 +154,18 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 - **Memory consolidation**: Run `bash scripts/maintenance-guard.sh` first. If it exits non-zero, skip consolidation entirely (no report needed). If it exits 0, run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
   - **Tier coverage check**: Before completing consolidation, verify that each memory tier was explicitly considered: `memory/semantic/` (facts/knowledge), `memory/episodic/` (significant events), `memory/procedural/` (workflows), `memory/core/` (corrections, preferences, lessons). If any daily log contains information relevant to a tier, that tier MUST be updated. Do not stop after updating one tier — check all four.
   - **Log age check**: Before writing the report, check whether any `memory/daily/*.md` files are dated more than 30 days ago. If none are, self-assess `reduce-log-count: true` — the outcome is satisfied and no archiving action is required. Only archive logs if files genuinely older than 30 days exist. Record the outcome explicitly in the report: either "archived N stale logs" or "no daily logs older than 30 days found".
+  - **Recent-log retention (never delete today or yesterday)**: Consolidation MUST NOT delete `memory/daily/<today>.md` or `memory/daily/<yesterday>.md`, regardless of whether their contents have been promoted. Same-day and next-day sessions rely on these files being present to recover context. Only logs dated 2+ days ago are candidates for promotion; only logs dated 30+ days ago are candidates for deletion.
+  - **Daily log compliance block**: Every consolidation report MUST include a `## Daily Log Compliance` section in the markdown with observable metrics for the last 7 days. If any metric fails, either backfill (reconstruct entries from git log / reports / this session's memory) or explicitly flag the gap in `processImprovements` as a `[self-critique]`. Example block:
+    ```markdown
+    ## Daily Log Compliance
+    - Coverage (last 7d): 5/7 days with sessions covered ✅
+    - Today's log: present, 8 entries, first append 09:14, last 16:42 ✅
+    - Continuous appends: 8 distinct timestamped entries (not a single end-of-session dump) ✅
+    - Retention: today + yesterday preserved ✅
+    - Empty/trivial logs: 0
+    - Gaps: 2026-04-11 (had sessions per git log, no daily log written)
+    ```
+    Populate the `selfAssessment` fields `daily-log-exists-today`, `daily-log-continuous-appends`, `daily-log-recent-retention`, and `daily-log-weekly-coverage` based on this block.
 
 ## Twice Weekly
 

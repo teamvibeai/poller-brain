@@ -98,13 +98,17 @@ Your workspace has a tiered memory system. See the `memory` skill for full docum
 2. `memory/core/*.md` — curated long-term memory
 3. `memory/daily/` — today's and yesterday's logs
 
+**Daily log = your running scratchpad.** As you work, append one-liners to `memory/daily/YYYY-MM-DD.md` whenever something is worth remembering tomorrow: a decision, a correction, a surprising finding, a completed task. Append *continuously* during the session — don't batch at the end, and don't skip because "nothing important happened yet." If the session involves tool use or a real exchange, it almost always produces at least one line worth keeping.
+
 **Where to write (regular sessions — ONLY these two locations):**
 - Corrections → `memory/core/MISTAKES.md`
 - Preferences → `memory/core/PREFERENCES.md`
 - Lessons learned → `memory/core/LEARNINGS.md`
-- **Everything else** → `memory/daily/YYYY-MM-DD.md` (daily log)
+- **Everything else** → `memory/daily/YYYY-MM-DD.md`
 
 **NEVER write to `memory/semantic/`, `memory/episodic/`, or `memory/procedural/` during regular sessions.** Those are populated only during maintenance consolidation.
+
+**NEVER delete today's or yesterday's `memory/daily/*.md` during maintenance** — same-day and next-day sessions rely on them for context recovery. Promotion to long-term memory is not a reason to delete recent logs. Only files dated 30+ days ago are candidates for deletion.
 
 **Searching:** Use Grep/Glob to search `memory/semantic/`, `memory/episodic/`, `memory/procedural/` when you need deeper context.
 

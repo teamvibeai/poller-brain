@@ -65,6 +65,8 @@ For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older 
 - If any weekly summary files from a previous approach still exist in `memory/daily/` and are older than 30 days, delete those too.
 - After deletion, verify no files dated more than 30 days ago remain in `memory/daily/`.
 
+**Recent-log retention (non-negotiable):** NEVER delete `memory/daily/<today>.md` or `memory/daily/<yesterday>.md`, regardless of whether their contents have been promoted. Same-day and next-day sessions rely on these files to recover context. Promotion is not a reason to delete; deletion is only for files dated 30+ days ago.
+
 ### 7. Update Timestamp
 
 Write the current date to `memory/.last_consolidation`:
@@ -72,7 +74,33 @@ Write the current date to `memory/.last_consolidation`:
 YYYY-MM-DD
 ```
 
-### 8. Process Self-Critique
+### 8. Assess Daily Log Compliance
+
+Before self-critique, run observable checks on the daily log scratchpad and record the outcome in both reports.
+
+Checks (all over the last 7 days unless specified):
+
+1. **Today's log exists.** If any session ran today (commits, reports, or MCP tool calls today), verify `memory/daily/YYYY-MM-DD.md` for today exists and has non-empty content. If no sessions ran today, pass.
+2. **Continuous appends.** Today's log (or the most recent day that had 2+ sessions) contains 2+ distinct timestamped or bulleted entries — not a single dump. A file with a lone session-end paragraph fails this check.
+3. **Retention.** Both `memory/daily/<today>.md` and `memory/daily/<yesterday>.md` are present after consolidation completes.
+4. **No empty logs.** No `memory/daily/*.md` file is empty or contains only a header.
+5. **Weekly coverage.** Compute `days_with_daily_log / days_with_any_session` over the last 7 days. Target ≥ 0.8. "Days with sessions" = days with commits to this brain, reports written, or (if available) inbox activity.
+
+Write the result into the markdown report as a `## Daily Log Compliance` section (see example in MAINTENANCE.md). Populate the corresponding `selfAssessment` keys in the JSON report:
+
+- `daily-log-exists-today`
+- `daily-log-continuous-appends`
+- `daily-log-recent-retention`
+- `daily-log-weekly-coverage`
+
+If any check fails, do one of two things before finishing:
+
+- **Backfill** — if you can reconstruct entries from git log, reports, or this session's context, append them to the correct `memory/daily/*.md` file with a note that they were reconstructed (e.g., `- (backfilled from git) 15:30 — shipped PR #51`).
+- **Flag** — if backfill isn't possible, add a `[self-critique]` entry in `processImprovements` naming the specific gap and what prevented the agent from writing during that day.
+
+Do not silently pass a failing check.
+
+### 9. Process Self-Critique
 
 Before writing the report, reflect on whether the maintenance process itself is working. This is **required** — the JSON report's `processImprovements` field must contain at least one `[self-critique]` entry per consolidation run.
 
@@ -96,14 +124,12 @@ Example entries:
 - `"[self-critique] The same team project facts are re-extracted each cycle because they're not being promoted to semantic memory"`
 - `"[self-critique] Consolidation is running but memory retrieval quality hasn't been validated — promoted facts may not be surfaced in practice"`
 
-### 9. Produce Report
+### 10. Produce Report
 
 Create both a markdown and JSON report:
 
-- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md`
-- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json`
-
-The JSON report MUST include the `processImprovements` field with the `[self-critique]` entry from Step 8.
+- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the `## Daily Log Compliance` section from Step 8)
+- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` keys in `selfAssessment` and the `[self-critique]` entry from Step 9 in `processImprovements`)
 
 ## Scoring Guidance
 
