@@ -108,6 +108,8 @@ Your workspace has a tiered memory system. See the `memory` skill for full docum
 
 **NEVER write to `memory/semantic/`, `memory/episodic/`, or `memory/procedural/` during regular sessions.** Those are populated only during maintenance consolidation.
 
+**NEVER delete today's or yesterday's `memory/daily/*.md` during maintenance** — same-day and next-day sessions rely on them for context recovery. Promotion to long-term memory is not a reason to delete recent logs. Only files dated 30+ days ago are candidates for deletion.
+
 **Searching:** Use Grep/Glob to search `memory/semantic/`, `memory/episodic/`, `memory/procedural/` when you need deeper context.
 
 ## Scheduled Messages
