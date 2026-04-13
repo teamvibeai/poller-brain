@@ -36,14 +36,20 @@ Do not announce that you're reading memory. Just do it.
 
 ## Daily Logging
 
-During each session, append observations to `memory/daily/YYYY-MM-DD.md`:
-- Key decisions made
-- New information learned about the team/project
-- Tasks completed or started
-- Corrections received
-- Important context from conversations
+The daily log is a **running scratchpad you append to throughout the session**, not a summary you write at the end. Treat it like thinking out loud to your future self.
 
-Format: use timestamps and brief entries. Create the file if it doesn't exist.
+As you work, append a timestamped one-liner to `memory/daily/YYYY-MM-DD.md` whenever any of these happen:
+- You make a decision (especially one you'd have to explain later)
+- The user corrects you or states a preference
+- You learn something about the team, project, or environment
+- You complete or start a task worth remembering tomorrow
+- Something surprising or non-obvious comes up
+
+Rules:
+- **Append continuously, not at the end.** If the session ends abruptly (crash, context compaction, timeout), the log still has value because you wrote as you went.
+- **Don't batch-decide "what was important."** If you're unsure whether an entry is worth it, write it — removing noise is cheap during consolidation, reconstructing lost context is not.
+- **One line per entry is fine.** Brief is better than nothing.
+- Create the file if it doesn't exist.
 
 ```markdown
 ## 2026-03-17
@@ -51,7 +57,10 @@ Format: use timestamps and brief entries. Create the file if it doesn't exist.
 - 14:30 — Learned that Alice prefers email over Slack for approvals
 - 14:45 — Fixed the deploy script; root cause was missing AWS region
 - 15:10 — User corrected: reports should go to #general, not #reports
+- 15:42 — Tried to use `gh pr create --draft`; project convention is non-draft PRs
 ```
+
+**Anti-pattern:** finishing a session that involved real tool use (edits, commits, decisions) with zero daily log entries. If that happens, it means the scratchpad habit failed — fix it next session.
 
 ## Where to Write During Regular Sessions
 
