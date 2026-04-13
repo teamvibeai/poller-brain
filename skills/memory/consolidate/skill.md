@@ -131,6 +131,8 @@ Create both a markdown and JSON report:
 - **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the `## Daily Log Compliance` section from Step 8)
 - **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` keys in `selfAssessment` and the `[self-critique]` entry from Step 9 in `processImprovements`)
 
+For `selfAssessment.reduce-log-count`: set to `true` if Step 6 left no daily logs older than 30 days in `memory/daily/` — this includes the case where you checked and found none to delete. Set to `false` only if old logs still remain after your run.
+
 ## Scoring Guidance
 
 When deciding what to promote, weigh:
