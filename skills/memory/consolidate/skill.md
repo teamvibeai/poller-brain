@@ -105,6 +105,8 @@ Create both a markdown and JSON report:
 
 The JSON report MUST include the `processImprovements` field with the `[self-critique]` entry from Step 8.
 
+For `selfAssessment.reduce-log-count`: set to `true` if Step 6 left no daily logs older than 30 days in `memory/daily/` — this includes the case where you checked and found none to delete. Set to `false` only if old logs still remain after your run.
+
 ## Scoring Guidance
 
 When deciding what to promote, weigh:
