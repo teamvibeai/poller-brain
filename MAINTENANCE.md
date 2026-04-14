@@ -132,22 +132,22 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 |----|-----------|----------------|
 | `reduce-log-count` | Did consolidation reduce the number of daily log files? | At least one daily log was processed/archived |
 | `update-relevant-tiers` | Were all relevant memory tiers updated? | Changes propagated to appropriate tier (daily -> core, daily -> episodic, etc.) |
-| `meaningful-decisions` | Were decisions documented and non-trivial? | At least one decision in the report describes a real choice (not "did routine maintenance") |
 | `process-self-critique` | Did the consolidation report include process self-critique? | Report contains at least one entry questioning whether the current maintenance process is working, identifying a meta-level gap or recurring problem (not just operational status) |
 | `daily-log-exists-today` | Does today's daily log exist when sessions ran today? | If any session ran today (commits, reports, or MCP activity dated today), memory/daily/YYYY-MM-DD.md for today exists and is non-empty. If today had no sessions yet, this is a pass. |
 | `daily-log-continuous-appends` | Was the daily log appended to continuously, not written as a single end-of-session dump? | Today's daily log (or the most recent day with 2+ sessions) contains 2+ distinct timestamped or bulleted entries — not a single summary paragraph written at session end. If the brain has no day with 2+ sessions yet (e.g., new agent, sparse usage), this criterion passes. |
 | `daily-log-recent-retention` | Are today's and yesterday's daily logs preserved after consolidation? | After consolidation completes, memory/daily/<today>.md and memory/daily/<yesterday>.md still exist (when they existed before consolidation or were created today) |
 | `daily-log-weekly-coverage` | Is daily log coverage healthy across the last 7 days? | Over the last 7 days, days_with_daily_log / days_with_any_session >= 0.8. Days with no session do not count against coverage. |
+| `evidence-backed-decisions` | Did consolidation document at least two decisions with specific memory evidence? | At least 2 entries in the decisions array reference specific memory files, observed entry counts, or content patterns encountered during consolidation — not generic process descriptions |
 
 ### Reflection Criteria
 
 | ID | Criterion | Pass condition |
 |----|-----------|----------------|
-| `assess-memory-quality` | Did reflection assess current memory quality? | Report includes specific observations about memory strengths or gaps |
-| `actionable-recommendations` | Were recommendations actionable? | At least one recommendation is specific enough to act on in the next maintenance cycle |
-| `no-data-loss` | Was no valuable information lost? | No files deleted that contained unique information not captured elsewhere |
 | `concrete-improvement-proposal` | Did reflection produce at least one concrete process change proposal? | Report includes at least one specific proposal for changing the maintenance process, with a stated rationale (what should change and why), not merely an observation that something is broken |
 | `previous-recommendations-reviewed` | Did reflection review follow-through on previous recommendations? | Report explicitly references at least one recommendation from a prior maintenance cycle and states whether it was implemented, partially addressed, or remains pending |
+| `gap-impact-analysis` | Did reflection connect at least one memory gap to a specific operational consequence? | At least one entry in observations identifies a specific memory gap AND explains how that gap caused a concrete problem or reduced maintenance effectiveness in recent cycles |
+| `verifiable-recommendations` | Did reflection include at least one recommendation with a stated success criterion? | At least one entry in recommendations specifies: (1) a concrete change to make, (2) the current problem it addresses, AND (3) a verifiable condition that would confirm the recommendation was implemented and effective in a future maintenance cycle |
+| `deletion-with-preservation-evidence` | Did reflection explicitly account for each deleted file's content preservation? | For every file deletion recorded in filesChanged (operationCounts.deleted > 0): the report names in decisions or observations the specific destination file where the deleted content was preserved, OR explicitly states the content was redundant with a specifically named existing file. If operationCounts.deleted is 0, the criterion passes automatically. |
 
 ## One-Time
 
