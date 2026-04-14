@@ -46,6 +46,7 @@ As you work, append a timestamped one-liner to `memory/daily/YYYY-MM-DD.md` when
 - Something surprising or non-obvious comes up
 
 Rules:
+- **Minimum entry rule (non-negotiable):** Every session must create at least one daily log entry — even heartbeat, maintenance, or automated sessions with no user interaction. If nothing notable happened, write it: `- 09:00 — heartbeat ran, no user interactions, no new content`. No session ends with zero log entries.
 - **Append continuously, not at the end.** If the session ends abruptly (crash, context compaction, timeout), the log still has value because you wrote as you went.
 - **Don't batch-decide "what was important."** If you're unsure whether an entry is worth it, write it — removing noise is cheap during consolidation, reconstructing lost context is not.
 - **One line per entry is fine.** Brief is better than nothing.
