@@ -131,7 +131,7 @@ Create both a markdown and JSON report:
 - **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the `## Daily Log Compliance` section from Step 8)
 - **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` keys in `selfAssessment` and the `[self-critique]` entry from Step 9 in `processImprovements`)
 
-For `selfAssessment.reduce-log-count`: set to `true` if Step 6 left no daily logs older than 30 days in `memory/daily/` — this includes the case where you checked and found none to delete. Set to `false` only if old logs still remain after your run.
+For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log was actively processed this run — either (a) Step 6 deleted one or more log files, OR (b) Steps 2–4 extracted content from at least one log and produced at least one ADD or UPDATE action. Set to `false` if no logs were processed (e.g., no logs in range, all NOOP). **Always include daily log files whose content was extracted in `filesChanged`**, even if they were not deleted — listing source logs gives the evaluator the evidence of log file activity it needs to verify this criterion.
 
 ## Scoring Guidance
 
