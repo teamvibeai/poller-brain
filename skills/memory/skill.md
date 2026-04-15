@@ -31,6 +31,7 @@ At the start of every session, silently load memory in this order:
 1. **`MEMORY.md`** (workspace root) — the index of what you know
 2. **`memory/core/*.md`** — all core memory files
 3. **`memory/daily/`** — today's log and yesterday's log (if they exist)
+4. **Create today's daily log entry** — immediately append at least one entry to `memory/daily/YYYY-MM-DD.md` (create the file if needed). Even a minimal entry like `- HH:MM — session started` is required. Do this BEFORE any other work.
 
 Do not announce that you're reading memory. Just do it.
 
