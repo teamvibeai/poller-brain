@@ -17,6 +17,19 @@ If it's 1+ days old or missing, run consolidation.
 
 ## Algorithm
 
+### 0. Archive TODAY.md
+
+Before processing, archive `memory/TODAY.md` to the daily/ directory:
+
+1. Read `memory/TODAY.md` — extract the date header(s) (format: `# YYYY-MM-DD`)
+2. For each date section in TODAY.md:
+   - Append its content to `memory/daily/YYYY-MM-DD.md` (create if needed)
+3. Reset `memory/TODAY.md` with today's date header: `# YYYY-MM-DD`
+
+This ensures daily logs accumulate in `memory/daily/` while TODAY.md stays fresh for the current day.
+
+If `memory/TODAY.md` doesn't exist, skip this step and create it with today's header after consolidation.
+
 ### 1. Scan Daily Logs
 
 Read all files in `memory/daily/` dated since the last consolidation date.
@@ -52,10 +65,20 @@ Route new/updated facts to appropriate locations:
 | Lessons | `memory/core/LEARNINGS.md` |
 | Mistakes | `memory/core/MISTAKES.md` |
 
-### 5. Update MEMORY.md Index
+### 5. Regenerate SUMMARY.md
 
-After promoting facts, update `MEMORY.md` to reflect the current state of memory.
-Keep it concise — topic summaries with pointers to detail files.
+After promoting facts, regenerate `memory/SUMMARY.md` from the current state of all memory tiers.
+
+Read all `memory/core/*.md`, scan `memory/semantic/`, `memory/episodic/`, `memory/procedural/` for file listing, and compile into the SUMMARY.md format defined in the memory skill. Target ~100-150 lines.
+
+Key sections:
+- **Identity** — who you are (from channel brain CLAUDE.md)
+- **Key Rules** — compressed top rules from MISTAKES.md + LEARNINGS.md
+- **Preferences** — compressed from PREFERENCES.md
+- **Active Projects** — from recent episodic/ entries
+- **Deep Memory Index** — pointers to all memory tiers with topic summaries
+
+This replaces the old "Update MEMORY.md" step. SUMMARY.md is the new authoritative index.
 
 ### 6. Archive Old Daily Logs
 
@@ -80,9 +103,9 @@ Before self-critique, run observable checks on the daily log scratchpad and reco
 
 Checks (all over the last 7 days unless specified):
 
-1. **Today's log exists.** If any session ran today (commits, reports, or MCP tool calls today), verify `memory/daily/YYYY-MM-DD.md` for today exists and has non-empty content. If no sessions ran today, pass.
+1. **Today's log exists.** If any session ran today (commits, reports, or MCP tool calls today), verify `memory/TODAY.md` exists and has non-empty content (or `memory/daily/YYYY-MM-DD.md` for today exists after archival). If no sessions ran today, pass.
 2. **Continuous appends.** Today's log (or the most recent day that had 2+ sessions) contains 2+ distinct timestamped or bulleted entries — not a single dump. A file with a lone session-end paragraph fails this check.
-3. **Retention.** Both `memory/daily/<today>.md` and `memory/daily/<yesterday>.md` are present after consolidation completes.
+3. **Retention.** `memory/TODAY.md` exists with today's header, and `memory/daily/<yesterday>.md` is present after consolidation completes.
 4. **No empty logs.** No `memory/daily/*.md` file is empty or contains only a header.
 5. **Weekly coverage.** Compute `days_with_daily_log / days_with_any_session` over the last 7 days. Target ≥ 0.8. "Days with sessions" = days with commits to this brain, reports written, or (if available) inbox activity.
 
@@ -95,7 +118,7 @@ Write the result into the markdown report as a `## Daily Log Compliance` section
 
 If any check fails, do one of two things before finishing:
 
-- **Backfill** — if you can reconstruct entries from git log, reports, or this session's context, append them to the correct `memory/daily/*.md` file with a note that they were reconstructed (e.g., `- (backfilled from git) 15:30 — shipped PR #51`).
+- **Backfill** — if you can reconstruct entries from git log, reports, or this session's context, append them to `memory/TODAY.md` or the correct `memory/daily/*.md` file with a note that they were reconstructed (e.g., `- (backfilled from git) 15:30 — shipped PR #51`).
 - **Flag** — if backfill isn't possible, add a `[self-critique]` entry in `processImprovements` naming the specific gap and what prevented the agent from writing during that day.
 
 Do not silently pass a failing check.
