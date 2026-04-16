@@ -184,7 +184,7 @@ Needed if `memory/SUMMARY.md` does not exist. Run after Migration A (if needed).
    - Otherwise, create with header: `# YYYY-MM-DD`
 
 3. **Add `@` imports to channel brain CLAUDE.md** if not already present:
-   - Add `@memory/SUMMARY.md` and `@memory/TODAY.md` to the end of CLAUDE.md
+   - Add `@memory/SUMMARY.md` and `@memory/TODAY.md` near the top of CLAUDE.md (right after the title/identity section). Memory imports should be early in the file so they survive context compaction.
 
 4. **Commit:** `git commit -m "chore: add SUMMARY.md + TODAY.md memory files"`
 
