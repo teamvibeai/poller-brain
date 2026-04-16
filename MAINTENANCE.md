@@ -138,6 +138,9 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `daily-log-recent-retention` | Are today's and yesterday's daily logs preserved after consolidation? | After consolidation completes, memory/daily/<today>.md and memory/daily/<yesterday>.md still exist (when they existed before consolidation or were created today) |
 | `daily-log-weekly-coverage` | Is daily log coverage healthy across the last 7 days? | Over the last 7 days, days_with_daily_log / days_with_any_session >= 0.8. Days with no session do not count against coverage. |
 | `evidence-backed-decisions` | Did consolidation document at least two decisions with specific memory evidence? | At least 2 entries in the decisions array reference specific memory files, observed entry counts, or content patterns encountered during consolidation — not generic process descriptions |
+| `summary-md-regenerated` | Was memory/SUMMARY.md regenerated during consolidation? | memory/SUMMARY.md appears in filesChanged, indicating the consolidated long-term memory index was updated. If the brain has not yet migrated to the SUMMARY.md workflow (no memory/SUMMARY.md exists), this criterion passes — the migration will create it. |
+| `today-md-archived` | Was memory/TODAY.md archived and reset during consolidation? | memory/TODAY.md appears in filesChanged, indicating the daily working log was archived to memory/daily/ and reset for the new day. If the brain has not yet migrated to the TODAY.md workflow, this criterion passes. |
+| `at-imports-configured` | Are @memory/SUMMARY.md and @memory/TODAY.md imports configured in CLAUDE.md? | The consolidation report's Daily Log Compliance section or selfAssessment confirms that the channel brain CLAUDE.md contains both @memory/SUMMARY.md and @memory/TODAY.md references. If the brain has not yet migrated, this criterion passes. |
 
 ### Reflection Criteria
 
