@@ -129,7 +129,7 @@ Follow these steps when a session produces substantial reference material:
 
 **3. Write to semantic/ as soon as you have enough substance:** Don't wait for the topic to close or the session to end — neither may happen. Write what you have, even if incomplete. Mark unfinished content with a WIP marker: `<!-- WIP: topic not concluded -->`
 
-**4. Multi-session topics:** Append to the existing `semantic/{topic}.md` under a date header: `## YYYY-MM-DD`. Don't create a new file for the same topic.
+**4. Multi-session topics:** Append to the existing `semantic/{topic}.md` under a date header: `## YYYY-MM-DD — brief description` (e.g., `## 2026-04-17 — deployment strategy`). Don't create a new file for the same topic.
 
 **5. Log the capture:** Write a one-liner to `TODAY.md`: `[HH:MM] session capture: semantic/{topic}.md`
 
