@@ -108,6 +108,7 @@ Checks (all over the last 7 days unless specified):
 3. **Retention.** `memory/TODAY.md` exists with today's header, and `memory/daily/<yesterday>.md` is present after consolidation completes.
 4. **No empty logs.** No `memory/daily/*.md` file is empty or contains only a header.
 5. **Weekly coverage.** Compute `days_with_daily_log / days_with_any_session` over the last 7 days. Target ≥ 0.8. "Days with sessions" = days with commits to this brain, reports written, or (if available) inbox activity.
+6. **`@` imports configured.** Read the channel brain `CLAUDE.md` and verify it contains both `@memory/SUMMARY.md` and `@memory/TODAY.md`. If either is missing, fail this check. If CLAUDE.md doesn't exist, fail.
 
 Write the result into the markdown report as a `## Daily Log Compliance` section (see example in MAINTENANCE.md). Populate the corresponding `selfAssessment` keys in the JSON report:
 
@@ -115,6 +116,7 @@ Write the result into the markdown report as a `## Daily Log Compliance` section
 - `daily-log-continuous-appends`
 - `daily-log-recent-retention`
 - `daily-log-weekly-coverage`
+- `at-imports-configured`
 
 If any check fails, do one of two things before finishing:
 
