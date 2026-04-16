@@ -93,22 +93,23 @@ Claude Code's auto-memory is ephemeral (lost on re-clone). Write things down exp
 
 Your workspace has a tiered memory system. See the `memory` skill for full documentation.
 
-**Session startup** — silently read in this order:
-1. `MEMORY.md` (workspace root) — the index
-2. `memory/core/*.md` — curated long-term memory
-3. `memory/daily/` — today's and yesterday's logs
+**Two files are always in your context** via `@` imports in your channel brain CLAUDE.md:
+- `memory/SUMMARY.md` — consolidated long-term memory (key rules, lessons, pointers)
+- `memory/TODAY.md` — today's working log (your running scratchpad)
 
-**Daily log = your running scratchpad.** As you work, append one-liners to `memory/daily/YYYY-MM-DD.md` whenever something is worth remembering tomorrow: a decision, a correction, a surprising finding, a completed task. Append *continuously* during the session — don't batch at the end, and don't skip because "nothing important happened yet." If the session involves tool use or a real exchange, it almost always produces at least one line worth keeping.
+If these files don't exist yet, they'll be created during the next maintenance cycle. Until then, use `memory/daily/YYYY-MM-DD.md` as fallback for daily logging.
+
+**Daily log = your running scratchpad.** As you work, append one-liners to `memory/TODAY.md` whenever something is worth remembering tomorrow: a decision, a correction, a surprising finding, a completed task. Append *continuously* during the session — don't batch at the end, and don't skip because "nothing important happened yet." If the session involves tool use or a real exchange, it almost always produces at least one line worth keeping.
 
 **Where to write (regular sessions — ONLY these two locations):**
 - Corrections → `memory/core/MISTAKES.md`
 - Preferences → `memory/core/PREFERENCES.md`
 - Lessons learned → `memory/core/LEARNINGS.md`
-- **Everything else** → `memory/daily/YYYY-MM-DD.md`
+- **Everything else** → `memory/TODAY.md`
 
 **NEVER write to `memory/semantic/`, `memory/episodic/`, or `memory/procedural/` during regular sessions.** Those are populated only during maintenance consolidation.
 
-**NEVER delete today's or yesterday's `memory/daily/*.md` during maintenance** — same-day and next-day sessions rely on them for context recovery. Promotion to long-term memory is not a reason to delete recent logs. Only files dated 30+ days ago are candidates for deletion.
+**NEVER delete today's or yesterday's daily logs during maintenance** — same-day and next-day sessions rely on them for context recovery. Promotion to long-term memory is not a reason to delete recent logs. Only files dated 30+ days ago are candidates for deletion.
 
 **Searching:** Use Grep/Glob to search `memory/semantic/`, `memory/episodic/`, `memory/procedural/` when you need deeper context.
 
