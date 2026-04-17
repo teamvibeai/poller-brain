@@ -24,7 +24,13 @@ Before processing, archive `memory/TODAY.md` to the daily/ directory:
 1. Read `memory/TODAY.md` — extract the date header(s) (format: `# YYYY-MM-DD`)
 2. For each date section in TODAY.md:
    - Append its content to `memory/daily/YYYY-MM-DD.md` (create if needed)
-3. Reset `memory/TODAY.md` with today's date header: `# YYYY-MM-DD`
+3. Reset `memory/TODAY.md` with today's date header and an immediate consolidation log entry:
+   ```
+   # YYYY-MM-DD
+
+   - HH:MM — memory consolidation started
+   ```
+   This entry is required — it ensures today's log is non-empty even if no user sessions follow, so the daily-log-weekly-coverage metric counts this day.
 
 This ensures daily logs accumulate in `memory/daily/` while TODAY.md stays fresh for the current day.
 
