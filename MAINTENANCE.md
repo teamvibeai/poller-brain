@@ -96,9 +96,12 @@ The JSON file is written at the same time as the markdown report, in the same co
   "processImprovements": [
     "[self-critique] What is not working in my maintenance process? What am I ignoring?",
     "[proposal] Concrete change proposal with rationale",
-    "[blocked] Things I cannot fix myself — need base-brain change or admin input"
+    "[blocked] Things I cannot fix myself \u2014 need base-brain change or admin input"
   ],
-  "brainCommitSha": "abc123def456789..."
+  "brainCommitSha": "abc123def456789...",
+  "dailyLogCompliance": "{ \"todayLogExists\": true, \"entryCount\": 4, \"timestampSpread\": \"09:14 to 16:47\", \"coverageRatio\": 0.86, \"coverageDetails\": \"6 of 7 session days had daily logs\", \"atImportsConfigured\": true, \"yesterdayLogExists\": true }",
+  "regularSessionAudit": "[{ \"commitSha\": \"abc123def456\", \"timestamp\": \"2026-04-18T14:23:00Z\", \"isMaintenanceCommit\": false, \"filesChanged\": [\"memory/semantic/stepforge.md\", \"memory/TODAY.md\"] }, { \"commitSha\": \"789xyz\", \"timestamp\": \"2026-04-18T09:01:00Z\", \"isMaintenanceCommit\": true, \"filesChanged\": [\"memory/SUMMARY.md\", \"memory/TODAY.md\"] }]",
+  "selfAssessment.at-imports-configured": "true"
 }
 ```
 
@@ -115,6 +118,9 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
 | `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
+| `dailyLogCompliance` | `string` | Structured object capturing the daily log health check performed during consolidation: whether today's log exists and is non-empty, entry count and timestamp spread for the most recent multi-session day, 7-day session coverage ratio, and @imports configuration status (both @memory/SUMMARY.md and @memory/TODAY.md present in CLAUDE.md) |
+| `regularSessionAudit` | `string` | Audit of commits made between the previous consolidation and the current one, annotated by commit type (maintenance vs. regular-session). For each regular-session commit: the commit SHA, timestamp, and list of files touched. This enables scorers to verify that semantic/ writes were logged in TODAY.md, that SUMMARY.md was not manually edited, and that new semantic/ files follow naming conventions. |
+| `selfAssessment.at-imports-configured` | `string` | Self-assessed boolean for whether @memory/SUMMARY.md and @memory/TODAY.md are both configured as imports in the channel brain's CLAUDE.md file |
 
 **Rules:**
 - The `brainCommitSha` MUST be obtained by running `git rev-parse HEAD` in the brain repo.
