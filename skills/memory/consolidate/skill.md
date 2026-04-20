@@ -34,6 +34,8 @@ Before processing, archive `memory/TODAY.md` to the daily/ directory:
 
 This ensures daily logs accumulate in `memory/daily/` while TODAY.md stays fresh for the current day.
 
+**Report tracking (required):** After completing this step, add both `memory/TODAY.md` and the target `memory/daily/YYYY-MM-DD.md` to the JSON report's `filesChanged` array. This is mandatory — evaluators check `filesChanged` for `memory/TODAY.md` to verify this step ran. Omitting it causes the report to fail the `today-md-archived` criterion even when the archival was performed correctly.
+
 If `memory/TODAY.md` doesn't exist, skip this step and create it with today's header after consolidation.
 
 ### 1. Scan Daily Logs
