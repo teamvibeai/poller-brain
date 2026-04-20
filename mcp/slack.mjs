@@ -202,7 +202,7 @@ async function handleTool(name, args) {
     case 'send_message': {
       const channel = args.channel || DEFAULT_CHANNEL
       // Allow explicit opt-out of thread context: thread_ts=null → top-level message
-      const thread_ts = args.thread_ts !== undefined ? (args.thread_ts || null) : DEFAULT_THREAD_TS
+      const thread_ts = args.thread_ts === undefined ? DEFAULT_THREAD_TS : args.thread_ts
       if (!channel) throw new Error('channel required')
 
       let blocks = args.blocks ? [...args.blocks] : []
