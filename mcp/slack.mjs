@@ -60,7 +60,7 @@ const TOOLS = [
         text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). Also used as fallback for blocks.' },
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions with buttons). See https://api.slack.com/block-kit', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
-        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
+        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread). Pass empty string to send a top-level channel message even when in a thread session.' },
         modals: {
           type: 'array',
           description: 'Modal form definitions to attach as buttons. Each opens a Slack modal when clicked.',
@@ -201,7 +201,8 @@ async function handleTool(name, args) {
   switch (name) {
     case 'send_message': {
       const channel = args.channel || DEFAULT_CHANNEL
-      const thread_ts = args.thread_ts || DEFAULT_THREAD_TS
+      // Allow explicit opt-out of thread context: thread_ts="" → top-level message
+      const thread_ts = args.thread_ts !== undefined ? (args.thread_ts || null) : DEFAULT_THREAD_TS
       if (!channel) throw new Error('channel required')
 
       let blocks = args.blocks ? [...args.blocks] : []
