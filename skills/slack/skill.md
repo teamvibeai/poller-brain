@@ -73,3 +73,7 @@ Use Slack markdown in messages:
 - `` `inline code` ``, ` ```code block``` `
 - `>` for blockquotes
 - `<@U123>` for user mentions
+
+### Pitfalls
+
+- **Tilde (`~`) means strikethrough** — Slack treats `~text~` as ~~strikethrough~~. If you use `~` for "approximately" (e.g., `~$330`), Slack may match it with another `~` later and strike through everything in between. Use `≈` or `cca` instead. Backtick-wrapping (`` `~$330` ``) also works but changes the visual style.
