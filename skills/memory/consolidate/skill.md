@@ -75,7 +75,7 @@ Route new/updated facts to appropriate locations:
 
 ### 5. Regenerate SUMMARY.md
 
-After promoting facts, regenerate `memory/SUMMARY.md` from the current state of all memory tiers.
+**Always regenerate `memory/SUMMARY.md` on every consolidation run — this step is non-negotiable, even if no facts were promoted in steps 2–4.** A lightweight consolidation with zero promotions must still regenerate SUMMARY.md to ensure it reflects the current state of all memory tiers.
 
 Read all `memory/core/*.md`, scan `memory/semantic/`, `memory/episodic/`, `memory/procedural/` for file listing, and compile into the SUMMARY.md format defined in the memory skill. Target ~100-150 lines.
 
@@ -87,6 +87,8 @@ Key sections:
 - **Deep Memory Index** — pointers to all memory tiers with topic summaries
 
 This replaces the old "Update MEMORY.md" step. SUMMARY.md is the new authoritative index.
+
+**Report tracking (required):** Add `memory/SUMMARY.md` to the JSON report's `filesChanged` array. Evaluators check `filesChanged` for `memory/SUMMARY.md` to verify this step ran. Omitting it fails the `summary-md-regenerated` criterion even when the file was correctly regenerated.
 
 ### 6. Archive Old Daily Logs
 
