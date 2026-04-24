@@ -182,6 +182,11 @@ Example entries:
 
 ### 11. Produce Report
 
+**Pre-report `filesChanged` verification:** Before writing the report, confirm these required entries are in `filesChanged`:
+- `memory/SUMMARY.md` — mandatory every run (Step 5); add it now if missing
+- `memory/TODAY.md` — mandatory every run (Step 0); add it now if missing
+- `memory/daily/YYYY-MM-DD.md` — the archived daily log (Step 0); add it now if missing
+
 Create both a markdown and JSON report:
 
 - **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the `## Daily Log Compliance` section from Step 9)
