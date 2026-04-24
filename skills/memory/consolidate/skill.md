@@ -73,7 +73,28 @@ Route new/updated facts to appropriate locations:
 | Lessons | `memory/core/LEARNINGS.md` |
 | Mistakes | `memory/core/MISTAKES.md` |
 
-### 5. Regenerate SUMMARY.md
+### 5. Promote Mistakes
+
+Review `memory/core/MISTAKES.md` for entries ready to be promoted. For each entry with status `new`:
+
+1. **Determine the promotion path:**
+   - Is the mistake specific to a skill/tool? → Add a pitfall to the relevant `skills/*/skill.md` file (create a `## Pitfalls` section if needed)
+   - Is it a general operational rule? → Extract the lesson to `memory/core/LEARNINGS.md`
+   - Is it critical enough for automated prevention? → Create a guard (file check, validation step) and document it in `memory/procedural/`
+
+2. **Execute the promotion:**
+   - Write the promoted content to its destination
+   - Update the MISTAKES.md entry status to `promoted → {destination}`
+
+3. **Clean up previously promoted entries:**
+   - Remove entries that were marked `promoted` in the *previous* consolidation run (they've been visible for one cycle)
+   - Keep entries marked `promoted` during *this* run (so the promotion is visible next cycle)
+
+If MISTAKES.md has no entries or doesn't exist, skip this step.
+
+**Report tracking:** Add any promoted-to files to `filesChanged`. Add a summary of promotions (or "no mistakes to promote") to the markdown report.
+
+### 6. Regenerate SUMMARY.md
 
 **Always regenerate `memory/SUMMARY.md` on every consolidation run — this step is non-negotiable, even if no facts were promoted in steps 2–4.** A lightweight consolidation with zero promotions must still regenerate SUMMARY.md to ensure it reflects the current state of all memory tiers.
 
@@ -90,7 +111,7 @@ This replaces the old "Update MEMORY.md" step. SUMMARY.md is the new authoritati
 
 **Report tracking (required):** Add `memory/SUMMARY.md` to the JSON report's `filesChanged` array. Evaluators check `filesChanged` for `memory/SUMMARY.md` to verify this step ran. Omitting it fails the `summary-md-regenerated` criterion even when the file was correctly regenerated.
 
-### 6. Archive Old Daily Logs
+### 7. Archive Old Daily Logs
 
 For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older than 30 days:
 - **Delete them.** Their content has already been promoted to long-term memory in steps 2–4.
@@ -100,14 +121,14 @@ For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older 
 
 **Recent-log retention (non-negotiable):** NEVER delete `memory/daily/<today>.md` or `memory/daily/<yesterday>.md`, regardless of whether their contents have been promoted. Same-day and next-day sessions rely on these files to recover context. Promotion is not a reason to delete; deletion is only for files dated 30+ days ago.
 
-### 7. Update Timestamp
+### 8. Update Timestamp
 
 Write the current date to `memory/.last_consolidation`:
 ```
 YYYY-MM-DD
 ```
 
-### 8. Assess Daily Log Compliance
+### 9. Assess Daily Log Compliance
 
 Before self-critique, run observable checks on the daily log scratchpad and record the outcome in both reports.
 
@@ -135,7 +156,7 @@ If any check fails, do one of two things before finishing:
 
 Do not silently pass a failing check.
 
-### 9. Process Self-Critique
+### 10. Process Self-Critique
 
 Before writing the report, reflect on whether the maintenance process itself is working. This is **required** — the JSON report's `processImprovements` field must contain at least one `[self-critique]` entry per consolidation run.
 
@@ -159,14 +180,14 @@ Example entries:
 - `"[self-critique] The same team project facts are re-extracted each cycle because they're not being promoted to semantic memory"`
 - `"[self-critique] Consolidation is running but memory retrieval quality hasn't been validated — promoted facts may not be surfaced in practice"`
 
-### 10. Produce Report
+### 11. Produce Report
 
 Create both a markdown and JSON report:
 
-- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the `## Daily Log Compliance` section from Step 8)
-- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` keys in `selfAssessment` and the `[self-critique]` entry from Step 9 in `processImprovements`)
+- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the `## Daily Log Compliance` section from Step 9)
+- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` keys in `selfAssessment` and the `[self-critique]` entry from Step 10 in `processImprovements`)
 
-For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log was actively processed this run — either (a) Step 6 deleted one or more log files, OR (b) Steps 2–4 extracted content from at least one log and produced at least one ADD or UPDATE action. Set to `false` if no logs were processed (e.g., no logs in range, all NOOP). **Always include daily log files whose content was extracted in `filesChanged`**, even if they were not deleted — listing source logs gives the evaluator the evidence of log file activity it needs to verify this criterion.
+For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log was actively processed this run — either (a) Step 7 deleted one or more log files, OR (b) Steps 2–4 extracted content from at least one log and produced at least one ADD or UPDATE action. Set to `false` if no logs were processed (e.g., no logs in range, all NOOP). **Always include daily log files whose content was extracted in `filesChanged`**, even if they were not deleted — listing source logs gives the evaluator the evidence of log file activity it needs to verify this criterion.
 
 ## Scoring Guidance
 

@@ -87,6 +87,10 @@ During regular sessions (non-maintenance), you may write to these places:
 - Stated preferences ("I prefer...", "always do...") → `memory/core/PREFERENCES.md`
 - Lessons from failures or successes → `memory/core/LEARNINGS.md`
 
+> **MISTAKES.md is a staging area.** Entries don't stay there forever — during
+> consolidation, each mistake is reviewed and promoted to a permanent home.
+> See the consolidation skill for the promotion pipeline.
+
 ### 2. `memory/TODAY.md` — for daily log entries
 
 ALL observations, facts, events, and short notes go into the daily log. This includes:
@@ -171,7 +175,7 @@ When you learn something new, route it:
 
 | Signal | Destination | Example |
 |--------|------------|---------|
-| User corrects you | `core/MISTAKES.md` | "No, the API key goes in the header, not query param" |
+| User corrects you | `core/MISTAKES.md` (staging) | "No, the API key goes in the header, not query param" |
 | User states preference | `core/PREFERENCES.md` | "Always use bullet points in summaries" |
 | You discover something useful | `core/LEARNINGS.md` | "The staging DB resets every Sunday" |
 | Factual info about team/project | `TODAY.md` | "Alice is the frontend lead" |
@@ -179,6 +183,31 @@ When you learn something new, route it:
 | You figure out how to do something | `TODAY.md` | "Deploy requires SSO login first" |
 | Substantial reference material (brainstorming, deep-dive) | `semantic/{topic}.md` | 30-min architecture discussion → session capture |
 | Action items, follow-ups | `HEARTBEAT.md` | "Check if PR #42 is merged by Friday" |
+
+## Mistake Promotion Pipeline
+
+`memory/core/MISTAKES.md` is a **staging area**, not a permanent archive. When you make a mistake or get corrected, write it there immediately. During consolidation, each entry is reviewed and promoted to a permanent home:
+
+| Promotion path | When to use | Example |
+|---------------|-------------|---------|
+| **Skill pitfall** | Mistake is specific to a skill/tool and would benefit from contextual warning | Slack tilde rendering → add Pitfalls section to `skills/slack/skill.md` |
+| **LEARNINGS.md** | Mistake reveals a general operational rule | "Always tag the person you're replying to" → `core/LEARNINGS.md` |
+| **Hardcoded guard** | Mistake is critical enough to need automated prevention | Guard file check before consolidation → `memory/.last_consolidation` |
+
+### MISTAKES.md Entry Format
+
+Each entry should include enough context for promotion:
+
+```markdown
+## YYYY-MM-DD — short description
+
+**What happened:** one-liner describing the mistake
+**Root cause:** why it happened
+**Impact:** what went wrong as a result
+**Status:** new | promoted → {destination}
+```
+
+When an entry is promoted, update its status and leave it for one consolidation cycle so the promotion is visible, then remove it. This keeps MISTAKES.md small and active — it's a to-do list, not a journal.
 
 ## Searching Deeper Memory
 
