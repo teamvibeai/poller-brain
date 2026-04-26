@@ -81,29 +81,22 @@ Rules:
 
 During regular sessions (non-maintenance), you may write to these places:
 
-### 1. `memory/core/` — for high-signal corrections and preferences
+### 1. `memory/TODAY.md` — primary write target
 
-- Explicit corrections ("no, do it this way") → `memory/core/MISTAKES.md`
-- Stated preferences ("I prefer...", "always do...") → `memory/core/PREFERENCES.md`
-- Lessons from failures or successes → `memory/core/LEARNINGS.md`
-
-> **MISTAKES.md is a staging area.** Entries don't stay there forever — during
-> consolidation, each mistake is reviewed and promoted to a permanent home.
-> See the consolidation skill for the promotion pipeline.
-
-### 2. `memory/TODAY.md` — for daily log entries
-
-ALL observations, facts, events, and short notes go into the daily log. This includes:
+ALL new information goes into the daily log. This includes:
 - Factual info about the team or project (e.g., "Alice is the frontend lead")
 - Notable events (e.g., "production went down for 2h")
 - Workflows and procedures you figured out
 - Task progress, conversation notes, routine observations
+- Corrections, preferences, and lessons — use the `[REMEMBER]` tag (see below)
 
-### 3. `memory/semantic/` — for session capture (see below)
+### 2. `memory/semantic/` — for session capture (see below)
 
 When a session produces substantial content (brainstorming, deep-dive, design discussion), you may write directly to `memory/semantic/{topic}.md`. See the **Session Capture** section for rules.
 
 ### What is NOT allowed
+
+**Do NOT write directly to `memory/core/` files** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Write to `memory/TODAY.md` instead — use the `[REMEMBER]` tag for important items that must be promoted.
 
 **Do NOT self-promote content during regular sessions.** Self-promotion means reading old daily logs or existing memory and reorganizing them into `semantic/`, `episodic/`, or `procedural/`. That is maintenance's job — only the consolidation process curates and reorganizes existing content.
 
@@ -197,9 +190,9 @@ When you learn something new, route it:
 | Signal | Destination | Example |
 |--------|------------|---------|
 | User explicitly asks to remember | `TODAY.md` with `[REMEMBER]` tag | "Zapamatuj si že jsem mužského rodu" |
-| User corrects you | `core/MISTAKES.md` (staging) | "No, the API key goes in the header, not query param" |
-| User states preference | `core/PREFERENCES.md` | "Always use bullet points in summaries" |
-| You discover something useful | `core/LEARNINGS.md` | "The staging DB resets every Sunday" |
+| User corrects you | `TODAY.md` with `[REMEMBER]` tag | "No, the API key goes in the header, not query param" |
+| User states preference | `TODAY.md` with `[REMEMBER]` tag | "Always use bullet points in summaries" |
+| You discover something useful | `TODAY.md` with `[REMEMBER]` tag | "The staging DB resets every Sunday" |
 | Factual info about team/project | `TODAY.md` | "Alice is the frontend lead" |
 | Something notable happened | `TODAY.md` | "Production went down for 2h due to DNS" |
 | You figure out how to do something | `TODAY.md` | "Deploy requires SSO login first" |
@@ -254,11 +247,12 @@ Structure:
 ## Identity
 - [who you are, 1-2 lines]
 
-## Key Rules (from core/MISTAKES.md + core/LEARNINGS.md)
-- [top 10-15 operational rules, compressed]
+## Key Rules (from core/LEARNINGS.md)
+- [top 10-15 operational rules, actionable — include pointer to source file for detail]
+- example: "Always verify live data before trade proposals (detail: core/LEARNINGS.md)"
 
 ## Preferences (from core/PREFERENCES.md)
-- [key preferences, compressed]
+- [key preferences, actionable — include pointer to source file for detail]
 
 ## Active Projects (from episodic/)
 - [current work in progress, 5-10 lines]
