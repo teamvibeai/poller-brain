@@ -180,7 +180,7 @@ When a user explicitly asks you to remember something ("zapamatuj si", "remember
 
 **How it works:**
 1. Append a `[REMEMBER]` line to `memory/TODAY.md` — this is immediately in your context via `@` import
-2. Confirm to the user: what was saved, and that it will be promoted to permanent memory during next consolidation
+2. Confirm to the user what was saved (e.g., "Zapsáno." / "Uloženo do paměti.")
 3. Consolidation will pick up `[REMEMBER]` tags with **guaranteed promotion** — they are never skipped or filtered by heuristics
 
 **When to use `[REMEMBER]`:**
