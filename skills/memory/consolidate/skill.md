@@ -183,7 +183,7 @@ Example entries:
 ### 11. Produce Report
 
 **Pre-report `filesChanged` verification:** Before writing the report, confirm these required entries are in `filesChanged`:
-- `memory/SUMMARY.md` — mandatory every run (Step 5); add it now if missing
+- `memory/SUMMARY.md` — mandatory every run (Step 6). If missing from `filesChanged`: do NOT just add the filename — go back and execute Step 6 now, regenerate `memory/SUMMARY.md` from current memory state, then add it to `filesChanged`. Skipping Step 6 silently is not allowed.
 - `memory/TODAY.md` — mandatory every run (Step 0); add it now if missing
 - `memory/daily/YYYY-MM-DD.md` — the archived daily log (Step 0); add it now if missing
 
