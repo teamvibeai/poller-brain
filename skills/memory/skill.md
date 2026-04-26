@@ -169,12 +169,34 @@ Not all sections are required — use what fits the content.
 
 Use kebab-case, short, no prefixes: `stepforge.md`, `vest-liquidation.md`. If maintenance splits a file that exceeds ~100 lines, it adds a suffix: `stepforge-architecture.md`.
 
+## `[REMEMBER]` Tag — Explicit Memory Requests
+
+When a user explicitly asks you to remember something ("zapamatuj si", "remember this", "to si zapiš"), use the `[REMEMBER]` tag in TODAY.md:
+
+```markdown
+- [REMEMBER] komunikace: mužský rod, vždy česky
+- [REMEMBER] deploy: staging vyžaduje SSO login
+```
+
+**How it works:**
+1. Append a `[REMEMBER]` line to `memory/TODAY.md` — this is immediately in your context via `@` import
+2. Confirm to the user: what was saved, and that it will be promoted to permanent memory during next consolidation
+3. Consolidation will pick up `[REMEMBER]` tags with **guaranteed promotion** — they are never skipped or filtered by heuristics
+
+**When to use `[REMEMBER]`:**
+- User explicitly asks you to remember/save something
+- User states a strong preference or correction that must persist
+- Do NOT tag routine observations — those go as normal daily log entries
+
+**Format:** `- [REMEMBER] category: detail` — the category hint (e.g., "komunikace", "workflow", "deploy") helps consolidation route to the right destination, but is not required.
+
 ## Routing Logic
 
 When you learn something new, route it:
 
 | Signal | Destination | Example |
 |--------|------------|---------|
+| User explicitly asks to remember | `TODAY.md` with `[REMEMBER]` tag | "Zapamatuj si že jsem mužského rodu" |
 | User corrects you | `core/MISTAKES.md` (staging) | "No, the API key goes in the header, not query param" |
 | User states preference | `core/PREFERENCES.md` | "Always use bullet points in summaries" |
 | You discover something useful | `core/LEARNINGS.md` | "The staging DB resets every Sunday" |
