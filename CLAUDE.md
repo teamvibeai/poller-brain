@@ -102,11 +102,11 @@ If these files don't exist yet, they'll be created during the next maintenance c
 **Daily log = your running scratchpad.** As you work, append one-liners to `memory/TODAY.md` whenever something is worth remembering tomorrow: a decision, a correction, a surprising finding, a completed task. Append *continuously* during the session — don't batch at the end, and don't skip because "nothing important happened yet." If the session involves tool use or a real exchange, it almost always produces at least one line worth keeping.
 
 **Where to write (regular sessions):**
-- Corrections → `memory/core/MISTAKES.md`
-- Preferences → `memory/core/PREFERENCES.md`
-- Lessons learned → `memory/core/LEARNINGS.md`
-- Daily log entries → `memory/TODAY.md`
+- ALL new information → `memory/TODAY.md` (the single entry point)
+- Important items (corrections, preferences, lessons) → `memory/TODAY.md` with `[REMEMBER]` tag
 - Session capture (brainstorming, deep-dive) → `memory/semantic/{topic}.md` (see memory skill for full pattern)
+
+**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `[REMEMBER]` tags in TODAY.md instead.
 
 **NEVER self-promote during regular sessions** — don't reorganize old logs into `semantic/`, `episodic/`, or `procedural/`. That's maintenance's job. Writing *new content from the current conversation* to `semantic/` (session capture) is allowed. See the **Session Capture** section in the memory skill for rules.
 

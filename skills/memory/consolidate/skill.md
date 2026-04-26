@@ -125,12 +125,14 @@ Read all `memory/core/*.md`, scan `memory/semantic/`, `memory/episodic/`, `memor
 Key sections:
 - **How this memory works** — static block explaining what's in context vs. what requires lookup (copy verbatim from the template in the memory skill)
 - **Identity** — who you are (from channel brain CLAUDE.md)
-- **Key Rules** — compressed top rules from MISTAKES.md + LEARNINGS.md
-- **Preferences** — compressed from PREFERENCES.md
+- **Key Rules** — actionable rules from LEARNINGS.md, each with a pointer to the source file for detail (e.g., "Always verify live data before trade proposals (detail: core/LEARNINGS.md)")
+- **Preferences** — actionable preferences from PREFERENCES.md with pointer to source file
 - **Active Projects** — from recent episodic/ entries
 - **Deep Memory Index** — pointers to all memory tiers with topic summaries
 
 The "How this memory works" block MUST be the first section in SUMMARY.md. It is static content — do not rephrase or compress it, copy it from the template.
+
+**Key Rules and Preferences must be actionable, not just labels.** Bad: "stale prices". Good: "Always verify live data before trade proposals (detail: core/LEARNINGS.md)". The pointer tells the agent where to find the full context if needed.
 
 This replaces the old "Update MEMORY.md" step. SUMMARY.md is the new authoritative index.
 
