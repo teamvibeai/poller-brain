@@ -146,6 +146,8 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `semantic-naming-convention` | Do new semantic/ files follow kebab-case naming convention? | All files created in memory/semantic/ since the last consolidation use kebab-case naming (lowercase, hyphens, no underscores or spaces, .md extension). Examples: stepforge.md, vest-liquidation.md. If no new semantic/ files were created, pass automatically. |
 | `session-capture-has-context` | Do new semantic/ files from session capture include a Context section? | Every file created in memory/semantic/ during regular sessions (not maintenance) contains a heading '## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
 
+## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
+
 ### Reflection Criteria
 
 | ID | Criterion | Pass condition |
