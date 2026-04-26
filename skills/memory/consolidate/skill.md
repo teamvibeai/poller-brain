@@ -43,9 +43,31 @@ If `memory/TODAY.md` doesn't exist, do NOT skip this step. Instead: create `memo
 Read all files in `memory/daily/` dated since the last consolidation date.
 If no `.last_consolidation` file exists, process the last 14 days of logs.
 
+### 1b. Process `[REMEMBER]` Tags (priority)
+
+**Before** extracting general facts, scan all daily logs from step 1 for lines containing `[REMEMBER]`. These are explicit memory requests from the user and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
+
+For each `[REMEMBER]` entry:
+
+1. **Classify** the destination based on content:
+   - Preference / communication style / workflow → `memory/core/PREFERENCES.md`
+   - Lesson / factual discovery → `memory/core/LEARNINGS.md`
+   - Correction / mistake to avoid → `memory/core/MISTAKES.md`
+   - Team/project fact → `memory/semantic/{topic}.md`
+
+2. **Check for duplicates** — grep the target file for similar content. If a match exists:
+   - **UPDATE** the existing entry with any new detail
+   - If identical, **NOOP** (don't create duplicates)
+
+3. **Write** to the destination file.
+
+4. **Report tracking:** Add each promoted `[REMEMBER]` item to the markdown report under a `## [REMEMBER] Promotions` section, listing: original entry, destination file, action taken (ADD/UPDATE/NOOP).
+
+If no `[REMEMBER]` tags are found, skip this step and note "no [REMEMBER] tags found" in the report.
+
 ### 2. Extract Facts
 
-For each daily log, identify:
+For each daily log, identify (excluding already-processed `[REMEMBER]` entries):
 - **Recurring themes** — things mentioned multiple times across days
 - **Explicit corrections** — should already be in core/, verify they are
 - **New factual knowledge** — team info, project details, domain knowledge
