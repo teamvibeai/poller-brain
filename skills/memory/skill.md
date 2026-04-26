@@ -222,6 +222,12 @@ When you need context beyond core/ and daily logs:
 
 Structure:
 ```markdown
+## How this memory works
+- This file (SUMMARY.md) and TODAY.md are `@`-imported into every session — they are always in your context
+- All other memory files (core/, semantic/, episodic/, procedural/) must be actively read via tools
+- When asked "will you remember X?" — check whether X is in SUMMARY.md or TODAY.md (yes → in context) or only in a deeper file (no → requires lookup)
+- Don't guess how memory works — read this block
+
 ## Identity
 - [who you are, 1-2 lines]
 
