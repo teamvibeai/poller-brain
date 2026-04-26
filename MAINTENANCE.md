@@ -98,6 +98,15 @@ The JSON file is written at the same time as the markdown report, in the same co
     "[proposal] Concrete change proposal with rationale",
     "[blocked] Things I cannot fix myself — need base-brain change or admin input"
   ],
+  "pendingIssues": [
+    {
+      "repo": "teamvibeai/poller-brain",
+      "title": "Short issue title",
+      "context": "What the user described and why it matters",
+      "reportedBy": "@UserName",
+      "date": "2026-04-26"
+    }
+  ],
   "brainCommitSha": "abc123def456789..."
 }
 ```
@@ -114,6 +123,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion) |
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
 | `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. |
+| `pendingIssues` | `object[]` | Issues reported by users for creation on GitHub. Each object: `repo` (target repository), `title`, `context` (user's description), `reportedBy` (who reported), `date`. Empty array or omitted if none. See Pending Issues section below. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
@@ -157,6 +167,37 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `gap-impact-analysis` | Did reflection connect at least one memory gap to a specific operational consequence? | At least one entry in observations identifies a specific memory gap AND explains how that gap caused a concrete problem or reduced maintenance effectiveness in recent cycles |
 | `verifiable-recommendations` | Did reflection include at least one recommendation with a stated success criterion? | At least one entry in recommendations specifies: (1) a concrete change to make, (2) the current problem it addresses, AND (3) a verifiable condition that would confirm the recommendation was implemented and effective in a future maintenance cycle |
 | `deletion-with-preservation-evidence` | Did reflection explicitly account for each deleted file's content preservation? | For every file deletion recorded in filesChanged (operationCounts.deleted > 0): the report names in decisions or observations the specific destination file where the deleted content was preserved, OR explicitly states the content was redundant with a specifically named existing file. If operationCounts.deleted is 0, the criterion passes automatically. |
+
+## Pending Issues
+
+Users can ask you to report issues about the platform or base brain. When a user explicitly asks to report an issue (e.g., "zapiš jako issue", "report this as issue", "pošli tohle jako issue"), follow this flow:
+
+### During regular sessions
+
+1. Write the issue to `PENDING_ISSUES.md` in your brain root:
+   ```yaml
+   - repo: teamvibeai/poller-brain
+     title: Short description of the issue
+     context: What the user described and why it matters
+     reportedBy: "@UserName"
+     date: 2026-04-26
+     status: pending
+   ```
+2. Confirm to the user: :memo: + _"Zapsáno jako issue pro `{repo}`. Odešle se v příštím maintenance reportu."_
+
+### During maintenance
+
+3. Read `PENDING_ISSUES.md`. For each entry with `status: pending`:
+   - Include it in the JSON report's `pendingIssues` array
+   - Change status to `reported`
+4. On the next maintenance cycle, delete entries with `status: reported`.
+
+### Rules
+
+- **Only explicit requests** — react only when the user explicitly asks to report/file an issue. Do NOT auto-detect complaints or problems as issues.
+- **Agent formulates the issue** — extract a clear title and context from what the user described. Don't just copy their message verbatim.
+- **Valid repos** — only use repositories the platform knows about: `teamvibeai/teamvibe.ai`, `teamvibeai/poller-brain`, `teamvibeai/poller-brain-eval`.
+- If `PENDING_ISSUES.md` doesn't exist, create it with a `## Pending Issues` header.
 
 ## One-Time
 

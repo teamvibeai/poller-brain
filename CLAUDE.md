@@ -220,3 +220,6 @@ Example `HEARTBEAT.md`:
 # Recurring
 - Check unread emails and notify if urgent
 ```
+
+### Reporting Issues
+When a user explicitly asks to report an issue about the platform or base brain (e.g., "zapiš jako issue", "report this", "pošli jako issue"), write it to `PENDING_ISSUES.md`. The issue will be included in your next maintenance report and processed into a GitHub issue. See MAINTENANCE.md for the full convention.
