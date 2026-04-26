@@ -138,6 +138,50 @@ const TOOLS = [
     },
   },
   {
+    name: 'set_channel_topic',
+    description: 'Set the topic of a Slack channel. The topic appears at the top of the channel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic: { type: 'string', description: 'New topic text' },
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+      required: ['topic'],
+    },
+  },
+  {
+    name: 'set_channel_purpose',
+    description: 'Set the purpose/description of a Slack channel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        purpose: { type: 'string', description: 'New purpose text' },
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+      required: ['purpose'],
+    },
+  },
+  {
+    name: 'list_pins',
+    description: 'List pinned items in a channel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+    },
+  },
+  {
+    name: 'list_bookmarks',
+    description: 'List bookmarks (links pinned at the top) of a channel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+    },
+  },
+  {
     name: 'upload_snippet',
     description: 'Upload a code or text snippet to the thread. Use for long outputs, code blocks, logs, or structured data instead of pasting into a message.',
     inputSchema: {
@@ -369,6 +413,53 @@ async function handleTool(name, args) {
           created: ch.created,
         },
       }
+    }
+
+    case 'set_channel_topic': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      if (!channel) throw new Error('channel required')
+      const result = await slackApi('conversations.setTopic', { channel, topic: args.topic })
+      return { ok: true, topic: result.channel.topic.value }
+    }
+
+    case 'set_channel_purpose': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      if (!channel) throw new Error('channel required')
+      const result = await slackApi('conversations.setPurpose', { channel, purpose: args.purpose })
+      return { ok: true, purpose: result.channel.purpose.value }
+    }
+
+    case 'list_pins': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      if (!channel) throw new Error('channel required')
+      const result = await slackApi('pins.list', { channel })
+      const items = (result.items || []).map((item) => ({
+        type: item.type,
+        created: item.created,
+        created_by: item.created_by,
+        ...(item.message && {
+          message: { text: item.message.text, ts: item.message.ts, user: item.message.user },
+        }),
+        ...(item.file && {
+          file: { name: item.file.name, url: item.file.url_private, mimetype: item.file.mimetype },
+        }),
+      }))
+      return { ok: true, items }
+    }
+
+    case 'list_bookmarks': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      if (!channel) throw new Error('channel required')
+      const result = await slackApi('bookmarks.list', { channel_id: channel })
+      const bookmarks = (result.bookmarks || []).map((b) => ({
+        id: b.id,
+        title: b.title,
+        link: b.link,
+        emoji: b.emoji,
+        type: b.type,
+        created: b.date_created,
+      }))
+      return { ok: true, bookmarks }
     }
 
     case 'upload_snippet': {
