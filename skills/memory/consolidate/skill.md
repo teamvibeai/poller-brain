@@ -101,11 +101,14 @@ If MISTAKES.md has no entries or doesn't exist, skip this step.
 Read all `memory/core/*.md`, scan `memory/semantic/`, `memory/episodic/`, `memory/procedural/` for file listing, and compile into the SUMMARY.md format defined in the memory skill. Target ~100-150 lines.
 
 Key sections:
+- **How this memory works** — static block explaining what's in context vs. what requires lookup (copy verbatim from the template in the memory skill)
 - **Identity** — who you are (from channel brain CLAUDE.md)
 - **Key Rules** — compressed top rules from MISTAKES.md + LEARNINGS.md
 - **Preferences** — compressed from PREFERENCES.md
 - **Active Projects** — from recent episodic/ entries
 - **Deep Memory Index** — pointers to all memory tiers with topic summaries
+
+The "How this memory works" block MUST be the first section in SUMMARY.md. It is static content — do not rephrase or compress it, copy it from the template.
 
 This replaces the old "Update MEMORY.md" step. SUMMARY.md is the new authoritative index.
 
