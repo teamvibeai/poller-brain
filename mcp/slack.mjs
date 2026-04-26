@@ -128,6 +128,16 @@ const TOOLS = [
     },
   },
   {
+    name: 'read_channel_info',
+    description: 'Get channel metadata: name, topic, purpose/description, member count, and privacy status. Useful for understanding channel context at the start of a session.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+    },
+  },
+  {
     name: 'upload_snippet',
     description: 'Upload a code or text snippet to the thread. Use for long outputs, code blocks, logs, or structured data instead of pasting into a message.',
     inputSchema: {
@@ -339,6 +349,26 @@ async function handleTool(name, args) {
         reply_count: m.reply_count,
       }))
       return { ok: true, messages }
+    }
+
+    case 'read_channel_info': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      if (!channel) throw new Error('channel required')
+      const result = await slackApi('conversations.info', { channel })
+      const ch = result.channel
+      return {
+        ok: true,
+        channel: {
+          id: ch.id,
+          name: ch.name,
+          topic: ch.topic?.value || '',
+          purpose: ch.purpose?.value || '',
+          num_members: ch.num_members,
+          is_private: ch.is_private,
+          is_archived: ch.is_archived,
+          created: ch.created,
+        },
+      }
     }
 
     case 'upload_snippet': {
