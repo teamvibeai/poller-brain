@@ -90,9 +90,36 @@ ALL new information goes into the daily log. This includes:
 - Task progress, conversation notes, routine observations
 - Corrections, preferences, and lessons — use the `[REMEMBER]` tag (see below)
 
-### 2. `memory/semantic/` — for session capture (see below)
+### 2. `memory/semantic/` — for larger content (pointer pattern)
 
-When a session produces substantial content (brainstorming, deep-dive, design discussion), you may write directly to `memory/semantic/{topic}.md`. See the **Session Capture** section for rules.
+When content doesn't need to be visible at every session start, write it to `memory/semantic/{topic}.md` and leave a **self-contained pointer** in `TODAY.md`.
+
+**Decision criterion:** _"Do I need to see this at every session start?"_
+- **Yes** → write directly to `TODAY.md` (even if it's several lines)
+- **No** → write to `semantic/{topic}.md` + pointer in `TODAY.md`
+
+Length is not the deciding factor. A 5-line summary of this week's priorities belongs in TODAY.md. A 1-line detail about a subsystem belongs in semantic/ if it's part of a larger context file.
+
+**Pointer format — must be self-contained:**
+
+Good (useful even without opening the file):
+```
+[fox] Discovery Pipeline v1 spuštěn — 7 zdrojů, pilot run 24.4. Detaily: semantic/fox-discovery-pipeline.md
+```
+
+Bad (forces agent to open the file to understand relevance):
+```
+[fox] Detailní analýza uložena do semantic/fox-discovery-pipeline.md
+```
+
+The pointer should contain the key fact or conclusion so the agent knows _when_ to open the file — not just _where_ it is.
+
+**Which directory?**
+- `semantic/` — default for most content (analyses, reference material, domain knowledge)
+- `episodic/` — only for session capture and incidents (clearly dated events)
+- When in doubt, use `semantic/`
+
+This pattern also applies to **session capture** — see the section below for detailed rules on capturing substantial discussions.
 
 ### What is NOT allowed
 
@@ -120,9 +147,9 @@ Follow these steps when a session produces substantial reference material:
 
 **0. READ first:** Before discussing a known topic, search `memory/semantic/` for an existing `{topic}.md`. If found, read it for continuity — avoid duplicating what's already captured.
 
-**1. Recognize the moment:** If you'd need more than ~5 lines in `TODAY.md` to capture the substance of a discussion, it belongs in a separate file. Examples:
+**1. Recognize the moment:** If the content doesn't need to be visible at every session start, it belongs in a separate file. Examples:
 - User mentions 3 sentences about an idea → one-liner in `TODAY.md`
-- 20+ min discussion with decisions, alternatives, architecture → `semantic/{topic}.md`
+- 20+ min discussion with decisions, alternatives, architecture → `semantic/{topic}.md` + pointer in `TODAY.md`
 
 **2. Log breadcrumbs continuously:** Write one-liners to `TODAY.md` throughout the session. These are your crash-safe safety net.
 
@@ -130,7 +157,10 @@ Follow these steps when a session produces substantial reference material:
 
 **4. Multi-session topics:** Append to the existing `semantic/{topic}.md` under a date header: `## YYYY-MM-DD — brief description` (e.g., `## 2026-04-17 — deployment strategy`). Don't create a new file for the same topic.
 
-**5. Log the capture:** Write a one-liner to `TODAY.md`: `[HH:MM] session capture: semantic/{topic}.md`
+**5. Log the capture:** Write a self-contained pointer to `TODAY.md` (see Pointer Pattern above):
+```
+[HH:MM] session capture: Key conclusion or outcome here. Detaily: semantic/{topic}.md
+```
 
 ### Session Capture File Template
 
