@@ -43,18 +43,27 @@ If `memory/TODAY.md` doesn't exist, do NOT skip this step. Instead: create `memo
 Read all files in `memory/daily/` dated since the last consolidation date.
 If no `.last_consolidation` file exists, process the last 14 days of logs.
 
-### 1b. Process `[MEM-xxx]` Keys (priority)
+### 1b. Process `[MEM-NNN]` Tracked Keys (priority)
 
-**Before** extracting general facts, scan all daily logs from step 1 for lines containing `[MEM-\d+]` or `[REMEMBER]` (backward compat). These are tracked memory entries and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
+**Before** extracting general facts, scan all daily logs from step 1 for lines containing `[MEM-\d+]`, `[MEM-<word>]` (malformed), or `[REMEMBER]` (backward compat). These are tracked memory entries and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
+
+#### Auto-fix malformed keys
+
+If a `[MEM-<word>]` tag is found where `<word>` is NOT a number (e.g., `[MEM-feedback]`, `[MEM-TAG]`):
+1. Assign the next available sequential number (read `memory/MEM_REGISTRY.md`, find highest number, increment)
+2. Replace the malformed tag in the daily log with the correct `[MEM-N]` format
+3. Add the corrected key to the registry with status `ACTIVE`
+4. Log the fix in the report: "Auto-fixed malformed key: [MEM-feedback] → [MEM-4]"
+5. Process as a normal `[MEM-NNN]` entry
 
 #### Handling `[REMEMBER]` backward compatibility
 
-If a `[REMEMBER]` tag is found (without a `[MEM-xxx]` key):
+If a `[REMEMBER]` tag is found (without a `[MEM-NNN]` key):
 1. Assign the next available key (read `memory/MEM_REGISTRY.md`, find highest number, increment)
 2. Add the new key to the registry with status `ACTIVE`
-3. Process as if it were a `[MEM-xxx]` entry
+3. Process as if it were a `[MEM-NNN]` entry
 
-#### For each `[MEM-xxx]` entry:
+#### For each `[MEM-NNN]` entry:
 
 1. **Check the registry** — if the key isn't in `memory/MEM_REGISTRY.md` yet (new entry from a regular session), add it with status `ACTIVE`, today's date, and a short description.
 
@@ -64,19 +73,19 @@ If a `[REMEMBER]` tag is found (without a `[MEM-xxx]` key):
    - Correction / mistake to avoid → `memory/core/MISTAKES.md`
    - Team/project fact → `memory/semantic/{topic}.md`
 
-3. **Check for duplicates** — grep the target file for the same `[MEM-xxx]` key or similar content. If a match exists:
-   - **UPDATE** the existing entry with any new detail (preserve the `[MEM-xxx]` key)
+3. **Check for duplicates** — grep the target file for the same `[MEM-NNN]` key or similar content. If a match exists:
+   - **UPDATE** the existing entry with any new detail (preserve the `[MEM-NNN]` key)
    - If identical, **NOOP** (don't create duplicates)
 
-4. **Write** to the destination file. The `[MEM-xxx]` key MUST be preserved in the promoted entry:
+4. **Write** to the destination file. The `[MEM-NNN]` key MUST be preserved in the promoted entry:
    ```markdown
    # In core/LEARNINGS.md:
-   - [MEM-003] Deploy flow: main = STAGING only, produkce = version tag (v0.0.X)...
+   - [MEM-3] Deploy flow: main = STAGING only, produkce = version tag (v0.0.X)...
    ```
 
-5. **Report tracking:** Add each promoted `[MEM-xxx]` item to the markdown report under a `## [MEM] Promotions` section, listing: key, original entry, destination file, action taken (ADD/UPDATE/NOOP).
+5. **Report tracking:** Add each promoted `[MEM-NNN]` item to the markdown report under a `## [MEM] Promotions` section, listing: key, original entry, destination file, action taken (ADD/UPDATE/NOOP).
 
-If no `[MEM-xxx]` or `[REMEMBER]` tags are found, skip this step and note "no [MEM] tags found" in the report.
+If no `[MEM-NNN]` or `[REMEMBER]` tags are found, skip this step and note "no [MEM] tags found" in the report.
 
 ### 1c. MEM Lifecycle — Obsolescence Check
 
@@ -84,7 +93,7 @@ Review entries in `memory/MEM_REGISTRY.md` with status `ACTIVE`:
 
 1. **Check for contradictions** — if newer daily log entries contradict or supersede an existing ACTIVE entry, mark it `OBSOLETE`:
    - Update registry: status → `OBSOLETE`, set obsoleted date
-   - Update the content file: change `[MEM-xxx]` to `[MEM-xxx:obsolete]`
+   - Update the content file: change `[MEM-N]` to `[MEM-N:obsolete]`
    - The entry stays in the content file for one consolidation cycle
 
 2. **Process previously OBSOLETE entries** — for entries marked `OBSOLETE` in a *previous* consolidation run (check git history or the obsoleted date vs. last consolidation date):
@@ -96,7 +105,7 @@ Review entries in `memory/MEM_REGISTRY.md` with status `ACTIVE`:
 
 ### 2. Extract Facts
 
-For each daily log, identify (excluding already-processed `[MEM-xxx]` / `[REMEMBER]` entries):
+For each daily log, identify (excluding already-processed `[MEM-NNN]` / `[REMEMBER]` entries):
 - **Recurring themes** — things mentioned multiple times across days
 - **Explicit corrections** — should already be in core/, verify they are
 - **New factual knowledge** — team info, project details, domain knowledge
@@ -314,7 +323,7 @@ Example entries:
 - `memory/SUMMARY.md` — mandatory every run (Step 6). If missing from `filesChanged`: do NOT just add the filename — go back and execute Step 6 now, regenerate `memory/SUMMARY.md` from current memory state, then add it to `filesChanged`. Skipping Step 6 silently is not allowed.
 - `memory/TODAY.md` — mandatory every run (Step 0); add it now if missing
 - `memory/daily/YYYY-MM-DD.md` — the archived daily log (Step 0); add it now if missing
-- `memory/MEM_REGISTRY.md` — if any `[MEM-xxx]` entries were processed or lifecycle changes made in steps 1b/1c; add it now if missing
+- `memory/MEM_REGISTRY.md` — if any `[MEM-NNN]` entries were processed or lifecycle changes made in steps 1b/1c; add it now if missing
 
 Create both a markdown and JSON report:
 

@@ -89,7 +89,7 @@ ALL new information goes into the daily log. This includes:
 - Notable events (e.g., "production went down for 2h")
 - Workflows and procedures you figured out
 - Task progress, conversation notes, routine observations
-- Corrections, preferences, and lessons — use `[MEM-xxx]` tracked keys (see below)
+- Corrections, preferences, and lessons — use `[MEM-NNN]` tracked keys (see below)
 
 ### 2. `memory/semantic/` — for larger content (pointer pattern)
 
@@ -124,7 +124,7 @@ This pattern also applies to **session capture** — see the section below for d
 
 ### What is NOT allowed
 
-**Do NOT write directly to `memory/core/` files** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Write to `memory/TODAY.md` instead — use `[MEM-xxx]` keys for important items that must be promoted.
+**Do NOT write directly to `memory/core/` files** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Write to `memory/TODAY.md` instead — use `[MEM-NNN]` keys for important items that must be promoted.
 
 **Do NOT self-promote content during regular sessions.** Self-promotion means reading old daily logs or existing memory and reorganizing them into `semantic/`, `episodic/`, or `procedural/`. That is maintenance's job — only the consolidation process curates and reorganizes existing content.
 
@@ -193,32 +193,62 @@ Not all sections are required — use what fits the content.
 
 Use kebab-case, short, no prefixes: `stepforge.md`, `vest-liquidation.md`. If maintenance splits a file that exceeds ~100 lines, it adds a suffix: `stepforge-architecture.md`.
 
-## `[MEM-xxx]` — Tracked Memory Keys
+## `[MEM-NNN]` — Tracked Memory Keys
 
 Critical information gets a unique, tracked key — like Jira tickets for memory. Keys survive consolidation, are traceable via grep and git history, and have an explicit lifecycle that prevents silent data loss.
 
-### When to create a `[MEM-xxx]` entry
+**IMPORTANT: Keys are ALWAYS sequential numbers, never words.** The key format is `MEM-` followed by a number: `MEM-1`, `MEM-2`, `MEM-3`, etc. No zero-padding needed.
+
+```
+✅ Correct:  [MEM-1] deploy: staging vyžaduje SSO
+✅ Correct:  [MEM-42] komunikace: mužský rod
+❌ WRONG:   [MEM-feedback] ...     ← NOT a number!
+❌ WRONG:   [MEM-TAG] ...          ← NOT a number!
+❌ WRONG:   [MEM-deploy] ...       ← NOT a number!
+```
+
+### When to create a `[MEM-NNN]` entry
 
 - User explicitly asks you to remember/save something ("zapamatuj si", "remember this")
 - User states a strong preference or correction that must persist
 - You discover something critical that must not be lost
 - Do NOT tag routine observations — those go as normal daily log entries
 
-### How to write a `[MEM-xxx]` entry
+### How to write a `[MEM-NNN]` entry
 
-1. **Get the next key:** grep for the highest existing `MEM-\d+` in `memory/MEM_REGISTRY.md`. Increment by 1, zero-pad to 3 digits. If the registry doesn't exist or is empty, start at `MEM-001`.
-2. **Write to TODAY.md:** `- [MEM-xxx] category: detail`
-3. **Add to registry:** Append a row to `memory/MEM_REGISTRY.md` (create the file if needed)
-4. **Confirm to user:** "Zapsáno." / "Uloženo do paměti." (don't mention internal mechanics)
+**Do NOT pick the number yourself.** Use the `mem-write` script — it handles numbering, TODAY.md, and MEM_REGISTRY.md atomically:
 
+```bash
+npx tsx .claude/skills/memory/scripts/mem-write.ts "category: detail"
+```
+
+**Examples:**
+```bash
+npx tsx .claude/skills/memory/scripts/mem-write.ts "deploy: staging vyžaduje SSO login"
+npx tsx .claude/skills/memory/scripts/mem-write.ts "komunikace: mužský rod, vždy česky"
+# Output: Written [MEM-4] to memory/TODAY.md and memory/MEM_REGISTRY.md
+```
+
+The script:
+1. Reads `memory/MEM_REGISTRY.md`, finds the highest existing number
+2. Increments to get the next key
+3. Appends `- [MEM-N] content` to `memory/TODAY.md`
+4. Appends a registry row to `memory/MEM_REGISTRY.md`
+5. Creates both files with correct headers if they don't exist yet
+
+**NEVER write `[MEM-NNN]` entries manually** — always use the script. This prevents malformed keys like `[MEM-feedback]`.
+
+After the script runs, confirm to user: "Zapsáno." / "Uloženo do paměti." (don't mention internal mechanics)
+
+**Example result:**
 ```markdown
 # In TODAY.md:
-- [MEM-003] deploy: staging vyžaduje SSO login
-- [MEM-004] komunikace: mužský rod, vždy česky
+- [MEM-3] deploy: staging vyžaduje SSO login
+- [MEM-4] komunikace: mužský rod, vždy česky
 
 # In MEM_REGISTRY.md:
-| MEM-003 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
-| MEM-004 | ACTIVE | 2026-04-28 | — | Communication: masculine, always Czech |
+| MEM-3 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
+| MEM-4 | ACTIVE | 2026-04-28 | — | Communication: masculine, always Czech |
 ```
 
 ### MEM_REGISTRY.md Format
@@ -230,13 +260,13 @@ This file is the **source of truth** for all tracked memory keys. It lives at `m
 
 | Key | Status | Created | Obsoleted | Description |
 |-----|--------|---------|-----------|-------------|
-| MEM-001 | ACTIVE | 2026-04-28 | — | Auto-memory is ephemeral, never rely on it |
-| MEM-002 | OBSOLETE | 2026-04-15 | 2026-04-28 | Old deploy flow (superseded by MEM-003) |
-| MEM-003 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
+| MEM-1 | ACTIVE | 2026-04-28 | — | Auto-memory is ephemeral, never rely on it |
+| MEM-2 | OBSOLETE | 2026-04-15 | 2026-04-28 | Old deploy flow (superseded by MEM-3) |
+| MEM-3 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
 ```
 
 **Columns:**
-- **Key** — unique identifier, sequential per brain (`MEM-001`, `MEM-002`, ...)
+- **Key** — unique identifier, sequential per brain (`MEM-1`, `MEM-2`, ...)
 - **Status** — `ACTIVE`, `OBSOLETE`, or `REMOVED`
 - **Created** — date the entry was first written
 - **Obsoleted** — date the entry was marked obsolete (or `—` if active)
@@ -248,19 +278,19 @@ This file is the **source of truth** for all tracked memory keys. It lives at `m
 ACTIVE → OBSOLETE → REMOVED
 ```
 
-1. **ACTIVE** — the memory is current and must be preserved during consolidation. Tag in content files: `[MEM-xxx]`
-2. **OBSOLETE** — the memory is outdated or superseded. Marked during consolidation with reason + date. Tag in content files changes to `[MEM-xxx:obsolete]`. The entry stays in its promoted location for one consolidation cycle.
+1. **ACTIVE** — the memory is current and must be preserved during consolidation. Tag in content files: `[MEM-3]`
+2. **OBSOLETE** — the memory is outdated or superseded. Marked during consolidation with reason + date. Tag in content files changes to `[MEM-3:obsolete]`. The entry stays in its promoted location for one consolidation cycle.
 3. **REMOVED** — the entry is deleted from content files on the next consolidation after being marked OBSOLETE. Registry row remains (with REMOVED status) for audit trail — never delete registry rows.
 
 **Rules:**
-- A `[MEM-xxx]` entry must **never** be deleted from content files without first going through `OBSOLETE` status
-- Keys persist through promotion: if `[MEM-003]` starts in TODAY.md and gets promoted to `LEARNINGS.md`, the key `[MEM-003]` stays in the promoted entry
+- A `[MEM-NNN]` entry must **never** be deleted from content files without first going through `OBSOLETE` status
+- Keys persist through promotion: if `[MEM-3]` starts in TODAY.md and gets promoted to `LEARNINGS.md`, the key `[MEM-3]` stays in the promoted entry
 - Consolidation must verify all ACTIVE keys from the registry exist somewhere in `memory/` — a missing ACTIVE key is an integrity violation
 - Sequential gaps in key numbers are acceptable (from REMOVED entries) but must match the registry — an unexpected gap signals data loss
 
 ### Backward Compatibility
 
-The `[REMEMBER]` tag continues to work as an alias for `[MEM-xxx]` — consolidation will auto-assign the next available key to any `[REMEMBER]` entry found in daily logs and register it. New entries should always use `[MEM-xxx]`.
+The `[REMEMBER]` tag continues to work as an alias — consolidation will auto-assign the next available sequential number to any `[REMEMBER]` entry found in daily logs and register it. New entries should always use the `mem-write.ts` script (e.g., result: `[MEM-1]`).
 
 ## Routing Logic
 
@@ -268,10 +298,10 @@ When you learn something new, route it:
 
 | Signal | Destination | Example |
 |--------|------------|---------|
-| User explicitly asks to remember | `TODAY.md` with `[MEM-xxx]` key | "Zapamatuj si že jsem mužského rodu" |
-| User corrects you | `TODAY.md` with `[MEM-xxx]` key | "No, the API key goes in the header, not query param" |
-| User states preference | `TODAY.md` with `[MEM-xxx]` key | "Always use bullet points in summaries" |
-| You discover something useful | `TODAY.md` with `[MEM-xxx]` key | "The staging DB resets every Sunday" |
+| User explicitly asks to remember | `TODAY.md` with `[MEM-NNN]` key | "Zapamatuj si že jsem mužského rodu" |
+| User corrects you | `TODAY.md` with `[MEM-NNN]` key | "No, the API key goes in the header, not query param" |
+| User states preference | `TODAY.md` with `[MEM-NNN]` key | "Always use bullet points in summaries" |
+| You discover something useful | `TODAY.md` with `[MEM-NNN]` key | "The staging DB resets every Sunday" |
 | Factual info about team/project | `TODAY.md` | "Alice is the frontend lead" |
 | Something notable happened | `TODAY.md` | "Production went down for 2h due to DNS" |
 | You figure out how to do something | `TODAY.md` | "Deploy requires SSO login first" |
