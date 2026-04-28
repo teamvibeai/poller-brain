@@ -45,7 +45,16 @@ If no `.last_consolidation` file exists, process the last 14 days of logs.
 
 ### 1b. Process `[MEM-NNN]` Tracked Keys (priority)
 
-**Before** extracting general facts, scan all daily logs from step 1 for lines containing `[MEM-\d+]` or `[REMEMBER]` (backward compat). These are tracked memory entries and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
+**Before** extracting general facts, scan all daily logs from step 1 for lines containing `[MEM-\d+]`, `[MEM-<word>]` (malformed), or `[REMEMBER]` (backward compat). These are tracked memory entries and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
+
+#### Auto-fix malformed keys
+
+If a `[MEM-<word>]` tag is found where `<word>` is NOT a number (e.g., `[MEM-feedback]`, `[MEM-TAG]`):
+1. Assign the next available sequential number (read `memory/MEM_REGISTRY.md`, find highest number, increment)
+2. Replace the malformed tag in the daily log with the correct `[MEM-N]` format
+3. Add the corrected key to the registry with status `ACTIVE`
+4. Log the fix in the report: "Auto-fixed malformed key: [MEM-feedback] → [MEM-4]"
+5. Process as a normal `[MEM-NNN]` entry
 
 #### Handling `[REMEMBER]` backward compatibility
 
@@ -71,7 +80,7 @@ If a `[REMEMBER]` tag is found (without a `[MEM-NNN]` key):
 4. **Write** to the destination file. The `[MEM-NNN]` key MUST be preserved in the promoted entry:
    ```markdown
    # In core/LEARNINGS.md:
-   - [MEM-003] Deploy flow: main = STAGING only, produkce = version tag (v0.0.X)...
+   - [MEM-3] Deploy flow: main = STAGING only, produkce = version tag (v0.0.X)...
    ```
 
 5. **Report tracking:** Add each promoted `[MEM-NNN]` item to the markdown report under a `## [MEM] Promotions` section, listing: key, original entry, destination file, action taken (ADD/UPDATE/NOOP).

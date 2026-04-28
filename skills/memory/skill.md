@@ -197,11 +197,11 @@ Use kebab-case, short, no prefixes: `stepforge.md`, `vest-liquidation.md`. If ma
 
 Critical information gets a unique, tracked key — like Jira tickets for memory. Keys survive consolidation, are traceable via grep and git history, and have an explicit lifecycle that prevents silent data loss.
 
-**IMPORTANT: Keys are ALWAYS sequential numbers, never words.** The key format is `MEM-` followed by a zero-padded 3-digit number: `MEM-001`, `MEM-002`, `MEM-003`, etc.
+**IMPORTANT: Keys are ALWAYS sequential numbers, never words.** The key format is `MEM-` followed by a number: `MEM-1`, `MEM-2`, `MEM-3`, etc. No zero-padding needed.
 
 ```
-✅ Correct:  [MEM-001] deploy: staging vyžaduje SSO
-✅ Correct:  [MEM-042] komunikace: mužský rod
+✅ Correct:  [MEM-1] deploy: staging vyžaduje SSO
+✅ Correct:  [MEM-42] komunikace: mužský rod
 ❌ WRONG:   [MEM-feedback] ...     ← NOT a number!
 ❌ WRONG:   [MEM-TAG] ...          ← NOT a number!
 ❌ WRONG:   [MEM-deploy] ...       ← NOT a number!
@@ -216,19 +216,47 @@ Critical information gets a unique, tracked key — like Jira tickets for memory
 
 ### How to write a `[MEM-NNN]` entry
 
-1. **Get the next key:** grep for the highest existing `MEM-\d+` in `memory/MEM_REGISTRY.md`. Increment by 1, zero-pad to 3 digits. If the registry doesn't exist or is empty, start at `MEM-001`.
-2. **Write to TODAY.md:** `- [MEM-001] category: detail` (use the actual next number, not a placeholder)
-3. **Add to registry:** Append a row to `memory/MEM_REGISTRY.md` (create the file if needed)
-4. **Confirm to user:** "Zapsáno." / "Uloženo do paměti." (don't mention internal mechanics)
+**Do NOT pick the number yourself.** Run these bash commands — they determine the next key deterministically:
 
+```bash
+# Step 1: Get next key number
+LAST=$(grep -oP 'MEM-\K\d+' memory/MEM_REGISTRY.md 2>/dev/null | sort -n | tail -1)
+NEXT=$(( ${LAST:-0} + 1 ))
+echo "Next MEM key: MEM-$NEXT"
+```
+
+Then use the printed key to write both files:
+
+```bash
+# Step 2: Write to TODAY.md (replace CONTENT with actual text)
+echo "- [MEM-$NEXT] CONTENT" >> memory/TODAY.md
+
+# Step 3: Write to MEM_REGISTRY.md (replace DESC with short description)
+echo "| MEM-$NEXT | ACTIVE | $(date +%Y-%m-%d) | — | DESC |" >> memory/MEM_REGISTRY.md
+```
+
+If `memory/MEM_REGISTRY.md` doesn't exist yet, create it first with the header:
+
+```bash
+cat > memory/MEM_REGISTRY.md << 'HEADER'
+# MEM Registry
+
+| Key | Status | Created | Obsoleted | Description |
+|-----|--------|---------|-----------|-------------|
+HEADER
+```
+
+After writing, confirm to user: "Zapsáno." / "Uloženo do paměti." (don't mention internal mechanics)
+
+**Example result:**
 ```markdown
 # In TODAY.md:
-- [MEM-003] deploy: staging vyžaduje SSO login
-- [MEM-004] komunikace: mužský rod, vždy česky
+- [MEM-3] deploy: staging vyžaduje SSO login
+- [MEM-4] komunikace: mužský rod, vždy česky
 
 # In MEM_REGISTRY.md:
-| MEM-003 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
-| MEM-004 | ACTIVE | 2026-04-28 | — | Communication: masculine, always Czech |
+| MEM-3 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
+| MEM-4 | ACTIVE | 2026-04-28 | — | Communication: masculine, always Czech |
 ```
 
 ### MEM_REGISTRY.md Format
@@ -240,13 +268,13 @@ This file is the **source of truth** for all tracked memory keys. It lives at `m
 
 | Key | Status | Created | Obsoleted | Description |
 |-----|--------|---------|-----------|-------------|
-| MEM-001 | ACTIVE | 2026-04-28 | — | Auto-memory is ephemeral, never rely on it |
-| MEM-002 | OBSOLETE | 2026-04-15 | 2026-04-28 | Old deploy flow (superseded by MEM-003) |
-| MEM-003 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
+| MEM-1 | ACTIVE | 2026-04-28 | — | Auto-memory is ephemeral, never rely on it |
+| MEM-2 | OBSOLETE | 2026-04-15 | 2026-04-28 | Old deploy flow (superseded by MEM-3) |
+| MEM-3 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
 ```
 
 **Columns:**
-- **Key** — unique identifier, sequential per brain (`MEM-001`, `MEM-002`, ...)
+- **Key** — unique identifier, sequential per brain (`MEM-1`, `MEM-2`, ...)
 - **Status** — `ACTIVE`, `OBSOLETE`, or `REMOVED`
 - **Created** — date the entry was first written
 - **Obsoleted** — date the entry was marked obsolete (or `—` if active)
@@ -258,13 +286,13 @@ This file is the **source of truth** for all tracked memory keys. It lives at `m
 ACTIVE → OBSOLETE → REMOVED
 ```
 
-1. **ACTIVE** — the memory is current and must be preserved during consolidation. Tag in content files: `[MEM-NNN]` (e.g. `[MEM-003]`)
-2. **OBSOLETE** — the memory is outdated or superseded. Marked during consolidation with reason + date. Tag in content files changes to `[MEM-NNN:obsolete]` (e.g. `[MEM-003:obsolete]`). The entry stays in its promoted location for one consolidation cycle.
+1. **ACTIVE** — the memory is current and must be preserved during consolidation. Tag in content files: `[MEM-3]`
+2. **OBSOLETE** — the memory is outdated or superseded. Marked during consolidation with reason + date. Tag in content files changes to `[MEM-3:obsolete]`. The entry stays in its promoted location for one consolidation cycle.
 3. **REMOVED** — the entry is deleted from content files on the next consolidation after being marked OBSOLETE. Registry row remains (with REMOVED status) for audit trail — never delete registry rows.
 
 **Rules:**
 - A `[MEM-NNN]` entry must **never** be deleted from content files without first going through `OBSOLETE` status
-- Keys persist through promotion: if `[MEM-003]` starts in TODAY.md and gets promoted to `LEARNINGS.md`, the key `[MEM-003]` stays in the promoted entry
+- Keys persist through promotion: if `[MEM-3]` starts in TODAY.md and gets promoted to `LEARNINGS.md`, the key `[MEM-3]` stays in the promoted entry
 - Consolidation must verify all ACTIVE keys from the registry exist somewhere in `memory/` — a missing ACTIVE key is an integrity violation
 - Sequential gaps in key numbers are acceptable (from REMOVED entries) but must match the registry — an unexpected gap signals data loss
 
