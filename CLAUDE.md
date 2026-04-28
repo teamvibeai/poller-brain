@@ -103,10 +103,10 @@ If these files don't exist yet, they'll be created during the next maintenance c
 
 **Where to write (regular sessions):**
 - ALL new information → `memory/TODAY.md` (the single entry point)
-- Important items (corrections, preferences, lessons) → run `npx tsx .claude/skills/memory/scripts/mem-write.ts "category: detail"` (never write `[MEM-NNN]` tags manually)
+- Important items (corrections, preferences, lessons) → run `npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "category: detail"` (never write `[MEM-NNN]` tags manually)
 - Session capture (brainstorming, deep-dive) → `memory/semantic/{topic}.md` (see memory skill for full pattern)
 
-**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `npx tsx .claude/skills/memory/scripts/mem-write.ts` to create tracked memory entries (see memory skill).
+**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts` to create tracked memory entries (see memory skill).
 
 **NEVER self-promote during regular sessions** — don't reorganize old logs into `semantic/`, `episodic/`, or `procedural/`. That's maintenance's job. Writing *new content from the current conversation* to `semantic/` (session capture) is allowed. See the **Session Capture** section in the memory skill for rules.
 
