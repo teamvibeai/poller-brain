@@ -26,18 +26,22 @@ const REGISTRY_HEADER = `# MEM Registry
 |-----|--------|---------|-----------|-------------|
 `;
 
-function getNextKey(): number {
-  if (!fs.existsSync(REGISTRY_PATH)) {
-    return 1;
-  }
-  const content = fs.readFileSync(REGISTRY_PATH, "utf-8");
+function scanMaxKey(filePath: string): number {
+  if (!fs.existsSync(filePath)) return 0;
+  const content = fs.readFileSync(filePath, "utf-8");
   const matches = content.matchAll(/MEM-(\d+)/g);
   let max = 0;
   for (const m of matches) {
     const n = parseInt(m[1], 10);
     if (n > max) max = n;
   }
-  return max + 1;
+  return max;
+}
+
+function getNextKey(): number {
+  const fromRegistry = scanMaxKey(REGISTRY_PATH);
+  const fromToday = scanMaxKey(TODAY_PATH);
+  return Math.max(fromRegistry, fromToday) + 1;
 }
 
 function ensureRegistry(): void {
@@ -83,11 +87,15 @@ function main(): void {
   // Append to TODAY.md
   fs.appendFileSync(TODAY_PATH, `- [MEM-${key}] ${content}\n`);
 
-  // Append to MEM_REGISTRY.md
-  fs.appendFileSync(
-    REGISTRY_PATH,
-    `| MEM-${key} | ACTIVE | ${today} | — | ${desc} |\n`
-  );
+  // Append to MEM_REGISTRY.md — detect 4 vs 5 column format
+  const registry = fs.readFileSync(REGISTRY_PATH, "utf-8");
+  const headerLine = registry.split("\n").find((l) => l.startsWith("|") && /Key/.test(l));
+  const colCount = headerLine ? headerLine.split("|").filter((c) => c.trim()).length : 5;
+  const row =
+    colCount <= 4
+      ? `| MEM-${key} | ACTIVE | ${today} | ${desc} |`
+      : `| MEM-${key} | ACTIVE | ${today} | — | ${desc} |`;
+  fs.appendFileSync(REGISTRY_PATH, row + "\n");
 
   console.log(`Written [MEM-${key}] to ${TODAY_PATH} and ${REGISTRY_PATH}`);
 }

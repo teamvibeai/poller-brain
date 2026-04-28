@@ -99,14 +99,24 @@ Your workspace has a tiered memory system. See the `memory` skill for full docum
 
 If these files don't exist yet, they'll be created during the next maintenance cycle. Until then, use `memory/daily/YYYY-MM-DD.md` as fallback for daily logging.
 
-**Daily log = your running scratchpad.** As you work, append one-liners to `memory/TODAY.md` whenever something is worth remembering tomorrow: a decision, a correction, a surprising finding, a completed task. Append *continuously* during the session — don't batch at the end, and don't skip because "nothing important happened yet." If the session involves tool use or a real exchange, it almost always produces at least one line worth keeping.
+**Daily log = your running scratchpad.** Log continuously during the session — don't batch at the end, and don't skip because "nothing important happened yet." If the session involves tool use or a real exchange, it almost always produces at least one line worth keeping.
+
+**NEVER write to `memory/TODAY.md` directly.** Always use one of these scripts:
+
+```bash
+# Routine logs (events, triage, status updates):
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "category: detail"
+
+# Important items to remember (corrections, preferences, lessons):
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detail"
+```
 
 **Where to write (regular sessions):**
-- ALL new information → `memory/TODAY.md` (the single entry point)
-- Important items (corrections, preferences, lessons) → run `npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "category: detail"` (never write `[MEM-NNN]` tags manually)
+- Routine logs → `log-write.ts` (appends to TODAY.md with timestamp)
+- Important items (corrections, preferences, lessons) → `mem-write.ts` (tracked `[MEM-NNN]` key in TODAY.md + MEM_REGISTRY.md)
 - Session capture (brainstorming, deep-dive) → `memory/semantic/{topic}.md` (see memory skill for full pattern)
 
-**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts` to create tracked memory entries (see memory skill).
+**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `mem-write.ts` to create tracked memory entries (see memory skill).
 
 **NEVER self-promote during regular sessions** — don't reorganize old logs into `semantic/`, `episodic/`, or `procedural/`. That's maintenance's job. Writing *new content from the current conversation* to `semantic/` (session capture) is allowed. See the **Session Capture** section in the memory skill for rules.
 
