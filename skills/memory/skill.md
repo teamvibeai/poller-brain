@@ -219,13 +219,13 @@ Critical information gets a unique, tracked key — like Jira tickets for memory
 **Do NOT pick the number yourself.** Use the `mem-write` script — it handles numbering, TODAY.md, and MEM_REGISTRY.md atomically:
 
 ```bash
-npx tsx .claude/skills/memory/scripts/mem-write.ts "category: detail"
+npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "category: detail"
 ```
 
 **Examples:**
 ```bash
-npx tsx .claude/skills/memory/scripts/mem-write.ts "deploy: staging vyžaduje SSO login"
-npx tsx .claude/skills/memory/scripts/mem-write.ts "komunikace: mužský rod, vždy česky"
+npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "deploy: staging vyžaduje SSO login"
+npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "komunikace: mužský rod, vždy česky"
 # Output: Written [MEM-4] to memory/TODAY.md and memory/MEM_REGISTRY.md
 ```
 
