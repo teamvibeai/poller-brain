@@ -158,6 +158,8 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 
 ## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
 
+## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
+
 ### Reflection Criteria
 
 | ID | Criterion | Pass condition |
