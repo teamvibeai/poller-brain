@@ -290,7 +290,7 @@ ACTIVE → OBSOLETE → REMOVED
 
 ### Backward Compatibility
 
-The `[REMEMBER]` tag continues to work as an alias — consolidation will auto-assign the next available sequential number to any `[REMEMBER]` entry found in daily logs and register it. New entries should always use `[MEM-NNN]` with a real number (e.g., `[MEM-001]`).
+The `[REMEMBER]` tag continues to work as an alias — consolidation will auto-assign the next available sequential number to any `[REMEMBER]` entry found in daily logs and register it. New entries should always use the `mem-write.ts` script (e.g., result: `[MEM-1]`).
 
 ## Routing Logic
 

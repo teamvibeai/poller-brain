@@ -93,7 +93,7 @@ Review entries in `memory/MEM_REGISTRY.md` with status `ACTIVE`:
 
 1. **Check for contradictions** — if newer daily log entries contradict or supersede an existing ACTIVE entry, mark it `OBSOLETE`:
    - Update registry: status → `OBSOLETE`, set obsoleted date
-   - Update the content file: change `[MEM-NNN]` to `[MEM-xxx:obsolete]`
+   - Update the content file: change `[MEM-N]` to `[MEM-N:obsolete]`
    - The entry stays in the content file for one consolidation cycle
 
 2. **Process previously OBSOLETE entries** — for entries marked `OBSOLETE` in a *previous* consolidation run (check git history or the obsoleted date vs. last consolidation date):
