@@ -43,31 +43,60 @@ If `memory/TODAY.md` doesn't exist, do NOT skip this step. Instead: create `memo
 Read all files in `memory/daily/` dated since the last consolidation date.
 If no `.last_consolidation` file exists, process the last 14 days of logs.
 
-### 1b. Process `[REMEMBER]` Tags (priority)
+### 1b. Process `[MEM-xxx]` Keys (priority)
 
-**Before** extracting general facts, scan all daily logs from step 1 for lines containing `[REMEMBER]`. These are explicit memory requests from the user and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
+**Before** extracting general facts, scan all daily logs from step 1 for lines containing `[MEM-\d+]` or `[REMEMBER]` (backward compat). These are tracked memory entries and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
 
-For each `[REMEMBER]` entry:
+#### Handling `[REMEMBER]` backward compatibility
 
-1. **Classify** the destination based on content:
+If a `[REMEMBER]` tag is found (without a `[MEM-xxx]` key):
+1. Assign the next available key (read `memory/MEM_REGISTRY.md`, find highest number, increment)
+2. Add the new key to the registry with status `ACTIVE`
+3. Process as if it were a `[MEM-xxx]` entry
+
+#### For each `[MEM-xxx]` entry:
+
+1. **Check the registry** — if the key isn't in `memory/MEM_REGISTRY.md` yet (new entry from a regular session), add it with status `ACTIVE`, today's date, and a short description.
+
+2. **Classify** the destination based on content:
    - Preference / communication style / workflow → `memory/core/PREFERENCES.md`
    - Lesson / factual discovery → `memory/core/LEARNINGS.md`
    - Correction / mistake to avoid → `memory/core/MISTAKES.md`
    - Team/project fact → `memory/semantic/{topic}.md`
 
-2. **Check for duplicates** — grep the target file for similar content. If a match exists:
-   - **UPDATE** the existing entry with any new detail
+3. **Check for duplicates** — grep the target file for the same `[MEM-xxx]` key or similar content. If a match exists:
+   - **UPDATE** the existing entry with any new detail (preserve the `[MEM-xxx]` key)
    - If identical, **NOOP** (don't create duplicates)
 
-3. **Write** to the destination file.
+4. **Write** to the destination file. The `[MEM-xxx]` key MUST be preserved in the promoted entry:
+   ```markdown
+   # In core/LEARNINGS.md:
+   - [MEM-003] Deploy flow: main = STAGING only, produkce = version tag (v0.0.X)...
+   ```
 
-4. **Report tracking:** Add each promoted `[REMEMBER]` item to the markdown report under a `## [REMEMBER] Promotions` section, listing: original entry, destination file, action taken (ADD/UPDATE/NOOP).
+5. **Report tracking:** Add each promoted `[MEM-xxx]` item to the markdown report under a `## [MEM] Promotions` section, listing: key, original entry, destination file, action taken (ADD/UPDATE/NOOP).
 
-If no `[REMEMBER]` tags are found, skip this step and note "no [REMEMBER] tags found" in the report.
+If no `[MEM-xxx]` or `[REMEMBER]` tags are found, skip this step and note "no [MEM] tags found" in the report.
+
+### 1c. MEM Lifecycle — Obsolescence Check
+
+Review entries in `memory/MEM_REGISTRY.md` with status `ACTIVE`:
+
+1. **Check for contradictions** — if newer daily log entries contradict or supersede an existing ACTIVE entry, mark it `OBSOLETE`:
+   - Update registry: status → `OBSOLETE`, set obsoleted date
+   - Update the content file: change `[MEM-xxx]` to `[MEM-xxx:obsolete]`
+   - The entry stays in the content file for one consolidation cycle
+
+2. **Process previously OBSOLETE entries** — for entries marked `OBSOLETE` in a *previous* consolidation run (check git history or the obsoleted date vs. last consolidation date):
+   - Remove the `[MEM-xxx:obsolete]` line from the content file
+   - Update registry: status → `REMOVED`
+   - **Never delete the registry row** — it stays for audit trail
+
+3. **Report tracking:** Add lifecycle changes to the markdown report under `## [MEM] Lifecycle` section.
 
 ### 2. Extract Facts
 
-For each daily log, identify (excluding already-processed `[REMEMBER]` entries):
+For each daily log, identify (excluding already-processed `[MEM-xxx]` / `[REMEMBER]` entries):
 - **Recurring themes** — things mentioned multiple times across days
 - **Explicit corrections** — should already be in core/, verify they are
 - **New factual knowledge** — team info, project details, domain knowledge
@@ -155,7 +184,78 @@ Write the current date to `memory/.last_consolidation`:
 YYYY-MM-DD
 ```
 
-### 9. Assess Daily Log Compliance
+### 9. MEM Audit & Memory Metrics
+
+Run integrity checks on the MEM registry and collect memory size metrics.
+
+#### 9a. MEM Integrity Check
+
+If `memory/MEM_REGISTRY.md` exists:
+
+1. **Count ACTIVE keys** — grep the registry for ACTIVE entries
+2. **Verify presence** — for each ACTIVE key, grep across `memory/` (excluding `MEM_REGISTRY.md` and `daily/`) to confirm the key exists in at least one content file. A missing ACTIVE key = integrity violation.
+3. **Check sequence** — extract all key numbers, verify gaps match REMOVED/OBSOLETE entries in the registry. An unexplained gap = potential data loss.
+4. **Compare with previous run** — if the previous consolidation report exists, compare ACTIVE counts. A decrease without corresponding OBSOLETE/REMOVED entries = alarm.
+
+Record results in the markdown report under `## MEM Audit`:
+```markdown
+## MEM Audit
+- Total keys: 12
+- ACTIVE: 10, OBSOLETE: 1, REMOVED: 1
+- New this cycle: 2 (MEM-011, MEM-012)
+- Obsoleted this cycle: 0
+- Integrity: ✅ all ACTIVE keys found in content files
+- Sequence: ✅ no unexplained gaps
+```
+
+Populate JSON report `selfAssessment`:
+- `mem-integrity-check` — `true` if all ACTIVE keys are present and sequence is clean, `false` otherwise
+
+If `memory/MEM_REGISTRY.md` doesn't exist (pre-migration brains), skip and set `mem-integrity-check` to `true` (no keys to check).
+
+#### 9b. Memory File Size Metrics
+
+Measure sizes of well-known memory files and include in the report:
+
+1. **Measure** byte count of each file (if it exists):
+   - `memory/SUMMARY.md`
+   - `memory/TODAY.md`
+   - `memory/MEM_REGISTRY.md`
+   - `memory/core/LEARNINGS.md`
+   - `memory/core/PREFERENCES.md`
+   - `memory/core/MISTAKES.md`
+   - `CLAUDE.md` (the channel brain's)
+
+2. **Record** in the JSON report under a `memoryMetrics` object:
+   ```json
+   "memoryMetrics": {
+     "fileSizes": {
+       "summary_md": 4200,
+       "today_md": 1100,
+       "mem_registry_md": 800,
+       "learnings_md": 3100,
+       "preferences_md": 500,
+       "mistakes_md": 0,
+       "claude_md": 2800
+     },
+     "memKeys": {
+       "total": 12,
+       "active": 10,
+       "obsolete": 1,
+       "removed": 1,
+       "newThisCycle": 2,
+       "obsoletedThisCycle": 0
+     }
+   }
+   ```
+
+3. **Warn** in the markdown report if any file exceeds these thresholds:
+   - `SUMMARY.md` > 8000 bytes (~150 lines) — risk: context bloat
+   - `LEARNINGS.md` > 5000 bytes — risk: too many rules to follow
+   - `CLAUDE.md` > 10000 bytes — risk: instruction overload
+   - `MEM_REGISTRY.md` > 5000 bytes — risk: registry growing too large (consider archiving REMOVED entries)
+
+### 10. Assess Daily Log Compliance
 
 Before self-critique, run observable checks on the daily log scratchpad and record the outcome in both reports.
 
@@ -183,7 +283,7 @@ If any check fails, do one of two things before finishing:
 
 Do not silently pass a failing check.
 
-### 10. Process Self-Critique
+### 11. Process Self-Critique
 
 Before writing the report, reflect on whether the maintenance process itself is working. This is **required** — the JSON report's `processImprovements` field must contain at least one `[self-critique]` entry per consolidation run.
 
@@ -195,6 +295,7 @@ Ask yourself:
 - Are there tasks or follow-ups added but never acted on?
 - Are core memory entries growing stale with no mechanism to detect it?
 - Are there issues I've noticed but haven't acted on?
+- Are MEM keys being lost or not promoted correctly?
 
 Write your answer as a `[self-critique]` entry even if things seem fine (e.g., "No recurring problems observed this cycle — memory tier coverage looks balanced"). The entry must reflect on process effectiveness, not just confirm that maintenance ran.
 
@@ -207,17 +308,18 @@ Example entries:
 - `"[self-critique] The same team project facts are re-extracted each cycle because they're not being promoted to semantic memory"`
 - `"[self-critique] Consolidation is running but memory retrieval quality hasn't been validated — promoted facts may not be surfaced in practice"`
 
-### 11. Produce Report
+### 12. Produce Report
 
 **Pre-report `filesChanged` verification:** Before writing the report, confirm these required entries are in `filesChanged`:
 - `memory/SUMMARY.md` — mandatory every run (Step 6). If missing from `filesChanged`: do NOT just add the filename — go back and execute Step 6 now, regenerate `memory/SUMMARY.md` from current memory state, then add it to `filesChanged`. Skipping Step 6 silently is not allowed.
 - `memory/TODAY.md` — mandatory every run (Step 0); add it now if missing
 - `memory/daily/YYYY-MM-DD.md` — the archived daily log (Step 0); add it now if missing
+- `memory/MEM_REGISTRY.md` — if any `[MEM-xxx]` entries were processed or lifecycle changes made in steps 1b/1c; add it now if missing
 
 Create both a markdown and JSON report:
 
-- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the `## Daily Log Compliance` section from Step 9)
-- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` keys in `selfAssessment` and the `[self-critique]` entry from Step 10 in `processImprovements`)
+- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, and `## Memory Metrics` from Step 9b)
+- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` and `mem-integrity-check` keys in `selfAssessment`, the `memoryMetrics` object from Step 9b, and the `[self-critique]` entry from Step 11 in `processImprovements`)
 
 For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log was actively processed this run — either (a) Step 7 deleted one or more log files, OR (b) Steps 2–4 extracted content from at least one log and produced at least one ADD or UPDATE action. Set to `false` if no logs were processed (e.g., no logs in range, all NOOP). **Always include daily log files whose content was extracted in `filesChanged`**, even if they were not deleted — listing source logs gives the evaluator the evidence of log file activity it needs to verify this criterion.
 
