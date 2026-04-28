@@ -103,10 +103,10 @@ If these files don't exist yet, they'll be created during the next maintenance c
 
 **Where to write (regular sessions):**
 - ALL new information → `memory/TODAY.md` (the single entry point)
-- Important items (corrections, preferences, lessons) → `memory/TODAY.md` with `[MEM-xxx]` tracked key (see memory skill)
+- Important items (corrections, preferences, lessons) → `memory/TODAY.md` with `[MEM-NNN]` tracked key (see memory skill)
 - Session capture (brainstorming, deep-dive) → `memory/semantic/{topic}.md` (see memory skill for full pattern)
 
-**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `[MEM-xxx]` tracked keys in TODAY.md instead (see memory skill for format).
+**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `[MEM-NNN]` tracked keys in TODAY.md instead (see memory skill for format).
 
 **NEVER self-promote during regular sessions** — don't reorganize old logs into `semantic/`, `episodic/`, or `procedural/`. That's maintenance's job. Writing *new content from the current conversation* to `semantic/` (session capture) is allowed. See the **Session Capture** section in the memory skill for rules.
 
