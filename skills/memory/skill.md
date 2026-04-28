@@ -216,37 +216,29 @@ Critical information gets a unique, tracked key — like Jira tickets for memory
 
 ### How to write a `[MEM-NNN]` entry
 
-**Do NOT pick the number yourself.** Run these bash commands — they determine the next key deterministically:
+**Do NOT pick the number yourself.** Use the `mem-write` script — it handles numbering, TODAY.md, and MEM_REGISTRY.md atomically:
 
 ```bash
-# Step 1: Get next key number
-LAST=$(grep -oP 'MEM-\K\d+' memory/MEM_REGISTRY.md 2>/dev/null | sort -n | tail -1)
-NEXT=$(( ${LAST:-0} + 1 ))
-echo "Next MEM key: MEM-$NEXT"
+npx tsx .claude/skills/memory/scripts/mem-write.ts "category: detail"
 ```
 
-Then use the printed key to write both files:
-
+**Examples:**
 ```bash
-# Step 2: Write to TODAY.md (replace CONTENT with actual text)
-echo "- [MEM-$NEXT] CONTENT" >> memory/TODAY.md
-
-# Step 3: Write to MEM_REGISTRY.md (replace DESC with short description)
-echo "| MEM-$NEXT | ACTIVE | $(date +%Y-%m-%d) | — | DESC |" >> memory/MEM_REGISTRY.md
+npx tsx .claude/skills/memory/scripts/mem-write.ts "deploy: staging vyžaduje SSO login"
+npx tsx .claude/skills/memory/scripts/mem-write.ts "komunikace: mužský rod, vždy česky"
+# Output: Written [MEM-4] to memory/TODAY.md and memory/MEM_REGISTRY.md
 ```
 
-If `memory/MEM_REGISTRY.md` doesn't exist yet, create it first with the header:
+The script:
+1. Reads `memory/MEM_REGISTRY.md`, finds the highest existing number
+2. Increments to get the next key
+3. Appends `- [MEM-N] content` to `memory/TODAY.md`
+4. Appends a registry row to `memory/MEM_REGISTRY.md`
+5. Creates both files with correct headers if they don't exist yet
 
-```bash
-cat > memory/MEM_REGISTRY.md << 'HEADER'
-# MEM Registry
+**NEVER write `[MEM-NNN]` entries manually** — always use the script. This prevents malformed keys like `[MEM-feedback]`.
 
-| Key | Status | Created | Obsoleted | Description |
-|-----|--------|---------|-----------|-------------|
-HEADER
-```
-
-After writing, confirm to user: "Zapsáno." / "Uloženo do paměti." (don't mention internal mechanics)
+After the script runs, confirm to user: "Zapsáno." / "Uloženo do paměti." (don't mention internal mechanics)
 
 **Example result:**
 ```markdown
