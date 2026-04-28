@@ -212,7 +212,25 @@ Critical information gets a unique, tracked key — like Jira tickets for memory
 - User explicitly asks you to remember/save something ("zapamatuj si", "remember this")
 - User states a strong preference or correction that must persist
 - You discover something critical that must not be lost
-- Do NOT tag routine observations — those go as normal daily log entries
+- Do NOT tag routine observations — those go via `log-write.ts`
+
+### Writing to TODAY.md
+
+**NEVER write to `memory/TODAY.md` directly.** Always use one of these scripts:
+
+#### `log-write.ts` — routine logs
+
+For events, triage, status updates, session notes:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "heartbeat: klidný den, žádné pending issues"
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "triage: 3 nové emaily, žádný urgentní"
+# Output: Logged to memory/TODAY.md
+```
+
+The script appends a timestamped line: `- [HH:MM] content`
+
+#### `mem-write.ts` — tracked memory
 
 ### How to write a `[MEM-NNN]` entry
 
@@ -296,15 +314,15 @@ The `[REMEMBER]` tag continues to work as an alias — consolidation will auto-a
 
 When you learn something new, route it:
 
-| Signal | Destination | Example |
-|--------|------------|---------|
-| User explicitly asks to remember | `TODAY.md` with `[MEM-NNN]` key | "Zapamatuj si že jsem mužského rodu" |
-| User corrects you | `TODAY.md` with `[MEM-NNN]` key | "No, the API key goes in the header, not query param" |
-| User states preference | `TODAY.md` with `[MEM-NNN]` key | "Always use bullet points in summaries" |
-| You discover something useful | `TODAY.md` with `[MEM-NNN]` key | "The staging DB resets every Sunday" |
-| Factual info about team/project | `TODAY.md` | "Alice is the frontend lead" |
-| Something notable happened | `TODAY.md` | "Production went down for 2h due to DNS" |
-| You figure out how to do something | `TODAY.md` | "Deploy requires SSO login first" |
+| Signal | Script | Example |
+|--------|--------|---------|
+| User explicitly asks to remember | `mem-write.ts` | "Zapamatuj si že jsem mužského rodu" |
+| User corrects you | `mem-write.ts` | "No, the API key goes in the header, not query param" |
+| User states preference | `mem-write.ts` | "Always use bullet points in summaries" |
+| You discover something useful | `mem-write.ts` | "The staging DB resets every Sunday" |
+| Factual info about team/project | `log-write.ts` | "Alice is the frontend lead" |
+| Something notable happened | `log-write.ts` | "Production went down for 2h due to DNS" |
+| You figure out how to do something | `log-write.ts` | "Deploy requires SSO login first" |
 | Substantial reference material (brainstorming, deep-dive) | `semantic/{topic}.md` | 30-min architecture discussion → session capture |
 | Action items, follow-ups | `HEARTBEAT.md` | "Check if PR #42 is merged by Friday" |
 
