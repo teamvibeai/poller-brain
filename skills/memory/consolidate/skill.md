@@ -229,45 +229,31 @@ If `memory/MEM_REGISTRY.md` doesn't exist (pre-migration brains), skip and set `
 
 #### 9b. Memory File Size Metrics
 
-Measure sizes of well-known memory files and include in the report:
+Measure sizes of key memory files and include a `## Memory Metrics` section in the markdown report.
 
-1. **Measure** byte count of each file (if it exists):
-   - `memory/SUMMARY.md`
-   - `memory/TODAY.md`
-   - `memory/MEM_REGISTRY.md`
-   - `memory/core/LEARNINGS.md`
-   - `memory/core/PREFERENCES.md`
-   - `memory/core/MISTAKES.md`
-   - `CLAUDE.md` (the channel brain's)
+**How to measure:** Run `wc -c` on each file (skip files that don't exist):
+- `CLAUDE.md`, `memory/SUMMARY.md`, `memory/TODAY.md`, `memory/MEM_REGISTRY.md`
+- `memory/core/LEARNINGS.md`, `memory/core/PREFERENCES.md`, `memory/core/MISTAKES.md`
 
-2. **Record** in the JSON report under a `memoryMetrics` object:
-   ```json
-   "memoryMetrics": {
-     "fileSizes": {
-       "summary_md": 4200,
-       "today_md": 1100,
-       "mem_registry_md": 800,
-       "learnings_md": 3100,
-       "preferences_md": 500,
-       "mistakes_md": 0,
-       "claude_md": 2800
-     },
-     "memKeys": {
-       "total": 12,
-       "active": 10,
-       "obsolete": 1,
-       "removed": 1,
-       "newThisCycle": 2,
-       "obsoletedThisCycle": 0
-     }
-   }
-   ```
+**Include this table in the markdown report:**
+```markdown
+## Memory Metrics
+| File | Size (bytes) | Threshold | Status |
+|------|-------------|-----------|--------|
+| CLAUDE.md | 2800 | 10000 | :white_check_mark: |
+| SUMMARY.md | 4200 | 8000 | :white_check_mark: |
+| LEARNINGS.md | 3100 | 5000 | :white_check_mark: |
+| MEM_REGISTRY.md | 800 | 5000 | :white_check_mark: |
+| PREFERENCES.md | 500 | — | — |
+| MISTAKES.md | 0 | — | — |
+| TODAY.md | 1100 | — | — |
+```
 
-3. **Warn** in the markdown report if any file exceeds these thresholds:
-   - `SUMMARY.md` > 8000 bytes (~150 lines) — risk: context bloat
-   - `LEARNINGS.md` > 5000 bytes — risk: too many rules to follow
-   - `CLAUDE.md` > 10000 bytes — risk: instruction overload
-   - `MEM_REGISTRY.md` > 5000 bytes — risk: registry growing too large (consider archiving REMOVED entries)
+**Thresholds** (flag as :warning: if exceeded):
+- `CLAUDE.md` > 10000 — risk: instruction overload
+- `SUMMARY.md` > 8000 — risk: context bloat
+- `LEARNINGS.md` > 5000 — risk: too many rules to follow
+- `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries)
 
 ### 10. Assess Daily Log Compliance
 
@@ -333,7 +319,7 @@ Example entries:
 Create both a markdown and JSON report:
 
 - **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, and `## Memory Metrics` from Step 9b)
-- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` and `mem-integrity-check` keys in `selfAssessment`, the `memoryMetrics` object from Step 9b, and the `[self-critique]` entry from Step 11 in `processImprovements`)
+- **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` and `mem-integrity-check` keys in `selfAssessment`, and the `[self-critique]` entry from Step 11 in `processImprovements`)
 
 For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log was actively processed this run — either (a) Step 7 deleted one or more log files, OR (b) Steps 2–4 extracted content from at least one log and produced at least one ADD or UPDATE action. Set to `false` if no logs were processed (e.g., no logs in range, all NOOP). **Always include daily log files whose content was extracted in `filesChanged`**, even if they were not deleted — listing source logs gives the evaluator the evidence of log file activity it needs to verify this criterion.
 
