@@ -17,6 +17,8 @@ If it's 1+ days old or missing, run consolidation.
 
 ## Algorithm
 
+**All steps below are mandatory on every consolidation run.** There is no "lightweight" or "partial" mode. Even when daily logs are empty or steps 2–4 produce zero promotions, Step 6 (Regenerate SUMMARY.md) MUST still execute. Never skip or abbreviate steps because a run "has nothing to process."
+
 ### 0. Archive TODAY.md
 
 Before processing, archive `memory/TODAY.md` to the daily/ directory:
