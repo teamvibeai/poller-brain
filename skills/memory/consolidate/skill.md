@@ -257,6 +257,32 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 - `LEARNINGS.md` > 5000 — risk: too many rules to follow
 - `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries)
 
+#### 9c. CLAUDE.md Gradual Reduction
+
+If the Memory Metrics table (Step 9b) shows `CLAUDE.md` exceeding 10000 bytes, perform **one** small extraction per consolidation cycle:
+
+1. **Identify one block** (10–30 lines) in `CLAUDE.md` that is procedural, reference-like, or domain-specific knowledge — not core identity or behavioral rules. Good candidates:
+   - Step-by-step workflows → move to `memory/procedural/{topic}.md`
+   - Domain knowledge / data structures → move to `memory/semantic/{topic}.md`
+   - Rules that duplicate base-brain CLAUDE.md or `@`-imported SUMMARY.md → delete
+
+2. **Extract it:**
+   - Create the target file (or append to an existing one) with the extracted content
+   - Replace the block in `CLAUDE.md` with a one-line pointer: `<!-- Detail: memory/procedural/{topic}.md -->`
+   - The pointer is a comment — it won't render but helps trace where content went
+
+3. **Log it** in the markdown report under `## CLAUDE.md Reduction`:
+   - What was moved, from where to where, size delta
+   - Why this block was chosen (procedural/reference/duplicate)
+
+4. **Constraints:**
+   - Move *at most 1 block per cycle* — gradual reduction, not a big-bang refactor
+   - *Never move* identity sections, `@` import lines, or core behavioral rules
+   - If unsure whether a block is safe to move, skip this step and note "no safe candidate found" in the report
+   - If `CLAUDE.md` is under 10000 bytes, skip this step entirely
+
+This ensures steady progress toward the threshold while allowing time to detect regressions between cycles.
+
 ### 10. Assess Daily Log Compliance
 
 Before self-critique, run observable checks on the daily log scratchpad and record the outcome in both reports.
