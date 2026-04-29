@@ -23,7 +23,7 @@ Before processing, archive `memory/TODAY.md` to the daily/ directory:
 
 1. Read `memory/TODAY.md` — extract the date header(s) (format: `# YYYY-MM-DD`)
 2. For each date section in TODAY.md:
-   - Append its content to `memory/daily/YYYY-MM-DD.md` (create if needed)
+   - Append its content **verbatim** to `memory/daily/YYYY-MM-DD.md` (create if needed). Copy every bullet point and line exactly as written — do NOT summarize, truncate, rephrase, or condense entries. The daily archive must be a byte-for-byte copy of the original content.
 3. Reset `memory/TODAY.md` with today's date header and an immediate consolidation log entry:
    ```
    # YYYY-MM-DD
@@ -46,6 +46,9 @@ If no `.last_consolidation` file exists, process the last 14 days of logs.
 ### 1b. Process `[MEM-NNN]` Tracked Keys (priority)
 
 **Before** extracting general facts, scan all daily logs from step 1 for lines containing `[MEM-\d+]`, `[MEM-<word>]` (malformed), or `[REMEMBER]` (backward compat). These are tracked memory entries and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
+
+> **⚠️ Anti-pattern: auto-memory is NOT persistent memory.**
+> Claude Code's built-in auto-memory (`~/.claude/projects/.../memory/`) is ephemeral — it does not survive re-clones, machine changes, or container restarts. NEVER treat auto-memory as a substitute for writing to the brain's `memory/` tier files. `[MEM-NNN]` items MUST be physically written to `memory/core/` or `memory/semantic/` files. Claiming "already captured in auto-memory" is NOT valid — auto-memory is provider-specific and not part of our memory model.
 
 #### Auto-fix malformed keys
 
@@ -83,7 +86,9 @@ If a `[REMEMBER]` tag is found (without a `[MEM-NNN]` key):
    - [MEM-3] Deploy flow: main = STAGING only, produkce = version tag (v0.0.X)...
    ```
 
-5. **Report tracking:** Add each promoted `[MEM-NNN]` item to the markdown report under a `## [MEM] Promotions` section, listing: key, original entry, destination file, action taken (ADD/UPDATE/NOOP).
+5. **Verify promotion landed** — after writing, grep the target file for a key phrase from the promoted entry. If the grep returns no match, the write failed — retry or flag as an error in the report. Do not proceed to the next item until verification passes.
+
+6. **Report tracking:** Add each promoted `[MEM-NNN]` item to the markdown report under a `## [MEM] Promotions` section, listing: key, original entry, destination file, action taken (ADD/UPDATE/NOOP), verification result (VERIFIED/FAILED).
 
 If no `[MEM-NNN]` or `[REMEMBER]` tags are found, skip this step and note "no [MEM] tags found" in the report.
 
