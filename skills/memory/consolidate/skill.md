@@ -268,8 +268,8 @@ If the Memory Metrics table (Step 9b) shows `CLAUDE.md` exceeding 10000 bytes, p
 
 2. **Extract it:**
    - Create the target file (or append to an existing one) with the extracted content
-   - Replace the block in `CLAUDE.md` with a one-line pointer: `<!-- Detail: memory/procedural/{topic}.md -->`
-   - The pointer is a comment — it won't render but helps trace where content went
+   - Replace the block in `CLAUDE.md` with a one-line markdown pointer, e.g.: `- **Topic detail:** viz memory/procedural/{topic}.md`
+   - The pointer stays visible in CLAUDE.md so the agent (and humans) can find the extracted content
 
 3. **Log it** in the markdown report under `## CLAUDE.md Reduction`:
    - What was moved, from where to where, size delta
