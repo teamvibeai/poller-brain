@@ -36,7 +36,7 @@ Before processing, archive `memory/TODAY.md` to the daily/ directory:
 
 This ensures daily logs accumulate in `memory/daily/` while TODAY.md stays fresh for the current day.
 
-**Report tracking (required):** After completing this step, add both `memory/TODAY.md` and the target `memory/daily/YYYY-MM-DD.md` to the JSON report's `filesChanged` array. This is mandatory — evaluators check `filesChanged` for `memory/TODAY.md` to verify this step ran. Omitting it causes the report to fail the `today-md-archived` criterion even when the archival was performed correctly.
+**Report tracking (required):** After completing this step, add both `memory/TODAY.md` and the target `memory/daily/YYYY-MM-DD.md` to the JSON report's `filesChanged` array — do not defer to Step 12. Also set `selfAssessment["today-md-archived"]` to `true` in the JSON report at this point. This is mandatory — evaluators check `filesChanged` for `memory/TODAY.md` to verify this step ran. Omitting it causes the report to fail the `today-md-archived` criterion even when the archival was performed correctly.
 
 If `memory/TODAY.md` doesn't exist, do NOT skip this step. Instead: create `memory/TODAY.md` now with today's date header and the consolidation start entry (step 3 above). Add `memory/TODAY.md` to `filesChanged`. There is no archive destination since there was no prior content — omit the `memory/daily/YYYY-MM-DD.md` entry from filesChanged in this case only.
 
@@ -341,7 +341,7 @@ Example entries:
 
 **Pre-report `filesChanged` verification:** Before writing the report, confirm these required entries are in `filesChanged`:
 - `memory/SUMMARY.md` — mandatory every run (Step 6). Also confirm `selfAssessment["summary-md-regenerated"]` is set to `true`. If missing from `filesChanged`: do NOT just add the filename — go back and execute Step 6 now, regenerate `memory/SUMMARY.md` from current memory state, then add it to `filesChanged` and set `selfAssessment["summary-md-regenerated"]` to `true`. Skipping Step 6 silently is not allowed.
-- `memory/TODAY.md` — mandatory every run (Step 0). If missing from `filesChanged`: do NOT just add the filename — go back and execute Step 0 now (reset TODAY.md with today's header and a consolidation start entry if not already done, append any existing content to today's daily log), then add `memory/TODAY.md` to `filesChanged`. Skipping Step 0 silently is not allowed.
+- `memory/TODAY.md` — mandatory every run (Step 0). Also confirm `selfAssessment["today-md-archived"]` is set to `true`. If missing from `filesChanged`: do NOT just add the filename — go back and execute Step 0 now (reset TODAY.md with today's header and a consolidation start entry if not already done, append any existing content to today's daily log), then add `memory/TODAY.md` to `filesChanged` and set `selfAssessment["today-md-archived"]` to `true`. Skipping Step 0 silently is not allowed.
 - `memory/daily/YYYY-MM-DD.md` — the archived daily log (Step 0); add it now if missing (omit only when TODAY.md did not exist prior to this run)
 - `memory/MEM_REGISTRY.md` — if any `[MEM-NNN]` entries were processed or lifecycle changes made in steps 1b/1c; add it now if missing
 
