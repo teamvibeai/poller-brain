@@ -1,11 +1,12 @@
 ---
 name: teamvibe-api
 description: |
-  TeamVibe API tools for managing scheduled messages (reminders, recurring tasks, one-time triggers).
+  TeamVibe API tools for managing scheduled messages (reminders, recurring tasks, one-time triggers)
+  and submitting agent feedback (bugs, improvements, observations).
   This skill is always active — use these MCP tools when users ask to schedule, remind, or automate.
 ---
 
-# TeamVibe API — Scheduled Messages
+# TeamVibe API — Scheduled Messages & Feedback
 
 All tools are prefixed `mcp__teamvibe-api__`. Channel and workspace context are automatically set.
 
@@ -110,3 +111,35 @@ User: "Change that PR check to 9am instead"
 | Every hour | `0 * * * *` |
 | Every day at midnight | `0 0 * * *` |
 | Every 1st of month at 10am | `0 10 1 * *` |
+
+---
+
+# Agent Feedback
+
+## submit_feedback
+
+Submit feedback about the platform. Stored in a central database and consolidated by the eval pipeline.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `type` | **yes** | `bug`, `improvement`, or `observation` |
+| `priority` | **yes** | `low`, `medium`, `high`, or `critical` |
+| `context` | **yes** | Description of the feedback (min 10 chars) |
+| `targetRepo` | no | Target repo: `teamvibeai/teamvibe.ai`, `teamvibeai/poller-brain`, or `teamvibeai/poller-brain-eval` |
+
+### When to use
+
+- User explicitly reports an issue ("report this", "zapiš jako issue", "tohle nefunguje")
+- You observe a platform problem worth tracking (repeated MCP failures, missing features)
+- You want to suggest an improvement based on your experience
+
+### Example
+
+```json
+{
+  "type": "bug",
+  "priority": "high",
+  "context": "MCP fetch_failed errors occur 2-3x per session when calling read_thread. Retrying works but adds latency.",
+  "targetRepo": "teamvibeai/teamvibe.ai"
+}
+```
