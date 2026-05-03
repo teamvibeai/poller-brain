@@ -81,6 +81,20 @@ const TOOLS = [
       required: ['scheduleId'],
     },
   },
+  {
+    name: 'submit_feedback',
+    description: 'Submit feedback about the platform (bugs, improvements, observations). Feedback is stored and consolidated by the eval pipeline. Use when a user explicitly reports an issue or when you observe a platform problem worth tracking.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['bug', 'improvement', 'observation'], description: 'Type of feedback' },
+        priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: 'How critical is this feedback' },
+        context: { type: 'string', description: 'Description of the issue or suggestion (minimum 5 chars)' },
+        targetRepo: { type: 'string', enum: ['teamvibeai/teamvibe.ai', 'teamvibeai/poller-brain', 'teamvibeai/poller-brain-eval'], description: 'Target repository (optional)' },
+      },
+      required: ['type', 'priority', 'context'],
+    },
+  },
 ]
 
 async function handleTool(name, args) {
@@ -125,6 +139,17 @@ async function handleTool(name, args) {
     case 'delete_scheduled_message': {
       const params = new URLSearchParams({ workspaceId: WORKSPACE_ID })
       return await apiCall('DELETE', `/scheduled-messages/${args.scheduleId}?${params}`)
+    }
+
+    case 'submit_feedback': {
+      const body = {
+        channelId: CHANNEL_ID,
+        type: args.type,
+        priority: args.priority,
+        context: args.context,
+      }
+      if (args.targetRepo) body.targetRepo = args.targetRepo
+      return await apiCall('POST', '/feedback', body)
     }
 
     default:
