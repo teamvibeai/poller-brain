@@ -199,6 +199,68 @@ For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older 
 
 **Recent-log retention (non-negotiable):** NEVER delete `memory/daily/<today>.md` or `memory/daily/<yesterday>.md`, regardless of whether their contents have been promoted. Same-day and next-day sessions rely on these files to recover context. Promotion is not a reason to delete; deletion is only for files dated 30+ days ago.
 
+### 7b. Semantic File Lifecycle
+
+Scan `memory/semantic/` for stale, oversized, or redundant files. This step keeps semantic memory clean and navigable — without it, old files accumulate noise that degrades search quality.
+
+#### Staleness Detection
+
+For each file in `memory/semantic/`:
+
+1. **Check last modification** — use `git log -1 --format=%ai -- <file>` to get the last commit date touching that file.
+2. **Flag as stale** if not modified in 30+ days.
+
+#### Actions on Stale Files
+
+For each stale file, assess its content against current knowledge:
+
+| Condition | Action |
+|-----------|--------|
+| Content is still accurate and useful | **KEEP** — no change needed (reset staleness by noting "reviewed YYYY-MM-DD" in the report) |
+| Content is partially outdated | **UPDATE** — refresh outdated sections in-place, preserve accurate parts |
+| Content is fully outdated or superseded | **DELETE** — remove the file entirely |
+| Content overlaps significantly with another semantic file | **MERGE** — combine into one file, delete the redundant one |
+
+**Conservative approach:** When unsure whether content is still relevant, KEEP it. Only DELETE when the information is clearly wrong or obsolete. Prefer UPDATE over DELETE.
+
+**Never delete a file that contains `[MEM-NNN]` ACTIVE keys** — those entries must first go through the MEM lifecycle (Step 1c) before the file can be removed.
+
+#### Size Check
+
+For all files in `memory/semantic/` (not just stale ones):
+
+1. Count lines with `wc -l`
+2. If a file exceeds **100 lines**, split it into logical sub-topics:
+   - Create new files with descriptive names (e.g., `teamvibe-architecture.md` → `teamvibe-architecture-infra.md` + `teamvibe-architecture-api.md`)
+   - Delete the oversized original
+   - Update any pointers in `SUMMARY.md` or `TODAY.md` that reference the old filename
+
+**Do not split aggressively** — only split when the file covers clearly distinct sub-topics. A 120-line file about one cohesive topic is fine.
+
+#### Merge Detection
+
+When processing stale files, also check for merge candidates among non-stale files:
+- Two or more files under 20 lines covering the same topic → merge into one
+- Files with nearly identical names or overlapping content → merge
+
+#### Report Tracking
+
+Add a `## Semantic Lifecycle` section to the markdown report:
+
+```markdown
+## Semantic Lifecycle
+- Files scanned: 8
+- Stale (30+ days): 3
+- Actions: 1 KEEP (reviewed), 1 UPDATE (refreshed), 1 DELETE (obsolete)
+- Oversized (>100 lines): 1 (split into 2 files)
+- Merges: 0
+- Files changed: semantic/old-topic.md (deleted), semantic/architecture.md (updated)
+```
+
+Add any created, updated, or deleted semantic files to `filesChanged`. Set `selfAssessment["semantic-lifecycle-checked"]` to `true`.
+
+If `memory/semantic/` doesn't exist or is empty, skip this step and set `selfAssessment["semantic-lifecycle-checked"]` to `true` (nothing to check).
+
 ### 8. Update Timestamp
 
 Write the current date to `memory/.last_consolidation`:
