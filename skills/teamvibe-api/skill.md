@@ -59,6 +59,40 @@ The `promptTemplate` is **an instruction to yourself** (Claude), not the message
 - `"Check PRs"` — Too vague. Which repo? What to do with results?
 - `"Reply to the thread with a reminder"` — No thread_ts specified; the session has no thread context, so this will post to channel root.
 
+## Best Practices
+
+### Data-before-reference rule
+
+Never send a message referencing an output (file, URL, generated data) before that output exists. If the session crashes between the message and data generation, the user gets broken references.
+
+**Valid pattern:**
+```
+1. send_message("Generating report...")         ← no output references
+2. Generate data, write files, fetch results
+3. send_message in thread with results + links  ← outputs exist
+```
+
+**Invalid pattern:**
+```
+1. send_message("Here's your report: <link>")   ← link references non-existent output
+2. Generate the report                           ← session crash = broken link
+```
+
+Informational messages (status updates, "starting..." notifications) can be sent at any time since they don't reference outputs.
+
+### Step ordering in promptTemplate
+
+When your `promptTemplate` involves multiple steps, order them defensively:
+1. **Gather data first** — fetch, compute, generate
+2. **Validate results** — check for errors or empty responses
+3. **Send message last** — only after you have confirmed output to share
+
+### Partial failure handling
+
+If a scheduled task partially fails (e.g., data fetch works but formatting breaks):
+- Send what you have with a note about what failed
+- Don't silently fail — a partial result is better than no response
+
 ## Examples
 
 ### Recurring (CRON)
