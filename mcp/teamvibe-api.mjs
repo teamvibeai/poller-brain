@@ -101,11 +101,6 @@ const TOOLS = [
           type: 'string',
           description: 'Description of the feedback (minimum 10 characters)',
         },
-        targetRepo: {
-          type: 'string',
-          enum: ['teamvibeai/teamvibe.ai', 'teamvibeai/poller-brain', 'teamvibeai/poller-brain-eval'],
-          description: 'Target repository (optional)',
-        },
       },
       required: ['type', 'priority', 'context'],
     },
@@ -157,14 +152,12 @@ async function handleTool(name, args) {
     }
 
     case 'submit_feedback': {
-      const body = {
+      return await apiCall('POST', '/feedback', {
         channelId: CHANNEL_ID,
         type: args.type,
         priority: args.priority,
         context: args.context,
-      }
-      if (args.targetRepo) body.targetRepo = args.targetRepo
-      return await apiCall('POST', '/feedback', body)
+      })
     }
 
     default:

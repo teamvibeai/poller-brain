@@ -125,7 +125,6 @@ Submit feedback about the platform. Stored in a central database and consolidate
 | `type` | **yes** | `bug`, `improvement`, or `observation` |
 | `priority` | **yes** | `low`, `medium`, `high`, or `critical` |
 | `context` | **yes** | Description of the feedback (min 10 chars) |
-| `targetRepo` | no | Target repo: `teamvibeai/teamvibe.ai`, `teamvibeai/poller-brain`, or `teamvibeai/poller-brain-eval` |
 
 ### When to use
 
@@ -139,7 +138,6 @@ Submit feedback about the platform. Stored in a central database and consolidate
 {
   "type": "bug",
   "priority": "high",
-  "context": "MCP fetch_failed errors occur 2-3x per session when calling read_thread. Retrying works but adds latency.",
-  "targetRepo": "teamvibeai/teamvibe.ai"
+  "context": "MCP fetch_failed errors occur 2-3x per session when calling read_thread. Retrying works but adds latency."
 }
 ```
