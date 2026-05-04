@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * TeamVibe API MCP Server — scheduled messages management.
+ * TeamVibe API MCP Server — scheduled messages & agent feedback.
  *
  * Environment variables (set by claude-spawner):
  *   TEAMVIBE_API_URL      — Poller API base URL
@@ -81,6 +81,30 @@ const TOOLS = [
       required: ['scheduleId'],
     },
   },
+  {
+    name: 'submit_feedback',
+    description: 'Submit feedback about the platform (bugs, improvements, observations). Feedback is stored in a central database and consolidated by the eval pipeline. Use when a user explicitly reports an issue or when you observe a platform problem worth tracking.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['bug', 'improvement', 'observation'],
+          description: 'Type of feedback',
+        },
+        priority: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'critical'],
+          description: 'How critical the agent considers this feedback',
+        },
+        context: {
+          type: 'string',
+          description: 'Description of the feedback (minimum 10 characters)',
+        },
+      },
+      required: ['type', 'priority', 'context'],
+    },
+  },
 ]
 
 async function handleTool(name, args) {
@@ -125,6 +149,15 @@ async function handleTool(name, args) {
     case 'delete_scheduled_message': {
       const params = new URLSearchParams({ workspaceId: WORKSPACE_ID })
       return await apiCall('DELETE', `/scheduled-messages/${args.scheduleId}?${params}`)
+    }
+
+    case 'submit_feedback': {
+      return await apiCall('POST', '/feedback', {
+        channelId: CHANNEL_ID,
+        type: args.type,
+        priority: args.priority,
+        context: args.context,
+      })
     }
 
     default:
