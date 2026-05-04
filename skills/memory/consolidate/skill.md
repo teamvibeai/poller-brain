@@ -40,6 +40,12 @@ This ensures daily logs accumulate in `memory/daily/` while TODAY.md stays fresh
 
 If `memory/TODAY.md` doesn't exist, do NOT skip this step. Instead: create `memory/TODAY.md` now with today's date header and the consolidation start entry (step 3 above). Add `memory/TODAY.md` to `filesChanged`. There is no archive destination since there was no prior content — omit the `memory/daily/YYYY-MM-DD.md` entry from filesChanged in this case only.
 
+**Step 0 checkpoint (required before proceeding):** Pause here and explicitly verify:
+- [ ] `memory/TODAY.md` is in your working `filesChanged` list
+- [ ] `memory/daily/YYYY-MM-DD.md` (today's date) is in `filesChanged` (unless TODAY.md did not exist prior to this run)
+
+If either entry is missing, add it now. Do NOT advance to Step 1 with these entries missing — the `today-md-archived` eval criterion checks `filesChanged` and will fail if TODAY.md is absent, even when the archival was performed correctly.
+
 ### 1. Scan Daily Logs
 
 Read all files in `memory/daily/` dated since the last consolidation date.
