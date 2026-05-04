@@ -167,6 +167,71 @@ If MISTAKES.md has no entries or doesn't exist, skip this step.
 
 **Report tracking:** Add any promoted-to files to `filesChanged`. Add a summary of promotions (or "no mistakes to promote") to the markdown report.
 
+### 5b. Semantic File Lifecycle
+
+Scan `memory/semantic/` for stale, oversized, or redundant files. This step keeps semantic memory clean and navigable — without it, old files accumulate noise that degrades search quality.
+
+**This step MUST run before Step 6 (Regenerate SUMMARY.md)** — otherwise SUMMARY.md will contain stale pointers to files that were just deleted or renamed.
+
+#### Staleness Detection
+
+For each file in `memory/semantic/`:
+
+1. **Check last modification** — run `git log -1 --format=%ai -- <file>` to get the last commit date touching that file.
+2. **Shallow clone guard** — if `git log` returns empty (no history available, common in shallow clones after re-clone), treat the file as stale and flag it for review. Do NOT auto-delete files with missing history — only flag them for manual assessment.
+3. **Flag as stale** if not modified in 30+ days (or if history is missing per step 2).
+
+#### Actions on Stale Files
+
+For each stale file, assess its content against current knowledge:
+
+| Condition | Action |
+|-----------|--------|
+| Content is still accurate and useful | **KEEP** — no change needed (reset staleness by noting "reviewed YYYY-MM-DD" in the report) |
+| Content is partially outdated | **UPDATE** — refresh outdated sections in-place, preserve accurate parts |
+| Content is fully outdated or superseded | **DELETE** — remove the file entirely |
+| Content overlaps significantly with another semantic file | **MERGE** — combine into one file, delete the redundant one |
+
+**Conservative approach:** When unsure whether content is still relevant, KEEP it. Only DELETE when the information is clearly wrong or obsolete. Prefer UPDATE over DELETE.
+
+**Never delete a file that contains `[MEM-NNN]` ACTIVE keys** — those entries must first go through the MEM lifecycle (Step 1c) before the file can be removed.
+
+#### Size Check
+
+For all files in `memory/semantic/` (not just stale ones):
+
+1. Count lines with `wc -l`
+2. If a file exceeds **100 lines**, split it into logical sub-topics:
+   - Create new files with descriptive names (e.g., `teamvibe-architecture.md` → `teamvibe-architecture-infra.md` + `teamvibe-architecture-api.md`)
+   - Delete the oversized original
+   - Update any pointers in `TODAY.md` that reference the old filename
+
+**Do not split aggressively** — only split when the file covers clearly distinct sub-topics. A 120-line file about one cohesive topic is fine.
+
+#### Merge Detection
+
+When processing stale files, also check for merge candidates among non-stale files:
+- Two or more files under 20 lines covering the same topic → merge into one
+- Files with nearly identical names or overlapping content → merge
+
+#### Report Tracking
+
+Add a `## Semantic Lifecycle` section to the markdown report:
+
+```markdown
+## Semantic Lifecycle
+- Files scanned: 8
+- Stale (30+ days): 3 (1 via shallow clone fallback)
+- Actions: 1 KEEP (reviewed), 1 UPDATE (refreshed), 1 DELETE (obsolete)
+- Oversized (>100 lines): 1 (split into 2 files)
+- Merges: 0
+- Files changed: semantic/old-topic.md (deleted), semantic/architecture.md (updated)
+```
+
+Add any created, updated, or deleted semantic files to `filesChanged`. Set `selfAssessment["semantic-lifecycle-checked"]` to `true`.
+
+If `memory/semantic/` doesn't exist or is empty, skip this step and set `selfAssessment["semantic-lifecycle-checked"]` to `true` (nothing to check).
+
 ### 6. Regenerate SUMMARY.md
 
 **Always regenerate `memory/SUMMARY.md` on every consolidation run — this step is non-negotiable, even if no facts were promoted in steps 2–4.** A lightweight consolidation with zero promotions must still regenerate SUMMARY.md to ensure it reflects the current state of all memory tiers.
