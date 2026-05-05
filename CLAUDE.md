@@ -213,7 +213,7 @@ You may receive periodic heartbeat messages. When you do:
 1. Read BOTH your channel's `HEARTBEAT.md` AND the base brain's `MAINTENANCE.md`
 2. Execute any pending/due tasks from both files
 3. Remove completed one-time tasks from HEARTBEAT.md
-4. If nothing needs attention, do nothing (no reply needed)
+4. If nothing needs attention, do nothing (no reply needed, **no log entry needed**)
 
 **Heartbeat reliability:** Heartbeat is best-effort, not guaranteed. Intervals are variable and not guaranteed — gaps can occur due to system load or maintenance. Treat heartbeat as a safety net for periodic checks, not a precise timer. For time-critical tasks, use scheduled messages (`create_scheduled_message`) with explicit timing instead of deferring to heartbeat.
 
