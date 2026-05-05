@@ -57,7 +57,9 @@ As you work, append a timestamped one-liner to **`memory/TODAY.md`** whenever an
 
 Rules:
 - **Write to `memory/TODAY.md`** — this is the primary daily log target. It gets archived to `memory/daily/YYYY-MM-DD.md` during maintenance.
-- **Minimum entry rule (non-negotiable):** Every session must create at least one log entry — even heartbeat, maintenance, triage, health-check, or automated sessions with no user interaction. Write the entry **before** any action that could fail or time out — if the session crashes, the log still has value. If nothing notable happened: `- 09:00 — heartbeat ran, no user interactions, no new content` or `- 09:00 — WF triage ran, 0 failures`. No session ends with zero log entries.
+- **Minimum entry rule:** Every session that *performs a meaningful action* must create at least one log entry. This includes interactive sessions, maintenance that modifies files, heartbeats that execute tasks, triage runs, and health checks. Write the entry **before** any action that could fail or time out — if the session crashes, the log still has value.
+  - **Exception — no-op heartbeats:** If a heartbeat session checks tasks and finds nothing to do (no pending tasks, no maintenance due, no actions taken), do **NOT** log anything. Silent exit is correct. Only log heartbeats that actually performed work (e.g., ran consolidation, completed a task, triggered a workflow).
+  - **What to log when something happened:** `- 09:00 — heartbeat: ran consolidation, archived 3 daily logs` or `- 09:00 — WF triage ran, 2 failures (created WF-123)`. Keep it to what was *done*, not what was *skipped*.
 - **Append continuously, not at the end.** If the session ends abruptly (crash, context compaction, timeout), the log still has value because you wrote as you went.
 - **Don't batch-decide "what was important."** If you're unsure whether an entry is worth it, write it — removing noise is cheap during consolidation, reconstructing lost context is not.
 - **One line per entry is fine.** Brief is better than nothing.
@@ -67,7 +69,7 @@ Rules:
 # 2026-03-17
 
 - 09:00 — WF triage ran, 2 failures (erpio-gw login, rekap-dev deploy), created WF-123
-- 09:15 — check-triage ran, 0 failures, all systems OK
+- 09:15 — heartbeat: completed task "check PR #456 status" — merged, removed from HEARTBEAT.md
 - 14:30 — Learned that Alice prefers email over Slack for approvals
 - 14:45 — Fixed the deploy script; root cause was missing AWS region
 - 15:10 — User corrected: reports should go to #general, not #reports
