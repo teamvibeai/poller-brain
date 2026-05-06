@@ -271,6 +271,29 @@ Write the current date to `memory/.last_consolidation`:
 YYYY-MM-DD
 ```
 
+### 8b. Heartbeat Sweep & Self-Report
+
+Heartbeat is being deprecated (`teamvibeai/teamvibe.ai#102`). Channel brain repos are private and live in customer GH orgs — the platform cannot inspect them. Each brain MUST self-report `HEARTBEAT.md` state so the eval pipeline can track migration progress.
+
+1. **Sweep** — if `HEARTBEAT.md` exists in the brain root:
+   - For every unchecked `- [ ]` task: convert to a `create_scheduled_message` call (`runAt` for one-time, `cron` for recurring — see CLAUDE.md "Migration recipe"), then delete the line.
+   - Remove all completed `- [x]` lines.
+   - If the file then has no real content (only blank lines, headings, or HTML comments), delete it.
+   - Add `HEARTBEAT.md` to the JSON report's `filesChanged` if it was modified or deleted.
+   - Include in `decisions`: how many items were migrated and whether the file was kept or deleted.
+
+2. **Self-report** — populate `heartbeatStatus` in the JSON report (always, even when `HEARTBEAT.md` does not exist):
+
+   ```json
+   "heartbeatStatus": {
+     "present": <bool: file exists at brain root after sweep>,
+     "nonEmpty": <bool: file has any line that isn't blank/heading/HTML comment>,
+     "itemCount": <int: number of unchecked '- [ ]' lines>
+   }
+   ```
+
+   Goal state: `present: false`. The eval pipeline aggregates this across all reports to know when platform-side heartbeat code can be removed (`teamvibe.ai#101`).
+
 ### 9. MEM Audit & Memory Metrics
 
 Run integrity checks on the MEM registry and collect memory size metrics.
