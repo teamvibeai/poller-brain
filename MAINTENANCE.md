@@ -1,7 +1,7 @@
 # Base Brain Maintenance
 
 These tasks are universal — they apply to all agents regardless of workspace.
-During heartbeat sessions, execute these alongside your channel's HEARTBEAT.md tasks.
+Execute them during scheduled maintenance sessions. (Legacy: heartbeat sessions also trigger them while heartbeat is being phased out — see CLAUDE.md "Task Scheduling & Heartbeat" section. Tracked in `teamvibeai/teamvibe.ai#102`.)
 
 ## Reporting Convention
 
@@ -226,3 +226,16 @@ Users can ask you to report issues about the platform or base brain. When a user
 ## Twice Weekly
 
 - **Memory reflection**: Check `memory/episodic/reflection-*.md` for the last reflection date. If 3+ days old (or none exist), run the memory-reflect skill to assess memory quality. **Produce a report.**
+
+## Heartbeat → Scheduled Messages Migration
+
+Heartbeat is deprecated (`teamvibeai/teamvibe.ai#102`). During every consolidation, agents MUST sweep `HEARTBEAT.md` if it exists in the channel brain:
+
+1. Read `HEARTBEAT.md`. For each unchecked `- [ ]` task:
+   - Convert to a `create_scheduled_message` call (`runAt` for one-time, `cron` for recurring) — see CLAUDE.md "Migration recipe" section.
+   - Delete the migrated line from `HEARTBEAT.md`.
+2. Remove all completed `- [x]` lines.
+3. If the file is now empty (or contains only headings/comments), delete it.
+4. Record in the consolidation report's `decisions`: how many items migrated, file kept or deleted.
+
+The goal is `HEARTBEAT.md` absent from every brain repo so the platform-side heartbeat code can be removed.
