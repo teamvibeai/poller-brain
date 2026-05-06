@@ -225,31 +225,47 @@ You can attach multiple modals to one message — each gets its own button:
 - Each input block needs a unique `block_id` and the element needs an `action_id` — these become the field names in submission data
 - The `action_id` values from your input elements become the keys in the submission values
 
-## Heartbeat & Task Management
+## Task Scheduling & Heartbeat (DEPRECATED)
 
-You may receive periodic heartbeat messages. When you do:
-1. Read BOTH your channel's `HEARTBEAT.md` AND the base brain's `MAINTENANCE.md`
-2. Execute any pending/due tasks from both files
-3. Remove completed one-time tasks from HEARTBEAT.md
-4. If nothing needs attention, do nothing (no reply needed, **no log entry needed**)
+> **Status:** Heartbeat is being deprecated in favor of `create_scheduled_message` and event triggers. Tracked in `teamvibeai/teamvibe.ai#102`. **Do NOT add new HEARTBEAT.md tasks** — schedule them explicitly instead.
 
-**Heartbeat reliability:** Heartbeat is best-effort, not guaranteed. Intervals are variable and not guaranteed — gaps can occur due to system load or maintenance. Treat heartbeat as a safety net for periodic checks, not a precise timer. For time-critical tasks, use scheduled messages (`create_scheduled_message`) with explicit timing instead of deferring to heartbeat.
+### When a user asks you to track / remember / follow up on something
 
-### Managing Tasks
-When a user asks you to remember, track, or follow up on something:
-- Add it to `HEARTBEAT.md` as a checklist item with context and date
-- Mark one-time tasks clearly so you remove them after completion
-- Keep the file small — completed items should be cleaned up
+Use `mcp__teamvibe-api__create_scheduled_message` with explicit `runAt` (one-time) or `cron` (recurring). See the `teamvibe-api` skill for the full parameter reference.
 
-Example `HEARTBEAT.md`:
-```markdown
-# Periodic Tasks
-- [ ] Check if PR #123 is merged (one-time, added 2026-03-10)
-- [x] Follow up on email from John (done, remove next heartbeat)
+```typescript
+// One-time follow-up:
+create_scheduled_message({
+  runAt: "2026-05-13T09:00:00Z",
+  promptTemplate: "Check if PR #123 is merged. If not, ping the assignee."
+})
 
-# Recurring
-- Check unread emails and notify if urgent
+// Recurring task:
+create_scheduled_message({
+  cron: "0 7 * * 1-5",   // weekday mornings 07:00 UTC
+  promptTemplate: "Run morning health check and post summary."
+})
 ```
+
+### Heartbeat handling (transitional)
+
+The platform still sends periodic heartbeat messages while migration is in progress. When one arrives:
+1. If your channel still has a `HEARTBEAT.md`, read it; otherwise skip.
+2. Read `MAINTENANCE.md` for universal tasks.
+3. Execute any pending/due items.
+4. **Migrate any remaining `HEARTBEAT.md` items to scheduled messages and delete them from the file.** Goal state: `HEARTBEAT.md` empty or removed.
+5. If nothing to do, silent exit — **no log entry**.
+
+### Migration recipe for existing HEARTBEAT.md items
+
+For each `- [ ]` line:
+- *One-time check* (e.g. `Check if PR #123 is merged on 2026-05-15`) → `create_scheduled_message({ runAt: "2026-05-15T08:00:00Z", promptTemplate: "..." })`
+- *Recurring* (e.g. `Check unread emails daily`) → `create_scheduled_message({ cron: "0 8 * * *", promptTemplate: "..." })`
+- Delete the line from `HEARTBEAT.md` once the scheduled message is created.
+
+When `HEARTBEAT.md` becomes empty, delete the file.
+
+**Heartbeat reliability:** intervals are variable / best-effort. Never depend on heartbeat for time-critical work — always use scheduled messages.
 
 ### Reporting Issues
 When a user explicitly asks to report an issue about the platform or base brain (e.g., "zapiš jako issue", "report this", "pošli jako issue"), write it to `PENDING_ISSUES.md`. The issue will be included in your next maintenance report and processed into a GitHub issue. See MAINTENANCE.md for the full convention.

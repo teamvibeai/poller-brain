@@ -1,7 +1,7 @@
 # Base Brain Maintenance
 
 These tasks are universal — they apply to all agents regardless of workspace.
-During heartbeat sessions, execute these alongside your channel's HEARTBEAT.md tasks.
+Execute them during scheduled maintenance sessions. (Legacy: heartbeat sessions also trigger them while heartbeat is being phased out — see CLAUDE.md "Task Scheduling & Heartbeat" section. Tracked in `teamvibeai/teamvibe.ai#102`.)
 
 ## Reporting Convention
 
@@ -107,6 +107,11 @@ The JSON file is written at the same time as the markdown report, in the same co
       "date": "2026-04-26"
     }
   ],
+  "heartbeatStatus": {
+    "present": false,
+    "nonEmpty": false,
+    "itemCount": 0
+  },
   "brainCommitSha": "abc123def456789..."
 }
 ```
@@ -124,6 +129,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
 | `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. |
 | `pendingIssues` | `object[]` | Issues reported by users for creation on GitHub. Each object: `repo` (target repository), `title`, `context` (user's description), `reportedBy` (who reported), `date`. Empty array or omitted if none. See Pending Issues section below. |
+| `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
@@ -226,3 +232,27 @@ Users can ask you to report issues about the platform or base brain. When a user
 ## Twice Weekly
 
 - **Memory reflection**: Check `memory/episodic/reflection-*.md` for the last reflection date. If 3+ days old (or none exist), run the memory-reflect skill to assess memory quality. **Produce a report.**
+
+## Heartbeat → Scheduled Messages Migration
+
+Heartbeat is deprecated (`teamvibeai/teamvibe.ai#102`). During every consolidation, agents MUST sweep `HEARTBEAT.md` if it exists in the channel brain:
+
+1. Read `HEARTBEAT.md`. For each unchecked `- [ ]` task:
+   - Convert to a `create_scheduled_message` call (`runAt` for one-time, `cron` for recurring) — see CLAUDE.md "Migration recipe" section.
+   - Delete the migrated line from `HEARTBEAT.md`.
+2. Remove all completed `- [x]` lines.
+3. If the file is now empty (or contains only headings/comments), delete it.
+4. Record in the consolidation report's `decisions`: how many items migrated, file kept or deleted.
+5. Populate `heartbeatStatus` in the JSON report (always — even when `HEARTBEAT.md` does not exist):
+
+   ```json
+   "heartbeatStatus": {
+     "present": <true if HEARTBEAT.md exists at brainCommitSha, else false>,
+     "nonEmpty": <true if file has any line that isn't blank/heading/HTML comment>,
+     "itemCount": <number of unchecked '- [ ]' lines>
+   }
+   ```
+
+   This is the canonical signal the eval pipeline aggregates to track deprecation progress. Channel brain repos are private and distributed across customer GH orgs — the eval pipeline cannot read them directly, so each brain MUST self-report.
+
+The goal is `HEARTBEAT.md` absent from every brain repo so the platform-side heartbeat code can be removed.
