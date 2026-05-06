@@ -275,22 +275,30 @@ YYYY-MM-DD
 
 Heartbeat is being deprecated (`teamvibeai/teamvibe.ai#102`). Channel brain repos are private and live in customer GH orgs — the platform cannot inspect them. Each brain MUST self-report `HEARTBEAT.md` state so the eval pipeline can track migration progress.
 
+**All scheduled times below are UTC.** `runAt` is ISO-8601 UTC, `cron` follows standard 5-field syntax in UTC. Do NOT use local time — agents run across timezones and the platform interprets schedules as UTC.
+
 1. **Sweep** — if `HEARTBEAT.md` exists in the brain root:
-   - For every unchecked `- [ ]` task: convert to a `create_scheduled_message` call (`runAt` for one-time, `cron` for recurring — see CLAUDE.md "Migration recipe"), then delete the line.
+   - For every unchecked `- [ ]` task:
+     - Read the task text. If older than 30 days (per the `(added YYYY-MM-DD)` annotation or git blame on that line) and no longer relevant, mention it in `decisions` and delete it without scheduling — don't blindly schedule stale work.
+     - Otherwise, write a clear `promptTemplate` for `create_scheduled_message` that restates the task in imperative form ("Check if PR #123 is merged. If not, ping the assignee."). Include any context the agent will need (links, deadlines).
+     - Call `create_scheduled_message`. **If the call fails, leave the line in place and continue with the next item** — do NOT delete the source line until you have confirmation that the schedule was created. Record the failure in `decisions`.
+     - Once the call succeeds, delete the migrated line.
    - Remove all completed `- [x]` lines.
    - If the file then has no real content (only blank lines, headings, or HTML comments), delete it.
    - Add `HEARTBEAT.md` to the JSON report's `filesChanged` if it was modified or deleted.
-   - Include in `decisions`: how many items were migrated and whether the file was kept or deleted.
+   - Include in `decisions`: how many items were migrated, how many deferred (failures or stale), file kept or deleted.
 
 2. **Self-report** — populate `heartbeatStatus` in the JSON report (always, even when `HEARTBEAT.md` does not exist):
 
    ```json
    "heartbeatStatus": {
      "present": <bool: file exists at brain root after sweep>,
-     "nonEmpty": <bool: file has any line that isn't blank/heading/HTML comment>,
+     "nonEmpty": <bool: file has any non-task content line — see definition below>,
      "itemCount": <int: number of unchecked '- [ ]' lines>
    }
    ```
+
+   **`nonEmpty` definition:** true if the file contains at least one line that is NOT one of: blank, a heading (`#`), an HTML comment, or a completed `- [x]` task line. This means a file with only completed tasks counts as empty (the next sweep will remove them anyway).
 
    Goal state: `present: false`. The eval pipeline aggregates this across all reports to know when platform-side heartbeat code can be removed (`teamvibe.ai#101`).
 
