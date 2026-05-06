@@ -31,6 +31,24 @@ cover Slack channels, DMs, or other messaging contexts.
 
 > **Decision rule:** "Would I want this rule to affect a bot in a completely different Slack workspace for a different team?" If yes → base-brain. If no → channel brain.
 
+## Channel Brain Isolation (CRITICAL — read before designing cross-brain features)
+
+Channel brain repos are **private and live in the customer's GitHub organization**, not in `teamvibeai`. Today there are 10+ brains across 4+ orgs; the platform is designed for hundreds.
+
+**Implications:**
+- The `teamvibeai` org GitHub account has **no read access** to customer channel brains and never will.
+- You **cannot enumerate** channel brain repos via `gh repo list teamvibeai`, `gh search`, or any GitHub-API path. Whatever you can list from there is meta-only (e.g. `poller-brain`, `poller-brain-eval`).
+- You **cannot read** another channel brain's filesystem from your own session. Your CWD is your own brain only.
+
+**Anti-pattern (do NOT do this):** designing any feature, metric, dashboard, or eval that depends on reading another brain's `HEARTBEAT.md`, `memory/`, `reports/`, or any other file via `gh api`, cloning, or filesystem access. It will work on the 1–2 visible test brains and silently break for the rest of the fleet.
+
+**Correct pattern — cross-brain operations always go through the platform's data plane:**
+- **Maintenance reports** (this repo's `MAINTENANCE.md` JSON schema) — every brain self-reports state in its consolidation/reflection report; the eval pipeline aggregates from the report stream via Internal API. To track a new per-brain signal, **add a field to the report schema**, never a GH lookup.
+- **DynamoDB / AppSync GraphQL** — for routing, configuration, message history (read by UI/admin).
+- **Poller `/events`** — write path from brain → platform.
+
+**Sanity question for any new feature or metric:** *"Would this work for 200 brains across 10 customer orgs?"* If the answer involves any GitHub access to channel brains, the design is wrong — redesign before writing code.
+
 ## Your Setup
 You have access to the company's **knowledge base** (the current working directory). You should:
 - Read and search files to understand available tools and information
