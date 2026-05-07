@@ -26,6 +26,25 @@ const POLLER_ID = process.env.TEAMVIBE_POLLER_ID
 
 // --- Slack API helper ---
 
+// Slack hides the `text` field of chat.postMessage when `blocks` are present
+// (text becomes notification/accessibility fallback only). To keep the text
+// visible alongside blocks, prepend it as section block(s). Section text has
+// a 3000-char limit, so we chunk at newline boundaries (hard-cut as last resort).
+function textToSections(text, maxLen = 2900) {
+  const sections = []
+  let remaining = text
+  while (remaining.length > maxLen) {
+    let cut = remaining.lastIndexOf('\n', maxLen)
+    if (cut <= 0) cut = maxLen
+    sections.push({ type: 'section', text: { type: 'mrkdwn', text: remaining.slice(0, cut) } })
+    remaining = remaining.slice(cut).replace(/^\n/, '')
+  }
+  if (remaining) {
+    sections.push({ type: 'section', text: { type: 'mrkdwn', text: remaining } })
+  }
+  return sections
+}
+
 async function slackApi(method, body) {
   // Some Slack methods (conversations.replies, conversations.history) require form-urlencoded
   const useForm = method.startsWith('conversations.') || method.startsWith('files.')
@@ -57,8 +76,8 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). Also used as fallback for blocks.' },
-        blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions with buttons). See https://api.slack.com/block-kit', items: { type: 'object' } },
+        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). When blocks are also provided, text is auto-prepended as section block(s) so it stays visible (Slack hides the raw text field when blocks exist) AND is used as the notification/accessibility fallback.' },
+        blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions with buttons). See https://api.slack.com/block-kit. The `text` field is auto-prepended as a section block.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread). Pass null to send a top-level channel message even when in a thread session.' },
         modals: {
@@ -227,8 +246,8 @@ const TOOLS = [
       type: 'object',
       properties: {
         ts: { type: 'string', description: 'Timestamp of the message to update (required)' },
-        text: { type: 'string', description: 'New fallback text for the message' },
-        blocks: { type: 'array', description: 'New Block Kit blocks to replace existing ones', items: { type: 'object' } },
+        text: { type: 'string', description: 'New text for the message. When blocks are also provided, text is auto-prepended as section block(s) so it stays visible AND serves as the notification fallback.' },
+        blocks: { type: 'array', description: 'New Block Kit blocks to replace existing ones. The `text` field is auto-prepended as a section block.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
       },
       required: ['ts', 'text'],
@@ -261,6 +280,9 @@ async function handleTool(name, args) {
 
       let blocks = args.blocks ? [...args.blocks] : []
       const hasModals = args.modals?.length && API_URL && TOKEN
+      if (args.text && (blocks.length || hasModals)) {
+        blocks = [...textToSections(args.text), ...blocks]
+      }
 
       // Send the message first (without modal buttons if top-level)
       // We need the message ts for thread context when there's no thread_ts
@@ -563,7 +585,11 @@ async function handleTool(name, args) {
       if (!channel) throw new Error('channel required')
       if (!args.ts) throw new Error('ts required')
       const body = { channel, ts: args.ts, text: args.text }
-      if (args.blocks) body.blocks = args.blocks
+      if (args.blocks?.length) {
+        body.blocks = args.text
+          ? [...textToSections(args.text), ...args.blocks]
+          : args.blocks
+      }
       const result = await slackApi('chat.update', body)
       return { ok: true, ts: result.ts }
     }
