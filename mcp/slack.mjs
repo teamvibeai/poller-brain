@@ -247,7 +247,7 @@ const TOOLS = [
       properties: {
         ts: { type: 'string', description: 'Timestamp of the message to update (required)' },
         text: { type: 'string', description: 'New text for the message. When blocks are also provided, text is auto-prepended as section block(s) so it stays visible AND serves as the notification fallback.' },
-        blocks: { type: 'array', description: 'New Block Kit blocks to replace existing ones. The `text` field is auto-prepended as a section block.', items: { type: 'object' } },
+        blocks: { type: 'array', description: 'New Block Kit blocks to replace existing ones. The `text` field is auto-prepended as section block(s).', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
       },
       required: ['ts', 'text'],
@@ -280,7 +280,7 @@ async function handleTool(name, args) {
 
       let blocks = args.blocks ? [...args.blocks] : []
       const hasModals = args.modals?.length && API_URL && TOKEN
-      if (args.text && (blocks.length || hasModals)) {
+      if (args.text?.trim() && (blocks.length || hasModals)) {
         blocks = [...textToSections(args.text), ...blocks]
       }
 
@@ -586,7 +586,7 @@ async function handleTool(name, args) {
       if (!args.ts) throw new Error('ts required')
       const body = { channel, ts: args.ts, text: args.text }
       if (args.blocks?.length) {
-        body.blocks = args.text
+        body.blocks = args.text?.trim()
           ? [...textToSections(args.text), ...args.blocks]
           : args.blocks
       }
