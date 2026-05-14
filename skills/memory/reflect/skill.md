@@ -38,10 +38,19 @@ Look for conflicting information across memory files:
 
 ### 3. Gap Analysis
 
-Identify areas where memory is thin:
+Identify memory gaps AND name the concrete operational consequence — what actually went wrong in recent cycles because of the gap. A gap with no observed impact is structural noise; a gap tied to an observed problem is actionable.
+
+Look at the last 1–2 maintenance cycles (consolidation reports, prior reflections, recent daily logs) for the consequence — not the abstract future risk.
+
+- *Gap-only (not enough):* "Core memory lacks project X context."
+- *Gap + observed consequence (the bar):* "Core memory lacks project X context, which caused 3 duplicate pattern entries in last week's consolidations."
+
+Candidate gap classes to scan:
 - Frequently discussed topics with no semantic memory entry
 - Team members mentioned often but with no profile in semantic/
 - Recurring tasks with no procedural documentation
+
+If a gap exists but has not yet produced any observed consequence, do not log it as an observation. Move it to `processImprovements` as `[proposal] would like to capture X` so future cycles know it is on the radar without inflating the gap list.
 
 **Action:** Create placeholder files noting the gap for future capture:
 ```markdown
@@ -89,12 +98,12 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
 
 **JSON:** `reports/YYYY-MM-DD-memory-reflection.json` — populate every field:
 
-- `observations`: List specific findings from this reflection. Each entry should name a concrete memory strength or gap found. Examples:
-  - "semantic/team-members.md has complete profiles for all 4 active members"
-  - "memory/core/LEARNINGS.md has grown to 80 lines — approaching prune threshold"
-  - "No procedural documentation exists for the weekly-standup workflow despite it recurring 5+ times"
-  - "episodic/ covers last 3 months well; older events missing"
-  - Leave no entry vague — "memory looks good" does NOT qualify.
+- `observations`: List specific findings from this reflection. Each entry should name a concrete memory strength, OR pair a memory gap with the *operational consequence it has already produced* in recent maintenance cycles. Gap-only observations ("X is missing", "Y is thin") do NOT qualify — they go to `processImprovements` as `[proposal]` instead. Examples:
+  - "semantic/team-members.md has complete profiles for all 4 active members" — concrete strength
+  - "memory/core/LEARNINGS.md has grown to 80 lines and the last 2 promotions appended new bullets rather than merging into the existing entry, creating 3 near-duplicate rules" — gap + observed consequence
+  - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence
+  - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence
+  - Vague impact language like "this may affect quality" does NOT qualify — the consequence must be specific and already observed.
 - `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
   - "Split semantic/projects.md into per-project files — currently 120 lines"
   - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
