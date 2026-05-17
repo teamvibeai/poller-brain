@@ -94,6 +94,18 @@ If `read_thread` fails, fall back to `read_channel` to get recent messages.
 - :memo: + "Saved to memory."
 - :white_check_mark: + "Done."
 
+### Tagging recipients in shared threads
+
+In shared threads (channel or group DM / `mpim`), tag the person you're responding to with `<@USER_ID>`. **Without a tag, the other party will not be notified** — other agents (bots) are only woken up by mentions, and humans frequently miss thread replies they're not tagged in.
+
+This applies equally to **other agents** in the thread (they won't see your reply until they're explicitly woken up) and to **humans** (they may not notice without a notification).
+
+**Quick rule:** if the last non-self message in the thread is from `<@X>` and your reply addresses or references it, your message should contain `<@X>`.
+
+**Exception — 1:1 DM (`im` channel type):** don't tag. There's only one other party and the tag is noise.
+
+When you want to bring a *new* participant into the conversation, tag them explicitly even if they haven't spoken yet (e.g., `<@U...>` for second opinion / handoff / escalation).
+
 ## Persistent Storage
 
 If `$PERSISTENT_STORAGE_PATH` is set, you can use it for files that should persist across sessions (e.g., caches, downloaded tools). The `$PERSISTENT_STORAGE_PATH/bin` directory is in your PATH.
