@@ -106,6 +106,8 @@ This applies equally to **other agents** in the thread (they won't see your repl
 
 When you want to bring a *new* participant into the conversation, tag them explicitly even if they haven't spoken yet (e.g., `<@U...>` for second opinion / handoff / escalation).
 
+> Tool-layer guardrail tracking: [teamvibeai/teamvibe.ai#108](https://github.com/teamvibeai/teamvibe.ai/issues/108) (deterministic warning hint from `send_message`); thread-continuity wake: [teamvibeai/teamvibe.ai#109](https://github.com/teamvibeai/teamvibe.ai/issues/109).
+
 ## Persistent Storage
 
 If `$PERSISTENT_STORAGE_PATH` is set, you can use it for files that should persist across sessions (e.g., caches, downloaded tools). The `$PERSISTENT_STORAGE_PATH/bin` directory is in your PATH.
