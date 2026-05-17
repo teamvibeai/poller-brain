@@ -4,10 +4,17 @@
  * Implements JSON-RPC 2.0 over stdio using only Node.js built-ins + fetch().
  *
  * Environment variables (set by claude-spawner):
- *   SLACK_BOT_TOKEN  — Slack bot OAuth token
- *   SLACK_CHANNEL    — Default channel ID
- *   SLACK_THREAD_TS  — Default thread timestamp
- *   SLACK_MESSAGE_TS — Original message timestamp (for reactions)
+ *   SLACK_BOT_TOKEN          — Slack bot OAuth token
+ *   SLACK_CHANNEL            — Default channel ID
+ *   SLACK_THREAD_TS          — Default thread timestamp
+ *   SLACK_MESSAGE_TS         — Original message timestamp (for reactions)
+ *   TEAMVIBE_AGENT_BOT_IDS   — Optional comma-separated Slack user IDs of OTHER
+ *                              registered TeamVibe agent bots. Used to gate the
+ *                              `missing_recipient_tag` warning so that only real
+ *                              agents (not integration webhooks like GitHub,
+ *                              USLACKBOT, etc.) trigger it. When unset, all bot
+ *                              messages count as eligible speakers (degraded but
+ *                              non-blocking).
  */
 
 import { createInterface } from 'readline'
@@ -23,6 +30,14 @@ const WORKSPACE_ID = process.env.TEAMVIBE_WORKSPACE_ID
 const CHANNEL_ID = process.env.TEAMVIBE_CHANNEL_ID
 const BOT_ID = process.env.TEAMVIBE_BOT_ID
 const POLLER_ID = process.env.TEAMVIBE_POLLER_ID
+
+const SYSTEM_BOT_IDS = new Set(['USLACKBOT'])
+const AGENT_BOT_IDS = new Set(
+  (process.env.TEAMVIBE_AGENT_BOT_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+)
 
 // --- Slack API helper ---
 
@@ -65,6 +80,91 @@ async function slackApi(method, body) {
   const data = await resp.json()
   if (!data.ok) throw new Error(`Slack API ${method}: ${data.error}`)
   return data
+}
+
+// --- Thread/channel helpers (used by send_message warning + list_thread_participants) ---
+
+// conversations.info results are stable for the session — cache to avoid repeat calls.
+const _channelInfoCache = new Map()
+async function getChannelKind(channel) {
+  if (!channel) return 'channel'
+  if (_channelInfoCache.has(channel)) return _channelInfoCache.get(channel)
+  try {
+    const result = await slackApi('conversations.info', { channel })
+    const ch = result.channel || {}
+    const kind = ch.is_im ? 'im' : ch.is_mpim ? 'mpim' : ch.is_group ? 'group' : 'channel'
+    _channelInfoCache.set(channel, kind)
+    return kind
+  } catch {
+    return 'channel' // best-effort default = most permissive (warning may fire)
+  }
+}
+
+// True if message m is an eligible "non-self speaker" for the tag warning:
+// - is a regular user message or a bot_message (not channel_join, file_share comment, etc.)
+// - is not us
+// - is not USLACKBOT or other system bots
+// - if it's a bot, either AGENT_BOT_IDS is empty (degraded mode) or this user is in it
+function isEligibleSpeaker(m) {
+  if (!m || !m.user) return false
+  if (m.subtype && m.subtype !== 'bot_message') return false
+  if (m.user === BOT_ID) return false
+  if (SYSTEM_BOT_IDS.has(m.user)) return false
+  if (m.bot_id && AGENT_BOT_IDS.size > 0 && !AGENT_BOT_IDS.has(m.user)) return false
+  return true
+}
+
+async function getLastEligibleSpeaker(channel, threadTs) {
+  if (!channel || !threadTs) return null
+  try {
+    const result = await slackApi('conversations.replies', { channel, ts: threadTs, limit: 50 })
+    const msgs = result.messages || []
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (isEligibleSpeaker(msgs[i])) return msgs[i].user
+    }
+    return null
+  } catch {
+    return null // best-effort — never fail send_message on warning detection
+  }
+}
+
+// Returns a warning hint object if outgoing reply in a multi-party thread is
+// missing the recipient tag, or null. Gate: only mpim/channel/group (no 1:1 DM).
+// Deterministic — no time threshold, no LLM. See teamvibeai/teamvibe.ai#108.
+async function computeMissingTagWarning(channel, threadTs, text) {
+  if (!channel || !threadTs) return null
+  const kind = await getChannelKind(channel)
+  if (kind === 'im') return null
+  const lastSpeaker = await getLastEligibleSpeaker(channel, threadTs)
+  if (!lastSpeaker) return null
+  if (text && text.includes(`<@${lastSpeaker}>`)) return null
+  return {
+    code: 'missing_recipient_tag',
+    detail: `Last message in this thread is from <@${lastSpeaker}>, but your reply does not tag them. They will not be notified (other agents stay asleep without a mention; humans often miss thread replies they're not tagged in). Add the tag in a follow-up, or ignore this warning if the omission is intentional (broadcast / status update).`,
+    last_speaker_id: lastSpeaker,
+  }
+}
+
+// Resolve a Slack user_id to a friendly display name. Caches per-process for
+// the session lifetime since display names rarely change mid-conversation.
+const _userInfoCache = new Map()
+async function resolveDisplayName(userId) {
+  if (!userId) return userId
+  if (_userInfoCache.has(userId)) return _userInfoCache.get(userId)
+  try {
+    const info = await slackApi('users.info', { user: userId })
+    const u = info.user || {}
+    const name =
+      u.profile?.display_name?.trim() ||
+      u.real_name?.trim() ||
+      u.name?.trim() ||
+      userId
+    _userInfoCache.set(userId, name)
+    return name
+  } catch {
+    _userInfoCache.set(userId, userId)
+    return userId
+  }
 }
 
 // --- Tool definitions ---
@@ -143,6 +243,17 @@ const TOOLS = [
       properties: {
         limit: { type: 'number', description: 'Max messages to return (default: 20)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+    },
+  },
+  {
+    name: 'list_thread_participants',
+    description: 'List participants in the current thread: user IDs, display names, bot/human flags, and self marker. Use to know "who is in the room" before deciding tags, handoffs, or escalations. Returns deduplicated participants in first-spoke order.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
       },
     },
   },
@@ -346,7 +457,13 @@ async function handleTool(name, args) {
         }
       }
 
-      return { ok: true, ts: result.ts }
+      // Best-effort warning: did we forget to tag the last non-self speaker?
+      // Computed after send so warning never delays delivery; agent can
+      // follow up with a tagged message if needed. See teamvibeai/teamvibe.ai#108.
+      const warning = await computeMissingTagWarning(channel, thread_ts, args.text)
+      const response = { ok: true, ts: result.ts }
+      if (warning) response.warnings = [warning]
+      return response
     }
 
     case 'add_reaction': {
@@ -399,6 +516,33 @@ async function handleTool(name, args) {
         }),
       }))
       return { ok: true, messages }
+    }
+
+    case 'list_thread_participants': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      const ts = args.thread_ts || DEFAULT_THREAD_TS
+      if (!channel) throw new Error('channel required')
+      if (!ts) throw new Error('thread_ts required')
+      const result = await slackApi('conversations.replies', { channel, ts, limit: 200 })
+      const msgs = result.messages || []
+      const seen = new Set()
+      const participants = []
+      for (const m of msgs) {
+        if (m.subtype && m.subtype !== 'bot_message') continue
+        if (!m.user || seen.has(m.user)) continue
+        seen.add(m.user)
+        participants.push({
+          user_id: m.user,
+          is_bot: Boolean(m.bot_id),
+          is_self: m.user === BOT_ID,
+        })
+      }
+      await Promise.all(
+        participants.map(async (p) => {
+          p.display_name = await resolveDisplayName(p.user_id)
+        }),
+      )
+      return { ok: true, participants }
     }
 
     case 'read_channel': {
