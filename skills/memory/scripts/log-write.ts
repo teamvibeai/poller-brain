@@ -19,10 +19,19 @@ import * as path from "path";
 const TODAY_PATH = "memory/TODAY.md";
 
 function ensureToday(): void {
+  const today = new Date().toISOString().slice(0, 10);
+
   if (!fs.existsSync(TODAY_PATH)) {
     fs.mkdirSync(path.dirname(TODAY_PATH), { recursive: true });
-    const today = new Date().toISOString().slice(0, 10);
     fs.writeFileSync(TODAY_PATH, `# ${today}\n\n`);
+    return;
+  }
+
+  // If TODAY.md exists but lacks today's date section, prepend one so entries are
+  // filed under the correct date when consolidation archives the file to daily/.
+  const content = fs.readFileSync(TODAY_PATH, "utf8");
+  if (!content.includes(`# ${today}`)) {
+    fs.writeFileSync(TODAY_PATH, `# ${today}\n\n` + content);
   }
 }
 
