@@ -166,13 +166,15 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 
 ## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
 
+## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
+
 ### Reflection Criteria
 
 | ID | Criterion | Pass condition |
 |----|-----------|----------------|
 | `concrete-improvement-proposal` | Did reflection produce at least one concrete process change proposal? | Report includes at least one specific proposal for changing the maintenance process, with a stated rationale (what should change and why), not merely an observation that something is broken |
 | `previous-recommendations-reviewed` | Did reflection review follow-through on previous recommendations? | Report explicitly references at least one recommendation from a prior maintenance cycle and states whether it was implemented, partially addressed, or remains pending |
-| `gap-impact-analysis` | Did reflection connect at least one memory gap to a specific operational consequence? | At least one entry in observations identifies a specific memory gap AND explains how that gap caused a concrete problem or reduced maintenance effectiveness in recent cycles |
+| `gap-impact-analysis` | Did reflection connect at least one memory gap to a specific operational consequence? | At least one entry in observations identifies a specific memory gap AND explains how that gap caused a concrete problem or reduced maintenance effectiveness in recent cycles. Per-report applicability: if observations contains zero gap-class entries (no language like 'lacks', 'missing', 'thin', 'no entry for', 'gap in coverage'), the report is excluded from scoring (treated as not-applicable for this criterion). The criterion only evaluates reports where at least one gap-class observation is present after the poller-brain#95 routing rule moves gap-only entries to processImprovements. |
 | `verifiable-recommendations` | Did reflection include at least one recommendation with a stated success criterion? | At least one entry in recommendations specifies: (1) a concrete change to make, (2) the current problem it addresses, AND (3) a verifiable condition that would confirm the recommendation was implemented and effective in a future maintenance cycle |
 | `deletion-with-preservation-evidence` | Did reflection explicitly account for each deleted file's content preservation? | For every file deletion recorded in filesChanged (operationCounts.deleted > 0): the report names in decisions or observations the specific destination file where the deleted content was preserved, OR explicitly states the content was redundant with a specifically named existing file. If operationCounts.deleted is 0, the criterion passes automatically. |
 
