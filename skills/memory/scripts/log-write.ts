@@ -19,10 +19,18 @@ import * as path from "path";
 const TODAY_PATH = "memory/TODAY.md";
 
 function ensureToday(): void {
+  const today = new Date().toISOString().slice(0, 10);
   if (!fs.existsSync(TODAY_PATH)) {
     fs.mkdirSync(path.dirname(TODAY_PATH), { recursive: true });
-    const today = new Date().toISOString().slice(0, 10);
     fs.writeFileSync(TODAY_PATH, `# ${today}\n\n`);
+    return;
+  }
+  // If the most recent date header is older than today, start a fresh section
+  // so entries are logged under the correct date (prevents misfiled-entry pattern)
+  const content = fs.readFileSync(TODAY_PATH, "utf-8");
+  const headerMatch = content.match(/^# (\d{4}-\d{2}-\d{2})/m);
+  if (!headerMatch || headerMatch[1] !== today) {
+    fs.appendFileSync(TODAY_PATH, `\n# ${today}\n\n`);
   }
 }
 
