@@ -4,6 +4,7 @@
 # Whitelist: only track intentional base-brain files
 !.gitignore
 !CLAUDE.md
+!CONTRIBUTING.md
 !settings.json
 !mcp/
 !mcp/**
