@@ -1,5 +1,7 @@
 # Contributing to poller-brain
 
+> **Not for runtime agents.** This guide applies only when authoring changes to the base-brain repo itself. End-user agents who have this repo cloned into user scope (`$CLAUDE_CONFIG_DIR`) can safely ignore this file — its rules are checked at PR-creation time, not at runtime.
+
 `poller-brain` is the shared base brain used by **all** TeamVibe brain agents. Every change here propagates to ~10+ deployed brains today, scaling to hundreds. Treat changes accordingly.
 
 ## Cross-brain blast radius claims must be evidence-backed
