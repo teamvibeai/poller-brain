@@ -123,11 +123,11 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `operationType` | `string` | One of: `consolidation`, `reflection` |
 | `operationCounts` | `object` | Count of files created, modified, deleted |
 | `filesChanged` | `string[]` | Relative paths of all files changed |
-| `decisions` | `string[]` | Plain-text list of decisions made during this run |
-| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion) |
-| `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion) |
+| `decisions` | `string[]` | Plain-text list of decisions made during this run. **One sentence per item, action-first phrasing (verb + object + minimal evidence). Cap at 5 items.** When a criterion (e.g. `evidence-backed-decisions`) requires a specific memory file or count, name it inline — do not narrate the discovery process. |
+| `observations` | `string[]` | Specific observations about memory quality, strengths, or gaps (used by `assess-memory-quality` criterion). **One sentence per item, fact-first (the observation itself, not how you found it). Cap at 5 items.** |
+| `recommendations` | `string[]` | Actionable recommendations for the next maintenance cycle (used by `actionable-recommendations` criterion). **Imperative, one sentence per item. Include success criterion inline when required (see `verifiable-recommendations`). Cap at 5 items.** |
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
-| `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. |
+| `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. **One sentence per item after the prefix. Cap at 5 items.** |
 | `pendingIssues` | `object[]` | Issues reported by users for creation on GitHub. Each object: `repo` (target repository), `title`, `context` (user's description), `reportedBy` (who reported), `date`. Empty array or omitted if none. See Pending Issues section below. |
 | `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
@@ -137,6 +137,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 - The `selfAssessment` keys MUST match the criterion IDs defined in the Eval Criteria section below.
 - The JSON file MUST be valid JSON (no trailing commas, no comments).
 - Commit the JSON report in the same commit as the markdown report and the maintenance changes.
+- **Brevity: each item in `decisions` / `observations` / `recommendations` / `processImprovements` is ONE sentence (max ~200 chars). Cap each list at 5 items.** Reports are read by both humans and the eval pipeline — terse, fact-first writing scales; verbose narration does not. Reasoning belongs in the markdown report's Decisions section, NOT the JSON. If a criterion needs a specific evidence reference (e.g. a memory filename, a count), name it inline; do not describe the discovery process. The markdown report can still narrate in full — only the JSON list items need to be terse.
 
 ## Eval Criteria
 
