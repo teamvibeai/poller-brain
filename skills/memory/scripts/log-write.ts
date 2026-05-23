@@ -25,11 +25,13 @@ function ensureToday(): void {
     fs.writeFileSync(TODAY_PATH, `# ${today}\n\n`);
     return;
   }
-  // If the most recent date header is older than today, start a fresh section
-  // so entries are logged under the correct date (prevents misfiled-entry pattern)
+  // If the LAST date header is older than today, start a fresh section
+  // so entries are logged under the correct date (prevents misfiled-entry pattern).
+  // Must check LAST header (not first) to avoid duplicate sections on same-day calls.
   const content = fs.readFileSync(TODAY_PATH, "utf-8");
-  const headerMatch = content.match(/^# (\d{4}-\d{2}-\d{2})/m);
-  if (!headerMatch || headerMatch[1] !== today) {
+  const headers = [...content.matchAll(/^# (\d{4}-\d{2}-\d{2})/gm)];
+  const lastHeader = headers[headers.length - 1];
+  if (!lastHeader || lastHeader[1] !== today) {
     fs.appendFileSync(TODAY_PATH, `\n# ${today}\n\n`);
   }
 }
