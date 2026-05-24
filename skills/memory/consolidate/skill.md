@@ -414,6 +414,8 @@ If any check fails, do one of two things before finishing:
 
 **Weekly coverage special rule:** if coverage is < 0.8 and backfill cannot raise it to ≥ 0.8, you MUST add a `[self-critique]` entry to `processImprovements` that names the specific days that had sessions but no log and explains what happened. Reporting a low ratio without this entry fails the criterion. The self-critique does NOT replace the ratio in the markdown — both are required when coverage is low.
 
+Example low-coverage self-critique: `"[self-critique] Coverage 3/7 (43%): sessions on 2026-05-17, 2026-05-18, 2026-05-20 had no daily log because TODAY.md was archived as a single cross-day file (2026-05-10.md) covering entries from multiple dates. Entries correctly dated but per-day files missing. Will ensure per-day archival going forward."`
+
 Do not silently pass a failing check.
 
 ### 11. Process Self-Critique
