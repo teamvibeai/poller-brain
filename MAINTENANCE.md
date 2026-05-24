@@ -96,7 +96,7 @@ The JSON file is written at the same time as the markdown report, in the same co
   "processImprovements": [
     "[self-critique] What is not working in my maintenance process? What am I ignoring?",
     "[proposal] Concrete change proposal with rationale",
-    "[blocked] Things I cannot fix myself — need base-brain change or admin input"
+    "[blocked] Things I cannot fix myself \u2014 need base-brain change or admin input"
   ],
   "pendingIssues": [
     {
@@ -112,7 +112,9 @@ The JSON file is written at the same time as the markdown report, in the same co
     "nonEmpty": false,
     "itemCount": 0
   },
-  "brainCommitSha": "abc123def456789..."
+  "brainCommitSha": "abc123def456789...",
+  "memPromotions": "[{\"tag\": \"[MEM-3] Vest liquidation threshold\", \"destination\": \"memory/semantic/vest-liquidation.md\", \"action\": \"ADD\"}, {\"tag\": \"[REMEMBER] Always check open positions before EOD\", \"destination\": \"memory/core/patterns.md\", \"action\": \"UPDATE\"}]",
+  "gitHistoryAudit": "{\"regularSessionFiles\": [\"memory/semantic/stepforge.md\", \"memory/TODAY.md\"], \"summaryMdTouchedOutsideMaintenance\": false}"
 }
 ```
 
@@ -131,6 +133,8 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `pendingIssues` | `object[]` | Issues reported by users for creation on GitHub. Each object: `repo` (target repository), `title`, `context` (user's description), `reportedBy` (who reported), `date`. Empty array or omitted if none. See Pending Issues section below. |
 | `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
+| `memPromotions` | `string` | Structured list of [REMEMBER] and [MEM-NNN] tag promotions performed during consolidation, each entry containing: tag text, destination file, and action taken (ADD/UPDATE/NOOP) |
+| `gitHistoryAudit` | `string` | Audit of git commits between the last consolidation and now, listing which files were modified in regular-session commits (non-maintenance). Needed to detect if SUMMARY.md was touched outside of maintenance cycles. |
 
 **Rules:**
 - The `brainCommitSha` MUST be obtained by running `git rev-parse HEAD` in the brain repo.
