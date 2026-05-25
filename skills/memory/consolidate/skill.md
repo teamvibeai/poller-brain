@@ -26,6 +26,8 @@ Before processing, archive `memory/TODAY.md` to the daily/ directory:
 1. Read `memory/TODAY.md` — extract the date header(s) (format: `# YYYY-MM-DD`)
 2. For each date section in TODAY.md:
    - Append its content **verbatim** to `memory/daily/YYYY-MM-DD.md` (create if needed). Copy every bullet point and line exactly as written — do NOT summarize, truncate, rephrase, or condense entries. The daily archive must be a byte-for-byte copy of the original content.
+   - **⚠️ Multiple date sections → multiple files (required).** If TODAY.md contains sections `# 2026-05-15`, `# 2026-05-16`, `# 2026-05-17`, you MUST create three separate files: `daily/2026-05-15.md`, `daily/2026-05-16.md`, `daily/2026-05-17.md`. Do NOT archive all sections into a single file — that silently fails `daily-log-weekly-coverage` because only the first date gets a log file while all other session days are invisible to the evaluator.
+   - If TODAY.md has entries but no date header at all, assign them to today's date and archive to `memory/daily/<today>.md`.
 3. Reset `memory/TODAY.md` with today's date header and an immediate consolidation log entry:
    ```
    # YYYY-MM-DD
