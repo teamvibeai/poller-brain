@@ -266,14 +266,7 @@ For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older 
 
 **Recent-log retention (non-negotiable):** NEVER delete `memory/daily/<today>.md` or `memory/daily/<yesterday>.md`, regardless of whether their contents have been promoted. Same-day and next-day sessions rely on these files to recover context. Promotion is not a reason to delete; deletion is only for files dated 30+ days ago.
 
-### 8. Update Timestamp
-
-Write the current date to `memory/.last_consolidation`:
-```
-YYYY-MM-DD
-```
-
-### 8b. Heartbeat Sweep & Self-Report
+### 8. Heartbeat Sweep & Self-Report
 
 Heartbeat is being deprecated (`teamvibeai/teamvibe.ai#102`). Channel brain repos are private and live in customer GH orgs — the platform cannot inspect them. Each brain MUST self-report `HEARTBEAT.md` state so the eval pipeline can track migration progress.
 
