@@ -45,6 +45,8 @@ Look at the last 1–2 maintenance cycles (consolidation reports, prior reflecti
 - *Gap-only (not enough):* "Core memory lacks project X context."
 - *Gap + observed consequence (the bar):* "Core memory lacks project X context, which caused 3 duplicate pattern entries in last week's consolidations."
 
+**Verification gate — required before logging any gap in `observations`:** Open the last 1–2 consolidation reports or daily logs and confirm you can finish this sentence with a named fact: "…which caused [specific outcome] in [recent cycle/timeframe]." If you cannot — the gap has not yet produced an observed consequence — route it to `processImprovements` as `[proposal]` instead. Vague future-risk language ("this may affect quality", "could cause issues") does NOT qualify as a consequence.
+
 Candidate gap classes to scan:
 - Frequently discussed topics with no semantic memory entry
 - Team members mentioned often but with no profile in semantic/
