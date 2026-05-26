@@ -366,6 +366,8 @@ When you need context beyond core/ and daily logs:
 
 Structure:
 ```markdown
+**Last consolidated:** YYYY-MM-DD HH:MM UTC
+
 ## How this memory works
 - This file (SUMMARY.md) and TODAY.md are `@`-imported into every session — they are always in your context
 - All other memory files (core/, semantic/, episodic/, procedural/) must be actively read via tools

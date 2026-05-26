@@ -238,6 +238,8 @@ If `memory/semantic/` doesn't exist or is empty, skip this step and set `selfAss
 
 **Always regenerate `memory/SUMMARY.md` on every consolidation run — this step is non-negotiable, even if no facts were promoted in steps 2–4.** A lightweight consolidation with zero promotions must still regenerate SUMMARY.md to ensure it reflects the current state of all memory tiers.
 
+**Mandatory timestamp:** The first line of SUMMARY.md (before all sections) MUST be updated to `**Last consolidated:** YYYY-MM-DD HH:MM UTC` with the current date and time. This timestamp guarantees the file always differs from its previous version — eliminating the silent-skip risk when memory content is unchanged. Even on a zero-promotion run, the timestamp must be freshened. A SUMMARY.md with a stale "Last consolidated" line from a prior run means Step 6 did not execute.
+
 Read all `memory/core/*.md`, scan `memory/semantic/`, `memory/episodic/`, `memory/procedural/` for file listing, and compile into the SUMMARY.md format defined in the memory skill. Target ~100-150 lines.
 
 Key sections:
