@@ -68,39 +68,65 @@ Returns file content as text.
 
 ## Formatting
 
-Use Slack markdown in messages:
+For plain text in the `text` field, Slack uses a custom markdown dialect:
 - `*bold*`, `_italic_`, `~strikethrough~`
 - `` `inline code` ``, ` ```code block``` `
 - `>` for blockquotes
 - `<@U123>` for user mentions
 
+For richer content (GFM tables, headers, task lists, nested lists), use a `markdown` block — see *Message content blocks* below.
+
 ### Pitfalls
 
 - **Tilde (`~`) means strikethrough** — Slack treats `~text~` as ~~strikethrough~~. If you use `~` for "approximately" (e.g., `~$330`), Slack may match it with another `~` later and strike through everything in between. Use `≈` or `cca` instead. Backtick-wrapping (`` `~$330` ``) also works but changes the visual style.
-- **Markdown tables do NOT render** — pipe-delimited tables (`| col1 | col2 |\n|------|------|`) are displayed as literal plain text in Slack. Columns won't align, separators stay visible, the result is unreadable. Use Block Kit `table` block instead (see *Tabular data* below).
+- **Pipe-delimited tables in `text` do NOT render** — `| col1 | col2 |\n|------|------|` in the `text` field displays as literal plain text. Either move the content into a `markdown` block (which renders GFM tables visually) or use a `data_table` block for interactive datasets (see *Message content blocks*).
 
-## Tabular data
+## Message content blocks
 
-When presenting structured/tabular data, **default to Block Kit `table` block** (available since Aug 2025) passed via the `blocks` parameter of `send_message`. Markdown tables in `text` do not render (see *Pitfalls*).
+Pass an array of blocks via the `blocks` parameter of `send_message`. When `blocks` is present, the `text` field is auto-prepended as a section block by the MCP tool (so it stays visible AND serves as the notification fallback).
 
-**Block Kit `table` block** — rows of `rich_text` cells. Supports clickable links, column alignment, text wrapping, and bold/italic styling inside cells. Reference: [Slack Block Kit — table block](https://api.slack.com/reference/block-kit/blocks#table).
+Two blocks cover ~99% of agent use cases — prefer them by default:
 
-Minimal shape:
+### `markdown` block — default for rich text and small tables
+
+Use for any LLM-generated response with formatting (per Slack docs: *"when you expect a markdown response from an LLM that can get lost in translation rendering in Slack"*). Supports GFM: headers, bold/italic/strikethrough, ordered/unordered/task lists, code blocks with syntax highlighting, links, blockquotes, horizontal rules, and **GFM pipe tables** rendered as visually aligned tables. Cumulative 12,000-character limit per payload.
 
 ```json
 {
   "text": "Tickets summary",
   "blocks": [
     {
-      "type": "table",
+      "type": "markdown",
+      "text": "## Open tickets\n\n| ID | Status | Owner |\n|----|--------|-------|\n| [#123](https://example.com/123) | open | @alice |\n| [#124](https://example.com/124) | wip  | @bob   |\n\n_Updated 2 min ago._"
+    }
+  ]
+}
+```
+
+Reference: [markdown block](https://docs.slack.dev/reference/block-kit/blocks/markdown-block).
+
+### `data_table` block — large or interactive datasets
+
+Use when the user needs **sort, filter, or pagination** over structured data, or when the dataset is too large for a comfortable inline GFM table. Required fields: `caption` (string), `rows` (array). Optional: `page_size` (1–100, default 5), `row_header_column_index` (default 0). Cell types: `raw_text` (string), `raw_number` (numeric, enables numeric sort), `rich_text` (header cells only). Constraints: 2–101 rows, 1–20 columns, 10,000-character total across all cells.
+
+```json
+{
+  "text": "Last 30 days of incidents",
+  "blocks": [
+    {
+      "type": "data_table",
+      "caption": "Last 30 days of incidents",
+      "page_size": 10,
       "rows": [
         [
-          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "ID", "style": { "bold": true } }] }] },
-          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "Status", "style": { "bold": true } }] }] }
+          { "type": "raw_text", "text": "ID" },
+          { "type": "raw_text", "text": "Severity" },
+          { "type": "raw_text", "text": "Duration (min)" }
         ],
         [
-          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "link", "url": "https://example.com/123", "text": "#123" }] }] },
-          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "open" }] }] }
+          { "type": "raw_text", "text": "INC-742" },
+          { "type": "raw_text", "text": "P1" },
+          { "type": "raw_number", "value": 47 }
         ]
       ]
     }
@@ -108,6 +134,25 @@ Minimal shape:
 }
 ```
 
-The `text` field is auto-prepended as a section block by `send_message` (keeps the table preceded by a caption and works as a notification fallback).
+Reference: [data_table block](https://docs.slack.dev/reference/block-kit/blocks/data-table-block).
 
-**Large datasets / export scenarios** — use `upload_snippet` with `filetype: "csv"` (or `upload_file` for XLSX). Rough threshold: more than ~10 rows or ~5 columns is better as a downloadable snippet than an inline table — keeps the channel readable and lets the user open it in their spreadsheet tool of choice.
+### Other useful blocks (short reference)
+
+| Block | Purpose | Docs |
+|-------|---------|------|
+| `header` | Big bold heading (plain_text only, ≤150 chars) | [header](https://docs.slack.dev/reference/block-kit/blocks/header-block) |
+| `divider` | Horizontal rule separator | [divider](https://docs.slack.dev/reference/block-kit/blocks/divider-block) |
+| `section` | Text + optional accessory (button, image, select) | [section](https://docs.slack.dev/reference/block-kit/blocks/section-block) |
+| `rich_text` | Hand-built rich text (preformatted, lists, quotes) — usually `markdown` block is simpler | [rich_text](https://docs.slack.dev/reference/block-kit/blocks/rich-text-block) |
+| `actions` | Row of interactive elements (buttons, selects, datepickers) | [actions](https://docs.slack.dev/reference/block-kit/blocks/actions-block) |
+| `context` | Small supplementary text + thumbnails (timestamps, footers) | [context](https://docs.slack.dev/reference/block-kit/blocks/context-block) |
+| `image` | Inline image with optional title | [image](https://docs.slack.dev/reference/block-kit/blocks/image-block) |
+| `input` | Form field (modals only) | [input](https://docs.slack.dev/reference/block-kit/blocks/input-block) |
+| `file` | Render an uploaded file inline | [file](https://docs.slack.dev/reference/block-kit/blocks/file-block) |
+| `video` | Embedded video player | [video](https://docs.slack.dev/reference/block-kit/blocks/video-block) |
+
+Full catalog of 19 block types: [Block Kit — blocks reference](https://docs.slack.dev/reference/block-kit/blocks).
+
+### Large datasets / export scenarios
+
+For exports or datasets that don't fit interactive constraints (≥101 rows, ≥20 columns, ≥10k chars), use `upload_snippet` with `filetype: "csv"` or `upload_file` for XLSX. Keeps the channel readable and lets the user open it in their spreadsheet tool.
