@@ -77,3 +77,37 @@ Use Slack markdown in messages:
 ### Pitfalls
 
 - **Tilde (`~`) means strikethrough** — Slack treats `~text~` as ~~strikethrough~~. If you use `~` for "approximately" (e.g., `~$330`), Slack may match it with another `~` later and strike through everything in between. Use `≈` or `cca` instead. Backtick-wrapping (`` `~$330` ``) also works but changes the visual style.
+- **Markdown tables do NOT render** — pipe-delimited tables (`| col1 | col2 |\n|------|------|`) are displayed as literal plain text in Slack. Columns won't align, separators stay visible, the result is unreadable. Use Block Kit `table` block instead (see *Tabular data* below).
+
+## Tabular data
+
+When presenting structured/tabular data, **default to Block Kit `table` block** (available since Aug 2025) passed via the `blocks` parameter of `send_message`. Markdown tables in `text` do not render (see *Pitfalls*).
+
+**Block Kit `table` block** — rows of `rich_text` cells. Supports clickable links, column alignment, text wrapping, and bold/italic styling inside cells. Reference: [Slack Block Kit — table block](https://api.slack.com/reference/block-kit/blocks#table).
+
+Minimal shape:
+
+```json
+{
+  "text": "Tickets summary",
+  "blocks": [
+    {
+      "type": "table",
+      "rows": [
+        [
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "ID", "style": { "bold": true } }] }] },
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "Status", "style": { "bold": true } }] }] }
+        ],
+        [
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "link", "url": "https://example.com/123", "text": "#123" }] }] },
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "open" }] }] }
+        ]
+      ]
+    }
+  ]
+}
+```
+
+The `text` field is auto-prepended as a section block by `send_message` (keeps the table preceded by a caption and works as a notification fallback).
+
+**Large datasets / export scenarios** — use `upload_snippet` with `filetype: "csv"` (or `upload_file` for XLSX). Rough threshold: more than ~10 rows or ~5 columns is better as a downloadable snippet than an inline table — keeps the channel readable and lets the user open it in their spreadsheet tool of choice.
