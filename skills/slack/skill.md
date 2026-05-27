@@ -107,7 +107,14 @@ Reference: [markdown block](https://docs.slack.dev/reference/block-kit/blocks/ma
 
 ### `data_table` block — large or interactive datasets
 
-Use when the user needs **sort, filter, or pagination** over structured data, or when the dataset is too large for a comfortable inline GFM table. Required fields: `caption` (string), `rows` (array). Optional: `page_size` (1–100, default 5), `row_header_column_index` (default 0). Cell types: `raw_text` (string), `raw_number` (numeric, enables numeric sort), `rich_text` (header cells only). Constraints: 2–101 rows, 1–20 columns, 10,000-character total across all cells.
+Use when the user needs **sort, filter, or pagination** over structured data, or when the dataset is too large for a comfortable inline GFM table. Required fields: `caption` (string), `rows` (array). Optional: `page_size` (1–100, default 5), `row_header_column_index` (default 0).
+
+**Cell types:**
+- `raw_text` — fields: `type`, `text` (string).
+- `raw_number` — fields: `type`, `value` (number, used for numeric sort), `text` (string, the displayed label). **Both `value` and `text` are required** — sending `raw_number` with only one is rejected by Slack as `invalid_blocks` (verified empirically against `chat.postMessage` 2026-05-27).
+- `rich_text` — header cells only; standard rich_text block structure (sections, lists, links, mentions).
+
+Constraints: 2–101 rows, 1–20 columns, 10,000-character total across all cells.
 
 ```json
 {
@@ -126,7 +133,7 @@ Use when the user needs **sort, filter, or pagination** over structured data, or
         [
           { "type": "raw_text", "text": "INC-742" },
           { "type": "raw_text", "text": "P1" },
-          { "type": "raw_number", "value": 47 }
+          { "type": "raw_number", "value": 47, "text": "47" }
         ]
       ]
     }
