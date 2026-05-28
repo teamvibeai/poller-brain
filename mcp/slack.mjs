@@ -506,6 +506,8 @@ async function handleTool(name, args) {
         text: m.text || '',
         ts: m.ts,
         is_bot: Boolean(m.bot_id),
+        ...(m.blocks?.length && { blocks: m.blocks }),
+        ...(m.attachments?.length && { attachments: m.attachments }),
         ...(m.files?.length && {
           files: m.files.map((f) => ({
             name: f.name,
@@ -557,6 +559,16 @@ async function handleTool(name, args) {
         is_bot: Boolean(m.bot_id),
         thread_ts: m.thread_ts,
         reply_count: m.reply_count,
+        ...(m.blocks?.length && { blocks: m.blocks }),
+        ...(m.attachments?.length && { attachments: m.attachments }),
+        ...(m.files?.length && {
+          files: m.files.map((f) => ({
+            name: f.name,
+            mimetype: f.mimetype,
+            url: f.url_private,
+            size: f.size,
+          })),
+        }),
       }))
       return { ok: true, messages }
     }
