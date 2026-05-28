@@ -35,13 +35,13 @@ Gracefully handles `no_reaction`.
 - `channel`: Override channel
 - `thread_ts`: Override thread
 
-Returns messages with `user`, `text`, `ts`, `is_bot`, and `files` (if any).
+Returns messages with `user`, `text`, `ts`, `is_bot`, `blocks` (raw Block Kit array if present), `attachments` (legacy attachments if present), `files` (metadata + `url`; fetch content via `download_file`).
 
 ### read_channel — Read channel history
 - `limit`: Max messages (default: 20)
 - `channel`: Override channel
 
-Returns messages with `user`, `text`, `ts`, `is_bot`, `thread_ts`, `reply_count`.
+Returns messages with `user`, `text`, `ts`, `is_bot`, `thread_ts`, `reply_count`, `blocks`, `attachments`, `files` (same shape as `read_thread`).
 
 ### upload_snippet — Upload code/text snippet
 - `title` (required): Snippet title
