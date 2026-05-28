@@ -45,8 +45,9 @@ If `memory/TODAY.md` doesn't exist, do NOT skip this step. Instead: create `memo
 **Step 0 checkpoint (required before proceeding):** Pause here and explicitly verify:
 - [ ] `memory/TODAY.md` is in your working `filesChanged` list
 - [ ] `memory/daily/YYYY-MM-DD.md` (today's date) is in `filesChanged` (unless TODAY.md did not exist prior to this run)
+- [ ] **Multi-date verification (required when TODAY.md had N > 1 date sections):** List every date section found in the original TODAY.md and confirm a separate daily file was written for each. Write this explicitly: `"Archived: 2026-05-15 → daily/2026-05-15.md ✓, 2026-05-16 → daily/2026-05-16.md ✓, 2026-05-17 → daily/2026-05-17.md ✓"`. If any section was missed (collapsed into another file), create the missing file now before proceeding. Skipping this produces a gap day that silently fails `daily-log-weekly-coverage` — the evaluator counts commits on that date as a session day with no log.
 
-If either entry is missing, add it now. Do NOT advance to Step 1 with these entries missing — the `today-md-archived` eval criterion checks `filesChanged` and will fail if TODAY.md is absent, even when the archival was performed correctly.
+If any entry is missing, add it now. Do NOT advance to Step 1 with these entries missing — the `today-md-archived` eval criterion checks `filesChanged` and will fail if TODAY.md is absent, even when the archival was performed correctly.
 
 ### 1. Scan Daily Logs
 
