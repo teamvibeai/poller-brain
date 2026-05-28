@@ -100,27 +100,51 @@ async function getChannelKind(channel) {
   }
 }
 
+// Resolve own bot identity via auth.test. The TEAMVIBE_BOT_ID env var holds
+// the bot API id (Bxxx prefix) — useful for platform API calls but NOT for
+// matching against `m.user` (Uxxx prefix) in Slack message payloads. We need
+// both: user_id matches m.user, bot_id matches m.bot_id. Cached for session
+// lifetime (auth.test result doesn't change mid-session).
+let _selfIdsCache = null
+async function resolveSelfIds() {
+  if (_selfIdsCache) return _selfIdsCache
+  try {
+    const result = await slackApi('auth.test', {})
+    _selfIdsCache = {
+      user_id: result.user_id || null, // Uxxx — matches m.user
+      bot_id: result.bot_id || BOT_ID || null, // Bxxx — matches m.bot_id
+    }
+  } catch {
+    _selfIdsCache = { user_id: null, bot_id: BOT_ID || null }
+  }
+  return _selfIdsCache
+}
+
 // True if message m is an eligible "non-self speaker" for the tag warning:
 // - is a regular user message or a bot_message (not channel_join, file_share comment, etc.)
-// - is not us
+// - is not us (checked against both user_id and bot_id — apps use either field)
+// - is not the just-sent message (excludeTs guard against race)
 // - is not USLACKBOT or other system bots
 // - if it's a bot, either AGENT_BOT_IDS is empty (degraded mode) or this user is in it
-function isEligibleSpeaker(m) {
+function isEligibleSpeaker(m, self, excludeTs) {
   if (!m || !m.user) return false
   if (m.subtype && m.subtype !== 'bot_message') return false
-  if (m.user === BOT_ID) return false
+  if (self && self.user_id && m.user === self.user_id) return false
+  if (self && self.bot_id && m.bot_id && m.bot_id === self.bot_id) return false
+  if (excludeTs && m.ts === excludeTs) return false
   if (SYSTEM_BOT_IDS.has(m.user)) return false
   if (m.bot_id && AGENT_BOT_IDS.size > 0 && !AGENT_BOT_IDS.has(m.user)) return false
   return true
 }
 
-async function getLastEligibleSpeaker(channel, threadTs) {
+async function getLastEligibleSpeaker(channel, threadTs, excludeTs = null) {
   if (!channel || !threadTs) return null
+  const self = await resolveSelfIds()
   try {
     const result = await slackApi('conversations.replies', { channel, ts: threadTs, limit: 50 })
     const msgs = result.messages || []
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (isEligibleSpeaker(msgs[i])) return msgs[i].user
+      if (isEligibleSpeaker(msgs[i], self, excludeTs)) return msgs[i].user
     }
     return null
   } catch {
@@ -131,11 +155,14 @@ async function getLastEligibleSpeaker(channel, threadTs) {
 // Returns a warning hint object if outgoing reply in a multi-party thread is
 // missing the recipient tag, or null. Gate: only mpim/channel/group (no 1:1 DM).
 // Deterministic — no time threshold, no LLM. See teamvibeai/teamvibe.ai#108.
-async function computeMissingTagWarning(channel, threadTs, text) {
+// justSentTs (optional) lets the caller pass the ts of the message we just
+// posted, so we exclude it from the lookback — eliminating the "self appears
+// as last speaker" race when warning eval runs after chat.postMessage.
+async function computeMissingTagWarning(channel, threadTs, text, justSentTs = null) {
   if (!channel || !threadTs) return null
   const kind = await getChannelKind(channel)
   if (kind === 'im') return null
-  const lastSpeaker = await getLastEligibleSpeaker(channel, threadTs)
+  const lastSpeaker = await getLastEligibleSpeaker(channel, threadTs, justSentTs)
   if (!lastSpeaker) return null
   if (text && text.includes(`<@${lastSpeaker}>`)) return null
   return {
@@ -459,8 +486,10 @@ async function handleTool(name, args) {
 
       // Best-effort warning: did we forget to tag the last non-self speaker?
       // Computed after send so warning never delays delivery; agent can
-      // follow up with a tagged message if needed. See teamvibeai/teamvibe.ai#108.
-      const warning = await computeMissingTagWarning(channel, thread_ts, args.text)
+      // follow up with a tagged message if needed. Pass result.ts so the
+      // lookback skips the just-sent message (self) — eliminates the race
+      // where self appears as last_speaker. See teamvibeai/teamvibe.ai#108.
+      const warning = await computeMissingTagWarning(channel, thread_ts, args.text, result.ts)
       const response = { ok: true, ts: result.ts }
       if (warning) response.warnings = [warning]
       return response
@@ -525,6 +554,7 @@ async function handleTool(name, args) {
       const ts = args.thread_ts || DEFAULT_THREAD_TS
       if (!channel) throw new Error('channel required')
       if (!ts) throw new Error('thread_ts required')
+      const self = await resolveSelfIds()
       const result = await slackApi('conversations.replies', { channel, ts, limit: 200 })
       const msgs = result.messages || []
       const seen = new Set()
@@ -536,7 +566,9 @@ async function handleTool(name, args) {
         participants.push({
           user_id: m.user,
           is_bot: Boolean(m.bot_id),
-          is_self: m.user === BOT_ID,
+          is_self:
+            (self.user_id && m.user === self.user_id) ||
+            (self.bot_id && m.bot_id && m.bot_id === self.bot_id),
         })
       }
       await Promise.all(
