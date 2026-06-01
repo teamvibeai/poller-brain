@@ -60,7 +60,7 @@ Rules:
 - **Minimum entry rule:** Every session that *performs a meaningful action* must create at least one log entry. This includes interactive sessions, maintenance that modifies files, heartbeats that execute tasks, triage runs, and health checks. Write the entry **before** any action that could fail or time out — if the session crashes, the log still has value.
   - **Exception — no-op heartbeats:** If a heartbeat session checks tasks and finds nothing to do (no pending tasks, no maintenance due, no actions taken), do **NOT** log anything. Silent exit is correct. Only log heartbeats that actually performed work (e.g., ran consolidation, completed a task, triggered a workflow).
   - **What to log when something happened:** `- 09:00 — heartbeat: ran consolidation, archived 3 daily logs` or `- 09:00 — WF triage ran, 2 failures (created WF-123)`. Keep it to what was *done*, not what was *skipped*.
-- **Append continuously, not at the end.** If the session ends abruptly (crash, context compaction, timeout), the log still has value because you wrote as you went.
+- **Append continuously, not at the end.** For sessions with multiple phases (maintenance, consolidation, multi-step tasks), write a log entry at the START of the session and again after each major phase completes — aim for 2+ entries with distinct timestamps. A single bullet added at session end fails the crash-resilience goal even if it is well-written.
 - **Don't batch-decide "what was important."** If you're unsure whether an entry is worth it, write it — removing noise is cheap during consolidation, reconstructing lost context is not.
 - **One line per entry is fine.** Brief is better than nothing.
 - Create the file if it doesn't exist. Start with a date header: `# YYYY-MM-DD`
