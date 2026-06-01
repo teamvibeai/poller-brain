@@ -54,6 +54,11 @@ Candidate gap classes to scan:
 
 If a gap exists but has not yet produced any observed consequence, do not log it as an observation. Move it to `processImprovements` as `[proposal] would like to capture X` so future cycles know it is on the radar without inflating the gap list.
 
+**Required format for any gap logged in `observations`:**
+`"[Tier/file] [gap language], which caused [specific outcome] in [cycle] on [YYYY-MM-DD]."`
+Example: `"No procedural entry exists for post-deploy verification, which caused the 2026-05-15 deploy to miss the smoke-test step."`
+If you cannot supply a specific named incident with a date, do NOT include it in `observations` — route it to `processImprovements` as `[proposal]` instead, even if the future risk feels certain. "Lacks X which may affect quality" and "could cause Y" are not consequences.
+
 **Action:** Create placeholder files noting the gap for future capture:
 ```markdown
 # [Topic]
