@@ -105,11 +105,19 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
 
 **JSON:** `reports/YYYY-MM-DD-memory-reflection.json` — populate every field:
 
-- `observations`: List specific findings from this reflection. Each entry should name a concrete memory strength, OR pair a memory gap with the *operational consequence it has already produced* in recent maintenance cycles. Gap-only observations ("X is missing", "Y is thin") do NOT qualify — they go to `processImprovements` as `[proposal]` instead. Examples:
-  - "semantic/team-members.md has complete profiles for all 4 active members" — concrete strength
-  - "memory/core/LEARNINGS.md has grown to 80 lines and the last 2 promotions appended new bullets rather than merging into the existing entry, creating 3 near-duplicate rules" — gap + observed consequence
-  - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence
-  - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence
+- `observations`: List specific findings from this reflection. Each entry should name a concrete memory strength, OR pair a memory gap with the *operational consequence it has already produced* in recent maintenance cycles. Gap-only observations ("X is missing", "Y is thin") do NOT qualify — they go to `processImprovements` as `[proposal]` instead.
+
+  **Pre-write check (required before finalizing this array):** For each draft observation, scan for gap-class words: "lacks", "missing", "thin", "no entry", "no file", "absent", "gap", "empty". For each match, verify the entry ends with ", which caused [specific outcome] in [cycle/date]." If it does NOT:
+    1. Check the last 1–2 consolidation reports or daily logs for a named incident tied to this gap (a specific file, a duplicate count, a repeated error with a date).
+    2. If found, append the consequence: "…, which caused [outcome] on [YYYY-MM-DD]."
+    3. If not found, **remove the entry from `observations` and add it to `processImprovements` as `[proposal]`** — do NOT include gap-only language in observations.
+
+  Examples:
+  - "semantic/team-members.md has complete profiles for all 4 active members" — concrete strength ✅
+  - "memory/core/LEARNINGS.md has grown to 80 lines and the last 2 promotions appended new bullets rather than merging into the existing entry, creating 3 near-duplicate rules" — gap + observed consequence ✅
+  - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence ✅
+  - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence ✅
+  - "Semantic memory lacks a project-X entry" — gap only, NO consequence → move to processImprovements as [proposal] ❌
   - Vague impact language like "this may affect quality" does NOT qualify — the consequence must be specific and already observed.
 - `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
   - "Split semantic/projects.md into per-project files — currently 120 lines"
