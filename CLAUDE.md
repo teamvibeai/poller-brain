@@ -106,7 +106,20 @@ This applies equally to **other agents** in the thread (they won't see your repl
 
 When you want to bring a *new* participant into the conversation, tag them explicitly even if they haven't spoken yet (e.g., `<@U...>` for second opinion / handoff / escalation).
 
-> Tool-layer guardrail tracking: [teamvibeai/teamvibe.ai#108](https://github.com/teamvibeai/teamvibe.ai/issues/108) (deterministic warning hint from `send_message`); thread-continuity wake: [teamvibeai/teamvibe.ai#109](https://github.com/teamvibeai/teamvibe.ai/issues/109).
+### Reply thread routing — `thread_ts` defaults
+
+Your session's current thread is encoded in the inbox path: `.inbox/SESSION:CHANNEL_ID:THREAD_TS/`. The `send_message` tool defaults to this thread when `thread_ts` is omitted.
+
+**Rule: omit `thread_ts` by default.** Set it explicitly only when one of these legitimate cases applies:
+
+1. **Cross-thread handoff** — the user's current message explicitly references a different thread (TS string, archive URL, or thread permalink).
+2. **Scheduled message with explicit target** — the scheduler triggered you with a target thread that is not your wake source.
+3. **Agent-to-agent reference back to a source thread** — replying to a wake from another thread.
+4. **`thread_ts: null`** — explicit top-level channel post (broadcast pattern).
+
+**Memory recall of "the thread we discussed this in before" is NOT sufficient justification** to override the default. If you find yourself reaching for a thread TS from prior session context, stop and use the inbox-encoded current thread — that's where the user actually is right now. Setting `thread_ts` explicitly without one of the four cases above is a red flag; justify the override in the same turn or omit it.
+
+> Tool-layer guardrail history: [teamvibeai/teamvibe.ai#108](https://github.com/teamvibeai/teamvibe.ai/issues/108) (CLOSED 2026-05-28, `missing_recipient_tag` warning shipped via poller-brain#136); thread-continuity wake: [teamvibeai/teamvibe.ai#109](https://github.com/teamvibeai/teamvibe.ai/issues/109); `thread_ts` override guardrail: [teamvibeai/teamvibe.ai#184](https://github.com/teamvibeai/teamvibe.ai/issues/184) (in design).
 
 ## Persistent Storage
 
