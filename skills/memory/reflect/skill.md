@@ -114,7 +114,7 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
 - `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
   - "Split semantic/projects.md into per-project files — currently 120 lines"
   - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
-- `selfAssessment`: Include at minimum `assess-memory-quality`, `actionable-recommendations`, `no-data-loss`.
+- `selfAssessment`: Use the actual reflection eval criterion IDs: `concrete-improvement-proposal`, `previous-recommendations-reviewed`, `gap-impact-analysis`, `verifiable-recommendations`, `deletion-with-preservation-evidence`. **Pre-submit gate for `gap-impact-analysis`:** scan every planned `observations` entry for gap-class language ('lacks', 'missing', 'thin', 'no entry for', 'gap in coverage'). Each such entry MUST name a specific incident + date as the consequence. Any gap entry without a named incident must be moved to `processImprovements` as `[proposal]` before writing the JSON. Set `gap-impact-analysis: true` only if at least one `observations` entry remains that pairs gap language with a specific named consequence.
 - `processImprovements`: Required for reflection reports. Include at least one entry per prefix type (`[self-critique]`, `[proposal]`, `[blocked]`). Reference prior recommendations that went unacted on. Examples:
   - `[self-critique] Reflection is running 45 days late — monthly schedule not enforced by any heartbeat check`
   - `[proposal] Add a 30-day check for last reflection date to HEARTBEAT.md so it triggers automatically`
