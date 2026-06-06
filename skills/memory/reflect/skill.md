@@ -44,8 +44,11 @@ Look at the last 1–2 maintenance cycles (consolidation reports, prior reflecti
 
 - *Gap-only (not enough):* "Core memory lacks project X context."
 - *Gap + observed consequence (the bar):* "Core memory lacks project X context, which caused 3 duplicate pattern entries in last week's consolidations."
+- *Recurring deferral qualifies:* If the same recommendation appears deferred across 2+ prior reflections (visible from Step 0), the repeated deferral IS the observable consequence — e.g., "No procedural doc for X, which caused the recommendation to be deferred again for the 3rd consecutive cycle (reflections 2026-05-18, -23, -26)."
 
-**Verification gate — required before logging any gap in `observations`:** Open the last 1–2 consolidation reports or daily logs and confirm you can finish this sentence with a named fact: "…which caused [specific outcome] in [recent cycle/timeframe]." If you cannot — the gap has not yet produced an observed consequence — route it to `processImprovements` as `[proposal]` instead. Vague future-risk language ("this may affect quality", "could cause issues") does NOT qualify as a consequence.
+**Warning:** A gap observation without a specific consequence is worse than no gap observation — it causes this criterion to fail rather than being excluded. Only use gap-class language in `observations` when you can name the concrete consequence inline.
+
+**Verification gate — required before logging any gap in `observations`:** Open the last 1–2 consolidation reports or daily logs and confirm you can finish this sentence with a named fact: "…which caused [specific outcome] in [recent cycle/timeframe]." Recurring deferrals (same recommendation carried forward 2+ cycles) always satisfy this gate. If you cannot find any consequence — route to `processImprovements` as `[proposal]` instead. Vague future-risk language ("this may affect quality", "could cause issues") does NOT qualify as a consequence.
 
 Candidate gap classes to scan:
 - Frequently discussed topics with no semantic memory entry
