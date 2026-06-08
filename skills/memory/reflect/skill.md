@@ -111,6 +111,11 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
   - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence
   - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence
   - Vague impact language like "this may affect quality" does NOT qualify — the consequence must be specific and already observed.
+
+  **Pre-write self-check — required before finalizing observations:** For every planned observation entry, ask: does it contain gap-class language ('lacks', 'missing', 'thin', 'absent', 'no entry for', 'gap in coverage')? If YES, it must also explicitly state "which caused [specific outcome] in [cycle/timeframe]" with a named incident or date. If you cannot complete that phrase with a specific fact from recent maintenance history, the entry MUST be moved to `processImprovements` as `[proposal]` — do not include it in `observations`. This check prevents gap-only entries from landing in `observations` and failing the `gap-impact-analysis` eval criterion.
+
+  **Tip for maintenance-only periods:** Consequences don't require user sessions. Repeated deferred recommendations, inconsistent report patterns, or degraded report quality are valid consequences. E.g.: "No procedural file exists for the weekly-review workflow, which caused the last 4 reflections to re-derive the same approach from scratch rather than referencing a stable procedure."
+
 - `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
   - "Split semantic/projects.md into per-project files — currently 120 lines"
   - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
