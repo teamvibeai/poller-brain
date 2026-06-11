@@ -81,8 +81,8 @@ function main(): void {
   const key = getNextKey();
   const today = getToday();
 
-  // Short description for registry (first 60 chars)
-  const desc = content.length > 60 ? content.slice(0, 57) + "..." : content;
+  // Escape pipes (markdown table separator) and collapse newlines; keep full content per #150
+  const desc = content.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
   // Append to TODAY.md
   fs.appendFileSync(TODAY_PATH, `- [MEM-${key}] ${content}\n`);
