@@ -112,6 +112,12 @@ The JSON file is written at the same time as the markdown report, in the same co
     "nonEmpty": false,
     "itemCount": 0
   },
+  "reflectionStatus": {
+    "lastReflectionDate": "2026-05-25",
+    "daysSinceReflection": 18,
+    "overdueThresholdDays": 14,
+    "isOverdue": true
+  },
   "brainCommitSha": "abc123def456789..."
 }
 ```
@@ -130,6 +136,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. **One sentence per item after the prefix. Cap at 5 items.** |
 | `pendingIssues` | `object[]` | Issues reported by users for creation on GitHub. Each object: `repo` (target repository), `title`, `context` (user's description), `reportedBy` (who reported), `date`. Empty array or omitted if none. See Pending Issues section below. |
 | `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
+| `reflectionStatus` | `object` | Self-reported reflection cadence at consolidation time. Computed from the final on-disk state of `memory/episodic/reflection-*.md` AFTER any earlier-in-session reflection write, so the same-session reflection-then-consolidation case naturally produces `daysSinceReflection = 0` and passes the criterion without a bypass clause. `lastReflectionDate` (string `YYYY-MM-DD` \| null): filename date of the most recent valid `memory/episodic/reflection-YYYY-MM-DD.md`, or `null` if none. `daysSinceReflection` (int \| null): whole UTC days between `lastReflectionDate` and the consolidation date, or `null`. `overdueThresholdDays` (int): hardcoded `14` — reflection cadence (twice-weekly = 14d) plus headroom. `isOverdue` (bool \| null): `true` when `daysSinceReflection > overdueThresholdDays`, `false` when within threshold (including `daysSinceReflection = 0` from same-session reflection), `null` only when no prior reflection exists. Used by the `reflection-overdue` consolidation criterion and fleet-level reflection-lag aggregation. Origin: `teamvibeai/poller-brain#157`. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
@@ -158,6 +165,7 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `summary-md-regenerated` | Was memory/SUMMARY.md regenerated during consolidation? | memory/SUMMARY.md appears in filesChanged, indicating the consolidated long-term memory index was updated. If the brain has not yet migrated to the SUMMARY.md workflow (no memory/SUMMARY.md exists), this criterion passes — the migration will create it. |
 | `today-md-archived` | Was memory/TODAY.md archived and reset during consolidation? | memory/TODAY.md appears in filesChanged, indicating the daily working log was archived to memory/daily/ and reset for the new day. If the brain has not yet migrated to the TODAY.md workflow, this criterion passes. |
 | `at-imports-configured` | Are @memory/SUMMARY.md and @memory/TODAY.md imports configured in CLAUDE.md? | The consolidation report's Daily Log Compliance section or selfAssessment confirms that the channel brain CLAUDE.md contains both @memory/SUMMARY.md and @memory/TODAY.md references. If the brain has not yet migrated, this criterion passes. |
+| `reflection-overdue` | Is the brain within its reflection cadence at consolidation time? | `reflectionStatus.isOverdue == false` — last reflection within the hardcoded 14-day threshold. Same-session reflection-then-consolidation naturally produces `daysSinceReflection = 0` (computation runs over final on-disk state per `consolidate/skill.md §8b`), so it passes via the main condition rather than a bypass clause. Per-report applicability: if `reflectionStatus.isOverdue` is `null` (no prior reflection has ever been produced — `lastReflectionDate` is `null`), EXCLUDE the report from passCount and totalCount. Reflection cannot police its own cadence, so this lives in Consolidation Criteria. Threshold is hardcoded to `14` (twice-weekly cadence + grace); per-brain configuration is a follow-up. Origin: `teamvibeai/poller-brain#157`. |
 | `no-summary-manual-edit` | Was memory/SUMMARY.md left untouched during regular sessions? | Between consolidation runs, memory/SUMMARY.md was only modified by maintenance commits (consolidation/reflection). If any regular-session commit modified SUMMARY.md, this criterion fails. If no regular-session commits touched SUMMARY.md, pass. |
 | `session-capture-logged` | Were session capture writes to semantic/ logged in TODAY.md? | For every regular-session commit that created or modified a file in memory/semantic/, a corresponding log entry exists in memory/TODAY.md (or the archived daily log) mentioning the file or 'session capture'. If no semantic/ files were modified during regular sessions, pass automatically. |
 | `semantic-naming-convention` | Do new semantic/ files follow kebab-case naming convention? | All files created in memory/semantic/ since the last consolidation use kebab-case naming (lowercase, hyphens, no underscores or spaces, .md extension). Examples: stepforge.md, vest-liquidation.md. If no new semantic/ files were created, pass automatically. |
@@ -252,6 +260,7 @@ Users can ask you to report issues about the platform or base brain. When a user
 ## Twice Weekly
 
 - **Memory reflection**: Check `memory/episodic/reflection-*.md` for the last reflection date. If 3+ days old (or none exist), run the memory-reflect skill to assess memory quality. **Produce a report.**
+  - **Cross-skill ordering** (invocation contract — required by `consolidate/skill.md §8b`): When both reflection and consolidation are due in the same maintenance session, run **reflection BEFORE consolidation**. This makes the freshly-written `memory/episodic/reflection-YYYY-MM-DD.md` visible on disk by the time consolidation computes `reflectionStatus`, so `daysSinceReflection = 0` is captured in the consolidation JSON and the `reflection-overdue` criterion passes via the main condition. Running consolidation first would freeze a stale `reflectionStatus` in the report and false-fail the criterion on the very pass that just reflected. Reflection skill MUST NOT depend on consolidation having run first.
 
 ## Heartbeat → Scheduled Messages Migration
 

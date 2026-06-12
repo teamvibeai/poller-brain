@@ -299,6 +299,37 @@ Heartbeat is being deprecated (`teamvibeai/teamvibe.ai#102`). Channel brain repo
 
    Goal state: `present: false`. The eval pipeline aggregates this across all reports to know when platform-side heartbeat code can be removed (`teamvibe.ai#101`).
 
+### 8b. Reflection Cadence Self-Report
+
+Reflection runs on a 14-day cadence (twice-weekly scheduled message). Without a self-reported signal, structural underfiring is silent — a reflection scheduled for 14d ago that never fired leaves no trace until the next pass. Each consolidation pass MUST self-report when the most recent reflection happened so the eval pipeline can surface fleet-level reflection lag (`poller-brain#157`).
+
+**Compute from filename, not mtime.** `git clone` rewrites mtimes, so any mtime-based date is meaningless after a fresh checkout. The filename is authoritative.
+
+**Ordering invariant** (cross-skill, enforced by `MAINTENANCE.md` *Twice Weekly* section): when both reflection and consolidation are due in the same maintenance session, the agent MUST run **reflection BEFORE consolidation**. This step then snapshots the final on-disk state, so the freshly-written `memory/episodic/reflection-YYYY-MM-DD.md` produces `lastReflectionDate = today`, `daysSinceReflection = 0`, and the main condition passes naturally — no same-pass bypass clause is needed. Within this consolidation pass itself, this step runs late (after any tier promotions / archive operations that might write to `episodic/`) so the snapshot is genuinely final.
+
+1. **Find candidate reflection files** — list `memory/episodic/reflection-*.md` on disk *now* (final state, post any earlier-in-session reflection write).
+2. **Validate each filename's date token** against the strict regex `^reflection-(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\.md$`. This rejects out-of-range months/days BEFORE date construction. Files whose stem is `reflection-YYYY-MM-DD` but where the date is calendar-invalid (e.g. `reflection-2026-02-30.md`) MUST be skipped with a one-line stderr warning — do not let `Date(...)` / `date -j -f` silently normalize the invalid date to a real one (`2026-02-30` → `2026-03-02`).
+3. **Pick the max valid date** across the surviving filenames. That date is `lastReflectionDate`.
+4. **Compute `daysSinceReflection`** as the whole-day difference between the consolidation date (UTC) and `lastReflectionDate`. Use UTC midnight on both sides; do not use local time.
+5. **Set `overdueThresholdDays` to `14`** (hardcoded).
+6. **Set `isOverdue`:**
+   - If no valid `memory/episodic/reflection-*.md` exists → `lastReflectionDate: null`, `daysSinceReflection: null`, `isOverdue: null` (criterion excludes the report — brain has never reflected, nothing to police).
+   - Else if `daysSinceReflection > 14` → `isOverdue: true`.
+   - Else → `isOverdue: false` (in-cadence — includes the same-session-reflection case where `daysSinceReflection = 0`, which correctly counts as a healthy PASS, not an exclude).
+
+Populate the JSON report:
+
+```json
+"reflectionStatus": {
+  "lastReflectionDate": "2026-05-25",
+  "daysSinceReflection": 18,
+  "overdueThresholdDays": 14,
+  "isOverdue": true
+}
+```
+
+The eval pipeline aggregates `reflectionStatus.isOverdue` across the fleet to surface structural cadence drift, analogous to `daysSinceMaintenance`. Single-brain `isOverdue: true` is informational; cohort-level overdue ratios drive the alarm.
+
 ### 9. MEM Audit & Memory Metrics
 
 Run integrity checks on the MEM registry and collect memory size metrics.
