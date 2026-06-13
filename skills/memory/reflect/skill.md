@@ -15,7 +15,20 @@ Periodic self-assessment of memory quality. Run monthly.
 
 Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Check which recommendations from that report were acted on since then.
 
-**Action:** Note in this reflection which prior recommendations were implemented, which were ignored, and why. This feeds the `processImprovements` field.
+**Action (required — this step is mandatory, not optional):** For each recommendation from the prior reflection report, write one entry in `processImprovements` using this exact format:
+
+```
+[prev-rec] From YYYY-MM-DD reflection: '<recommendation text>' → STATUS: <implemented|partially-addressed|pending> — <one-sentence reason>
+```
+
+At minimum, document at least one prior recommendation this way. If no prior reflection report exists, add: `[prev-rec] No prior reflection report found — this is the first reflection run.`
+
+Example:
+```
+[prev-rec] From 2026-05-15 reflection: 'Split semantic/projects.md into per-project files' → STATUS: pending — no new projects landed this cycle so split was deferred.
+```
+
+This is the evidence the eval pipeline uses to verify `previous-recommendations-reviewed`. A generic self-critique entry does NOT satisfy this requirement — the entry must name a specific prior recommendation and its disposition.
 
 ### 1. Staleness Check
 
