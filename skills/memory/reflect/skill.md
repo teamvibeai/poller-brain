@@ -111,6 +111,7 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
   - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence
   - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence
   - Vague impact language like "this may affect quality" does NOT qualify — the consequence must be specific and already observed.
+  - **Write-time gate (required):** Before finalizing this field, scan each drafted observation for gap-class words (lacks, missing, thin, no entry for, gap in coverage, absent). For each such item, confirm you can complete: "…which caused [specific named outcome] on [YYYY-MM-DD]". If you cannot supply both a named outcome AND a date from the last 1–2 cycles, move that item to `processImprovements` as `[proposal]` right now — do not leave it in `observations`.
 - `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
   - "Split semantic/projects.md into per-project files — currently 120 lines"
   - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
