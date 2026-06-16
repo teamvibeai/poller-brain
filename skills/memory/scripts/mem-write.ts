@@ -26,10 +26,10 @@ const REGISTRY_HEADER = `# MEM Registry
 |-----|--------|---------|-----------|-------------|
 `;
 
-function scanMaxKey(filePath: string): number {
+function scanMaxKey(filePath: string, pattern: RegExp): number {
   if (!fs.existsSync(filePath)) return 0;
   const content = fs.readFileSync(filePath, "utf-8");
-  const matches = content.matchAll(/MEM-(\d+)/g);
+  const matches = content.matchAll(pattern);
   let max = 0;
   for (const m of matches) {
     const n = parseInt(m[1], 10);
@@ -39,8 +39,10 @@ function scanMaxKey(filePath: string): number {
 }
 
 function getNextKey(): number {
-  const fromRegistry = scanMaxKey(REGISTRY_PATH);
-  const fromToday = scanMaxKey(TODAY_PATH);
+  // REGISTRY rows are pipe-tabled (`| MEM-N | ACTIVE | ...`) and have no prose drift risk — full scan is safe and acts as defense-in-depth.
+  const fromRegistry = scanMaxKey(REGISTRY_PATH, /MEM-(\d+)/g);
+  // TODAY.md mixes canonical write rows with prose mentions (e.g. review summaries). Restrict to anchored canonical rows: `- [MEM-N] ...`. Permit whitespace or colon after `]` for forward-compat with format drift.
+  const fromToday = scanMaxKey(TODAY_PATH, /^- \[MEM-(\d+)\][\s:\]]/gm);
   return Math.max(fromRegistry, fromToday) + 1;
 }
 
