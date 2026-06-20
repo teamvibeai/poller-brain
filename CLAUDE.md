@@ -125,6 +125,60 @@ Your session's current thread is encoded in the inbox path: `.inbox/SESSION:CHAN
 
 If `$PERSISTENT_STORAGE_PATH` is set, you can use it for files that should persist across sessions (e.g., caches, downloaded tools). The `$PERSISTENT_STORAGE_PATH/bin` directory is in your PATH.
 
+## Secrets
+
+The platform provides a per-spawn secrets envelope auto-injected into your `process.env` before each session starts. Three scopes merge into one env map with **channel > workspace > poller** precedence — a name at a higher scope overrides the same name at lower ones.
+
+### Reading secrets
+
+Use `process.env` directly — no extra calls needed in the normal path:
+
+```bash
+$YOUR_API_KEY
+```
+
+To discover what's *registered* at the platform (names + scopes only, never values), use the Poller API list endpoints with your existing token:
+
+```bash
+# Replace SCOPE with: poller | workspace | channel
+curl -H "Authorization: Bearer $TEAMVIBE_POLLER_TOKEN" \
+  "$TEAMVIBE_API_URL/secrets/list?scope=workspace&scopeId=$TEAMVIBE_WORKSPACE_ID"
+
+# channel scope additionally requires channelId:
+curl -H "Authorization: Bearer $TEAMVIBE_POLLER_TOKEN" \
+  "$TEAMVIBE_API_URL/secrets/list?scope=channel&scopeId=$TEAMVIBE_WORKSPACE_ID&channelId=$TEAMVIBE_CHANNEL_ID"
+```
+
+Note: `process.env` may also carry values from the **poller's local `.env` file** (host-level config loaded at poller startup). If a name appears in env but not in any `/secrets/list` response, it's coming from that local file — not from the platform — and isn't manageable via the API.
+
+### Adding / updating secrets
+
+**Do not POST plaintext values through Slack chat or a curl-with-poller-token from a user-facing session.** Plaintext belongs nowhere in the conversation transcript.
+
+When a user wants to add or rotate a secret, route them to the platform UI, which masks the value input, enforces Owner-only RBAC, and clears the form on submit:
+
+- Workspace-scope: `/settings/secrets`
+- Channel-scope: `/channels/<channelId>` (Secrets section)
+- Poller-scope: `/pollers/<pollerId>` (Secrets section)
+
+A `secret` skill is on the roadmap — it'll open a Slack-anchored modal via HTTPS tunnel so the user can submit a value without leaving Slack, and without the plaintext entering the conversation. Until that skill ships, the platform UI is the canonical entry point for user-driven secret creation.
+
+Direct REST `PUT /secrets` calls with the poller token *do* work (machine-entity workspace-boundary auth, not Owner-role gated), but reserve them for:
+
+- Migration scripts (importing from a legacy `.env`)
+- Automated rotation (regenerate-and-store flows)
+- One-off operational fixes where no user value entry is involved
+
+Never for a value the user is typing at you in chat.
+
+### Trust model — quick reference
+
+- Values: SSM SecureString at `/teamvibe/secret/<scope>/<scopeId>[/<channelId>]/<name>` (KMS-encrypted at rest)
+- Metadata (name, expiresAt, audit fields): DDB `Secret` entity
+- Backend authz (`authorizeScope`): poller-token → workspace boundary via `PollerAssignment` or `ownerWorkspaceId` match
+- Frontend authz (`withWorkspaceAuth`): Owner-role-only on the GraphQL `putSecret`/`deleteSecret` mutations — the UI gate
+- Write-only model: a stored value is never returned by `/secrets/list` or the UI after the initial save. The only path that surfaces values is `/secrets/spawn` (poller-token only, single call per session start)
+
 ## Memory & Persistence
 
 Your working directory is a git repo. Changes are pushed after each session, but
