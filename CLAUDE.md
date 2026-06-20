@@ -161,7 +161,34 @@ When a user wants to add or rotate a secret, route them to the platform UI, whic
 - Channel-scope: `/channels/<channelId>` (Secrets section)
 - Poller-scope: `/pollers/<pollerId>` (Secrets section)
 
-A `secret` skill is on the roadmap — it'll open a Slack-anchored modal via HTTPS tunnel so the user can submit a value without leaving Slack, and without the plaintext entering the conversation. Until that skill ships, the platform UI is the canonical entry point for user-driven secret creation.
+### Safely receiving a secret value from the user
+
+If you need to capture a plaintext secret on the agent host (e.g. to land it in a poller-scope store via REST, to bridge into the host's macOS Keychain for use by host tooling, or as a staging step before the user pastes it into the platform UI), **do not ask the user to type the value into the Slack thread**. Use the `secret-receiver` skill from the `skills/shared/` submodule (`knedlopark/shared-claude-skills`).
+
+The skill flow:
+
+1. Agent starts a local Node.js HTTP server with an HTML form:
+   ```bash
+   node skills/shared/secret-receiver/server.mjs \
+     --service "gitlab.com" --title "GitLab Token" \
+     --description "Paste your Personal Access Token"
+   ```
+2. Agent runs `npx --yes localtunnel --port 3456` to mint a temporary public HTTPS URL.
+3. Agent posts the URL to the user via Slack.
+4. User opens the URL in a browser, pastes the value into the form, submits.
+5. The server saves the value to macOS Keychain (`security add-generic-password -s "<service>" -U -w "<value>"`), responds with a confirmation page, and shuts itself down after the single submission.
+6. Agent reads the value back when needed: `security find-generic-password -s "<service>" -w`.
+
+The plaintext value never traverses Slack — it goes user-browser → encrypted tunnel → agent host → Keychain. The form auto-closes after one submission so the URL is single-use.
+
+**After capture, where the value lands depends on the target scope:**
+
+- *Poller scope* (e.g. an agent rotating its own GitLab PAT): read from Keychain → `PUT /secrets scope=poller` with your token. This is the only REST write the platform accepts from a poller token post-#212.
+- *Workspace / channel scope*: REST `PUT` is denied (workspace) or limited (channel-existence gated) for the poller path. Direct the user to the platform UI (`/settings/secrets`, `/channels/<channelId>`, etc.) and tell them they can paste from Keychain — `security find-generic-password -s "<service>" -w | pbcopy` is the typical helper. The platform UI then mutates via the Owner-only GraphQL path.
+
+The `secret-receiver` skill targets macOS hosts (uses the `security` CLI). Non-macOS pollers would need a Keychain replacement — track in the skill's README when that surfaces.
+
+A first-party `secret` skill that opens a Slack-anchored modal (no browser hop) is on the roadmap. Until it lands, `secret-receiver` is the path.
 
 ### REST `PUT/DELETE /secrets` is poller-scope only
 
