@@ -127,94 +127,9 @@ If `$PERSISTENT_STORAGE_PATH` is set, you can use it for files that should persi
 
 ## Secrets
 
-The platform provides a per-spawn secrets envelope auto-injected into your `process.env` before each session starts. Three scopes merge into one env map with **channel > workspace > poller** precedence — a name at a higher scope overrides the same name at lower ones.
+Platform-managed secrets are auto-injected into your `process.env` at session start, merged from poller / workspace / channel scopes (channel > workspace > poller precedence). Read them as normal env vars (`$YOUR_API_KEY`). Stored values are **write-only** after save — no list endpoint returns plaintext; only the spawn-time injection does.
 
-### Reading secrets
-
-Use `process.env` directly — no extra calls needed in the normal path:
-
-```bash
-$YOUR_API_KEY
-```
-
-To discover what's *registered* at the platform (names + scopes only, never values), use the Poller API list endpoints with your existing token:
-
-```bash
-# Replace SCOPE with: poller | workspace | channel
-curl -H "Authorization: Bearer $TEAMVIBE_POLLER_TOKEN" \
-  "$TEAMVIBE_API_URL/secrets/list?scope=workspace&scopeId=$TEAMVIBE_WORKSPACE_ID"
-
-# channel scope additionally requires channelId:
-curl -H "Authorization: Bearer $TEAMVIBE_POLLER_TOKEN" \
-  "$TEAMVIBE_API_URL/secrets/list?scope=channel&scopeId=$TEAMVIBE_WORKSPACE_ID&channelId=$TEAMVIBE_CHANNEL_ID"
-```
-
-Note: `process.env` may also carry values from the **poller's local `.env` file** (host-level config loaded at poller startup). If a name appears in env but not in any `/secrets/list` response, it's coming from that local file — not from the platform — and isn't manageable via the API.
-
-### Adding / updating secrets
-
-**Do not POST plaintext values through Slack chat or a curl-with-poller-token from a user-facing session.** Plaintext belongs nowhere in the conversation transcript.
-
-When a user wants to add or rotate a secret, route them to the platform UI, which masks the value input, enforces Owner-only RBAC, and clears the form on submit:
-
-- Workspace-scope: `/settings/secrets`
-- Channel-scope: `/channels/<channelId>` (Secrets section)
-- Poller-scope: `/pollers/<pollerId>` (Secrets section)
-
-### Safely receiving a secret value from the user
-
-If you need to capture a plaintext secret on the agent host (e.g. to land it in a poller-scope store via REST, or as a staging step before the user pastes it into the platform UI), **do not ask the user to type the value into the Slack thread**. Use the `secret-receiver` skill bundled at `$CLAUDE_CONFIG_DIR/skills/secret-receiver/` — it ships with this base-brain so every poller has it without depending on optional submodules, and it's OS-agnostic (no macOS Keychain, no `security` CLI).
-
-The skill flow:
-
-1. Agent starts a local Node.js HTTP server with an HTML form:
-   ```bash
-   node $CLAUDE_CONFIG_DIR/skills/secret-receiver/server.mjs \
-     --service "gitlab.com" --title "GitLab Token" \
-     --description "Paste your Personal Access Token"
-   ```
-   Server prints `SERVER_READY on port 3456` and `OUT_FILE <path>` to stdout.
-2. Agent runs `npx --yes localtunnel --port 3456` to mint a temporary public HTTPS URL.
-3. Agent posts the URL to the user via Slack.
-4. User opens the URL in a browser, pastes the value into the form, submits.
-5. Server writes the value to the announced `OUT_FILE` path with mode `0600`, prints `TOKEN_RECEIVED <path>` on stdout, returns the success page, and shuts itself down ~2s later.
-6. Agent picks the value up by piping the file *directly* into the consumer (e.g. `curl --data-binary @<path>` or, for JSON bodies, a one-line `node -e '...JSON.stringify({scope, scopeId, name, value: fs.readFileSync(argv[1])})...'` pipe). Then `rm <path>`.
-
-The plaintext value never traverses Slack and never appears on the server's stdout — only the file path does. As long as the agent pipes the file straight into the next consumer (never `value=$(cat …)` or any other shell-variable detour) the plaintext also stays out of LLM context.
-
-**After capture, where the value lands depends on the target scope:**
-
-- *Poller scope* (e.g. an agent rotating its own GitLab PAT): pipe the file into `PUT /secrets scope=poller` with your token. This is the only REST write the platform accepts from a poller token post-#212.
-- *Workspace / channel scope*: REST `PUT` is denied (workspace) or limited (channel-existence gated) for the poller path. Direct the user to the platform UI (`/settings/secrets`, `/channels/<channelId>`, etc.). If the user wants the captured value handed back to them for the UI paste, surface the file path in a follow-up Slack message and tell them to read it once (`cat <path>`) and then delete it. Better still: skip the capture-then-paste round trip entirely for these scopes and route them straight to the UI.
-
-A first-party `secret` skill that opens a Slack-anchored modal (no browser hop) is on the roadmap. Until it lands, `secret-receiver` is the path.
-
-### REST `PUT/DELETE /secrets` is poller-scope only
-
-The Poller API write endpoints (`PUT /secrets`, `DELETE /secrets`) accept your token for **poller-scope writes only**. Workspace-scope writes via REST are denied with HTTP 403; channel-scope writes additionally require that the target `channelId` reference a non-deleted Channel row in the requested workspace.
-
-| Scope | REST `PUT`/`DELETE` via poller token | Where to write instead |
-|---|---|---|
-| `poller` | ✅ allowed (self-rotation use cases) | — |
-| `workspace` | ❌ HTTP 403 ([#212](https://github.com/teamvibeai/teamvibe.ai/issues/212)) | GraphQL `Mutation.putSecret` / `deleteSecret` (Owner-only via `withWorkspaceAuth`) — i.e. the platform UI |
-| `channel` | ✅ allowed *if* the Channel row exists; HTTP 403 otherwise ([#213](https://github.com/teamvibeai/teamvibe.ai/issues/213)) | Same Owner-only GraphQL path or REST if you have the existing channelId |
-
-This means REST writes are appropriate for:
-
-- **Poller-scope self-rotation** — an agent regenerating its own credentials and persisting them at its own `pollerId`
-- **Migration scripts** importing legacy `.env` keys to poller scope
-- **Automated rotation** at poller scope where no user value entry is involved
-
-Use the platform UI (Owner-role human path) for workspace or new-channel secret entry.
-
-### Trust model — quick reference
-
-- Values: SSM SecureString at `/teamvibe/secret/<scope>/<scopeId>[/<channelId>]/<name>` (KMS-encrypted at rest)
-- Metadata (name, expiresAt, audit fields): DDB `Secret` entity
-- Backend authz (`authorizeScope`): poller-token → workspace boundary via `PollerAssignment` or `ownerWorkspaceId` match, plus channel-existence gate for channel-scope calls ([#213](https://github.com/teamvibeai/teamvibe.ai/issues/213))
-- REST write asymmetry: workspace-scope writes denied at the REST layer ([#212](https://github.com/teamvibeai/teamvibe.ai/issues/212)); only the GraphQL Owner-only path can mutate workspace-scope secrets
-- Frontend authz (`withWorkspaceAuth`): Owner-role-only on the GraphQL `putSecret`/`deleteSecret` mutations — the UI gate
-- Write-only model: a stored value is never returned by `/secrets/list` or the UI after the initial save. The only path that surfaces values is `/secrets/spawn` (poller-token only, single call per session start)
+For everything else (adding / rotating secrets, capturing a plaintext value from the user without it touching chat, REST authz model, scope semantics), see the `secret-receiver` skill: `$CLAUDE_CONFIG_DIR/skills/secret-receiver/SKILL.md`. Direct users to the platform UI (`/settings/secrets`, `/channels/<id>`, `/pollers/<id>`) for normal entry — REST `PUT /secrets` from a poller token is poller-scope only ([teamvibe.ai#212](https://github.com/teamvibeai/teamvibe.ai/issues/212), [teamvibe.ai#213](https://github.com/teamvibeai/teamvibe.ai/issues/213)).
 
 ## Memory & Persistence
 

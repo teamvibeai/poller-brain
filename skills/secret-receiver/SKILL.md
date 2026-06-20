@@ -96,6 +96,16 @@ rm /var/folders/.../secret-receiver-ab12cd34.txt
 
 Avoid `value=$(cat <file>)` — that pulls the plaintext into the shell environment and any subsequent `set -x` / `env` / process listing leaks it.
 
+## Where the captured value can land
+
+This skill only captures the value — it doesn't pick a destination. Decide that *before* you spin the form up:
+
+- **Poller-scope** (e.g. an agent rotating its own GitLab PAT): `PUT $TEAMVIBE_API_URL/secrets` with `scope: "poller"` and `scopeId: $TEAMVIBE_POLLER_ID`. This is the only platform write the REST API accepts from a poller-token Bearer; see [teamvibe.ai#212](https://github.com/teamvibeai/teamvibe.ai/issues/212).
+- **Workspace-scope**: REST is **denied** for poller tokens. The platform UI (`/settings/secrets`, Owner-role only via `withWorkspaceAuth` on the GraphQL `Mutation.putSecret`) is the canonical write path. If you've already captured a value via this skill and the user wants it in workspace scope, surface the file path in a follow-up Slack message so they can `cat <path> | pbcopy` (or equivalent) and paste it into the UI themselves, then `rm` the file.
+- **Channel-scope**: REST accepts the write only if the target Channel row exists and isn't soft-deleted ([teamvibe.ai#213](https://github.com/teamvibeai/teamvibe.ai/issues/213)). If the channel exists, the consumer pattern above with `scope: "channel"`, `scopeId: $TEAMVIBE_WORKSPACE_ID`, `channelId: <id>` works. If it doesn't exist yet, route the user to `/channels/<id>` (UI, Owner-only).
+
+In all cases the platform value is **write-only after save** — no list endpoint or UI surface returns the plaintext later. It only reappears in agent `process.env` via the per-spawn injection.
+
 ## Notes
 
 - **Localtunnel interstitial:** The first visit shows a "Friendly Reminder" page. The user must click "Click to Continue" or enter their IP address to proceed.
