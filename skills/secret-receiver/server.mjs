@@ -1,6 +1,15 @@
 import http from 'node:http';
-import { execFileSync } from 'node:child_process';
+import { writeFileSync, chmodSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
+
+// OS-agnostic — does NOT depend on macOS `security` CLI, Linux
+// `secret-tool`, Windows credential APIs, or any other platform-specific
+// storage. Captures the value to a 0600-mode file (or a caller-supplied
+// path) so the spawning agent can read it via Bash + pipe-to-curl
+// without ever putting the plaintext into LLM context.
 
 const { values: args } = parseArgs({
   options: {
@@ -8,12 +17,12 @@ const { values: args } = parseArgs({
     service: { type: 'string' },
     title: { type: 'string', default: 'Secret' },
     description: { type: 'string', default: '' },
-    account: { type: 'string', default: 'jarvis' },
+    'out-file': { type: 'string' },
   },
 });
 
 if (!args.service) {
-  console.error('Error: --service is required (keychain service name)');
+  console.error('Error: --service is required (label shown on the form)');
   process.exit(1);
 }
 
@@ -21,13 +30,25 @@ const PORT = parseInt(args.port, 10);
 const SERVICE = args.service;
 const TITLE = args.title;
 const DESCRIPTION = args.description;
-const ACCOUNT = args.account;
+
+// Default to a temp file with a random suffix so the agent can run
+// multiple instances concurrently without collisions. Override via
+// --out-file for tighter control (e.g., a tmpfs-mounted path).
+const OUT_FILE =
+  args['out-file'] ??
+  join(tmpdir(), `secret-receiver-${randomBytes(8).toString('hex')}.txt`);
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
+}
 
 function htmlPage(body) {
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${TITLE}</title>
+<title>${escapeHtml(TITLE)}</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   body {
@@ -71,8 +92,8 @@ function htmlPage(body) {
 }
 
 const FORM_HTML = htmlPage(`
-  <h2>${TITLE}</h2>
-  ${DESCRIPTION ? `<p class="desc">${DESCRIPTION}</p>` : ''}
+  <h2>${escapeHtml(TITLE)}</h2>
+  ${DESCRIPTION ? `<p class="desc">${escapeHtml(DESCRIPTION)}</p>` : ''}
   <form method="POST" action="/save">
     <div class="field">
       <input type="password" id="secret" name="secret" placeholder="Paste secret here..." required autofocus>
@@ -83,14 +104,14 @@ const FORM_HTML = htmlPage(`
         this.textContent = isPassword ? '🙈' : '👁';
       ">👁</button>
     </div>
-    <button type="submit">Save to Keychain</button>
+    <button type="submit">Submit</button>
   </form>
 `);
 
 const OK_HTML = htmlPage(`
   <div class="ok">
-    <h2>✓ Saved</h2>
-    <p>Secret stored in Keychain as <code>${SERVICE}</code>.<br>You can close this page.</p>
+    <h2>✓ Received</h2>
+    <p>Secret received. You can close this page — the agent will pick it up shortly.</p>
   </div>
 `);
 
@@ -115,11 +136,16 @@ const server = http.createServer((req, res) => {
       }
 
       try {
-        // -U updates if exists, creates if not
-        execFileSync('security', [
-          'add-generic-password', '-a', ACCOUNT, '-s', SERVICE, '-w', secret, '-U',
-        ]);
-        console.log('TOKEN_SAVED');
+        // Ensure parent dir exists; cheap idempotent guard for callers
+        // who hand us a custom path under a non-existent directory.
+        mkdirSync(dirname(OUT_FILE), { recursive: true });
+        writeFileSync(OUT_FILE, secret, { encoding: 'utf8' });
+        // 0600 — readable only by the owner. On Windows the chmod is a
+        // no-op but the file still inherits the process's user ACL.
+        try { chmodSync(OUT_FILE, 0o600); } catch { /* best-effort */ }
+        // The agent reads this line over stdout to discover the file
+        // path — the plaintext never appears in stdout.
+        console.log(`TOKEN_RECEIVED ${OUT_FILE}`);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(OK_HTML);
         setTimeout(() => {
@@ -140,5 +166,8 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
+  // Print both lines so the agent's stdout parser can capture them
+  // before the form ever loads.
   console.log(`SERVER_READY on port ${PORT}`);
+  console.log(`OUT_FILE ${OUT_FILE}`);
 });
