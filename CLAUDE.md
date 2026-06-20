@@ -163,19 +163,30 @@ When a user wants to add or rotate a secret, route them to the platform UI, whic
 
 A `secret` skill is on the roadmap — it'll open a Slack-anchored modal via HTTPS tunnel so the user can submit a value without leaving Slack, and without the plaintext entering the conversation. Until that skill ships, the platform UI is the canonical entry point for user-driven secret creation.
 
-Direct REST `PUT /secrets` calls with the poller token *do* work (machine-entity workspace-boundary auth, not Owner-role gated), but reserve them for:
+### REST `PUT/DELETE /secrets` is poller-scope only
 
-- Migration scripts (importing from a legacy `.env`)
-- Automated rotation (regenerate-and-store flows)
-- One-off operational fixes where no user value entry is involved
+The Poller API write endpoints (`PUT /secrets`, `DELETE /secrets`) accept your token for **poller-scope writes only**. Workspace-scope writes via REST are denied with HTTP 403; channel-scope writes additionally require that the target `channelId` reference a non-deleted Channel row in the requested workspace.
 
-Never for a value the user is typing at you in chat.
+| Scope | REST `PUT`/`DELETE` via poller token | Where to write instead |
+|---|---|---|
+| `poller` | ✅ allowed (self-rotation use cases) | — |
+| `workspace` | ❌ HTTP 403 ([#212](https://github.com/teamvibeai/teamvibe.ai/issues/212)) | GraphQL `Mutation.putSecret` / `deleteSecret` (Owner-only via `withWorkspaceAuth`) — i.e. the platform UI |
+| `channel` | ✅ allowed *if* the Channel row exists; HTTP 403 otherwise ([#213](https://github.com/teamvibeai/teamvibe.ai/issues/213)) | Same Owner-only GraphQL path or REST if you have the existing channelId |
+
+This means REST writes are appropriate for:
+
+- **Poller-scope self-rotation** — an agent regenerating its own credentials and persisting them at its own `pollerId`
+- **Migration scripts** importing legacy `.env` keys to poller scope
+- **Automated rotation** at poller scope where no user value entry is involved
+
+Use the platform UI (Owner-role human path) for workspace or new-channel secret entry.
 
 ### Trust model — quick reference
 
 - Values: SSM SecureString at `/teamvibe/secret/<scope>/<scopeId>[/<channelId>]/<name>` (KMS-encrypted at rest)
 - Metadata (name, expiresAt, audit fields): DDB `Secret` entity
-- Backend authz (`authorizeScope`): poller-token → workspace boundary via `PollerAssignment` or `ownerWorkspaceId` match
+- Backend authz (`authorizeScope`): poller-token → workspace boundary via `PollerAssignment` or `ownerWorkspaceId` match, plus channel-existence gate for channel-scope calls ([#213](https://github.com/teamvibeai/teamvibe.ai/issues/213))
+- REST write asymmetry: workspace-scope writes denied at the REST layer ([#212](https://github.com/teamvibeai/teamvibe.ai/issues/212)); only the GraphQL Owner-only path can mutate workspace-scope secrets
 - Frontend authz (`withWorkspaceAuth`): Owner-role-only on the GraphQL `putSecret`/`deleteSecret` mutations — the UI gate
 - Write-only model: a stored value is never returned by `/secrets/list` or the UI after the initial save. The only path that surfaces values is `/secrets/spawn` (poller-token only, single call per session start)
 
