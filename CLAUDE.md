@@ -163,13 +163,13 @@ When a user wants to add or rotate a secret, route them to the platform UI, whic
 
 ### Safely receiving a secret value from the user
 
-If you need to capture a plaintext secret on the agent host (e.g. to land it in a poller-scope store via REST, to bridge into the host's macOS Keychain for use by host tooling, or as a staging step before the user pastes it into the platform UI), **do not ask the user to type the value into the Slack thread**. Use the `secret-receiver` skill from the `skills/shared/` submodule (`knedlopark/shared-claude-skills`).
+If you need to capture a plaintext secret on the agent host (e.g. to land it in a poller-scope store via REST, to bridge into the host's macOS Keychain for use by host tooling, or as a staging step before the user pastes it into the platform UI), **do not ask the user to type the value into the Slack thread**. Use the `secret-receiver` skill bundled at `skills/secret-receiver/` — it ships with this base-brain so every poller has it without depending on optional submodules.
 
 The skill flow:
 
 1. Agent starts a local Node.js HTTP server with an HTML form:
    ```bash
-   node skills/shared/secret-receiver/server.mjs \
+   node $CLAUDE_CONFIG_DIR/skills/secret-receiver/server.mjs \
      --service "gitlab.com" --title "GitLab Token" \
      --description "Paste your Personal Access Token"
    ```
