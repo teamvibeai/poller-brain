@@ -172,6 +172,34 @@ async function computeMissingTagWarning(channel, threadTs, text, justSentTs = nu
   }
 }
 
+// Returns a warning hint object if outgoing `text` contains a markdown pipe
+// table (2+ consecutive `^\s*\|.*\|.*$` lines), or null. Slack renders pipe
+// tables in the `text` field as monospace ASCII without column alignment;
+// `blocks: [{type: 'markdown', ...}]` renders them correctly.
+// Deterministic — no LLM, no API call. See teamvibeai/teamvibe.ai#224.
+function computePipeTableWarning(text) {
+  if (!text || typeof text !== 'string') return null
+  // Strip triple-fenced code blocks — pipe-tables inside fences are quoted
+  // material (instructions, samples), not table rendering.
+  const stripped = text.replace(/```[\s\S]*?```/g, '')
+  const lines = stripped.split('\n')
+  let consecutive = 0
+  for (const line of lines) {
+    if (/^\s*\|.*\|.*$/.test(line)) {
+      consecutive++
+      if (consecutive >= 2) {
+        return {
+          code: 'ascii_table_in_text',
+          detail: "Detected markdown table syntax in `text` field. Slack renders pipe tables as monospace ASCII without column alignment. Use a `markdown` block via `blocks: [{type: 'markdown', text: '...'}]` for proper rendering.",
+        }
+      }
+    } else {
+      consecutive = 0
+    }
+  }
+  return null
+}
+
 // Resolve a Slack user_id to a friendly display name. Caches per-process for
 // the session lifetime since display names rarely change mid-conversation.
 const _userInfoCache = new Map()
@@ -490,8 +518,10 @@ async function handleTool(name, args) {
       // lookback skips the just-sent message (self) — eliminates the race
       // where self appears as last_speaker. See teamvibeai/teamvibe.ai#108.
       const warning = await computeMissingTagWarning(channel, thread_ts, args.text, result.ts)
+      const tableWarning = computePipeTableWarning(args.text)
+      const warnings = [warning, tableWarning].filter(Boolean)
       const response = { ok: true, ts: result.ts }
-      if (warning) response.warnings = [warning]
+      if (warnings.length) response.warnings = warnings
       return response
     }
 
