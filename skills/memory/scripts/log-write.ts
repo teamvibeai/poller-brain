@@ -14,14 +14,13 @@
  */
 
 import * as fs from "fs";
-import * as path from "path";
+import { brainPath } from "./lib/brain-root.js";
 
-const TODAY_PATH = "memory/TODAY.md";
+const TODAY_PATH = brainPath("memory/TODAY.md");
 
 function ensureToday(): void {
   const today = new Date().toISOString().slice(0, 10);
   if (!fs.existsSync(TODAY_PATH)) {
-    fs.mkdirSync(path.dirname(TODAY_PATH), { recursive: true });
     fs.writeFileSync(TODAY_PATH, `# ${today}\n\n`);
     return;
   }
