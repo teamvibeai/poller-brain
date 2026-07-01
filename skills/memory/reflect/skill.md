@@ -111,9 +111,10 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
   - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence
   - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence
   - Vague impact language like "this may affect quality" does NOT qualify — the consequence must be specific and already observed.
-- `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
-  - "Split semantic/projects.md into per-project files — currently 120 lines"
-  - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
+- `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. **At least one recommendation MUST follow this three-part format: (1) concrete change to make, (2) the current problem it addresses, and (3) a verifiable success condition.** Use inline labels: `current problem:` and `success criterion:`. Single-sentence observations ("split X", "monitor Y") without a stated problem and success condition do NOT satisfy this requirement.
+  - Bad: "Split semantic/projects.md into per-project files."
+  - Good: "Split semantic/projects.md into per-project files; current problem: file is 120 lines and slow to scan; success criterion: next consolidation reports two sub-files each under 70 lines."
+  - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics; current problem: agents repeat the same question across days without resolving it; success criterion: next reflection names zero repeated-unresolved topics."
 - `selfAssessment`: Include at minimum `assess-memory-quality`, `actionable-recommendations`, `no-data-loss`.
 - `processImprovements`: Required for reflection reports. Include at least one entry per prefix type (`[self-critique]`, `[proposal]`, `[blocked]`). Reference prior recommendations that went unacted on. Examples:
   - `[self-critique] Reflection is running 45 days late — monthly schedule not enforced by any heartbeat check`
