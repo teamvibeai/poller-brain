@@ -234,6 +234,37 @@ Add any created, updated, or deleted semantic files to `filesChanged`. Set `self
 
 If `memory/semantic/` doesn't exist or is empty, skip this step and set `selfAssessment["semantic-lifecycle-checked"]` to `true` (nothing to check).
 
+### 5c. LEARNINGS.md Gradual Reduction
+
+If `memory/core/LEARNINGS.md` exceeds 5000 bytes, perform **one** small archival per consolidation cycle. This mirrors Step 9c (CLAUDE.md reduction) but for lessons memory — without this step, LEARNINGS.md grows monotonically because promotion appends new entries but never retires resolved or superseded ones.
+
+**Preflight:** Run `wc -c memory/core/LEARNINGS.md`. If under 5000 bytes, skip this step entirely. If over 5000 bytes, proceed.
+
+1. **Identify one archival candidate** (1–3 oldest entries) in `LEARNINGS.md` that meets ANY of:
+   - Has a `[MEM-NNN]` key whose status in `memory/MEM_REGISTRY.md` is `OBSOLETE` or `REMOVED` (i.e., the lesson has already been superseded via the MEM lifecycle in Step 1c)
+   - Describes an incident/problem that has a follow-up "resolved" or "shipped" entry visible in `memory/episodic/` (i.e., the lesson was situational and no longer teaches something new)
+
+   **Never archive** an entry whose `[MEM-NNN]` is still `ACTIVE`, an entry without a MEM key, or an entry younger than 30 days.
+
+2. **Archive it:**
+   - Create (if missing) or append to `memory/episodic/archive/learnings-YYYY-Hn.md` where `Hn` is `H1` (Jan–Jun) or `H2` (Jul–Dec) of the current year. This bucket keeps archived lessons grep-searchable but out of hot-path memory.
+   - Copy the entry **verbatim** — preserve the `[MEM-NNN]` key and any inline links.
+   - Prepend a one-line header noting the archival date and reason (`obsolete-per-registry` / `superseded-by-episodic-<file>`).
+   - Remove the entry from `memory/core/LEARNINGS.md`.
+
+3. **Log it** in the markdown report under `## LEARNINGS.md Reduction`:
+   - Which entry was moved (MEM key + first 60 chars), archival reason, size delta (bytes before → after)
+   - Registry status (`OBSOLETE`/`REMOVED`) or link to the superseding episodic file
+
+4. **Constraints:**
+   - Move *at most 1 archival per cycle* — gradual reduction, not a big-bang refactor
+   - *Never* archive an entry currently referenced by `memory/SUMMARY.md` "Key Rules" section — that's a signal it's still load-bearing; downgrade the SUMMARY reference first in a future cycle
+   - If no safe candidate exists (all entries `ACTIVE` and recent), skip this step and note `no safe candidate found — LEARNINGS.md at N bytes, no archival-eligible entries` in the report. Do NOT force an archival to hit the threshold.
+
+Add `memory/core/LEARNINGS.md` and the archive file to `filesChanged` when archival fires.
+
+This ensures steady progress toward the threshold while requiring lifecycle-provenance (MEM_REGISTRY or episodic) rather than unstructured age-based deletion.
+
 ### 6. Regenerate SUMMARY.md
 
 **Always regenerate `memory/SUMMARY.md` on every consolidation run — this step is non-negotiable, even if no facts were promoted in steps 2–4.** A lightweight consolidation with zero promotions must still regenerate SUMMARY.md to ensure it reflects the current state of all memory tiers.
