@@ -15,7 +15,17 @@ Periodic self-assessment of memory quality. Run monthly.
 
 Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Check which recommendations from that report were acted on since then.
 
-**Action:** Note in this reflection which prior recommendations were implemented, which were ignored, and why. This feeds the `processImprovements` field.
+**Action:** Add a `## Previous Recommendations Review` section to the **markdown report** that explicitly names at least one prior recommendation verbatim or paraphrased, and states its current status as one of: `implemented`, `partially addressed`, or `pending`. Every named recommendation must have a status. Example format:
+
+```markdown
+## Previous Recommendations Review
+- "Split LEARNINGS.md into topical files" (from reflection-2026-05-01) — **pending**: file still over threshold, no split attempted.
+- "Archive REMOVED registry rows" (from reflection-2026-05-01) — **implemented**: rows moved to MEM_REGISTRY_ARCHIVE.md.
+```
+
+If this is the very first reflection with no prior recommendations to review, explicitly state that in the section.
+
+Also feed the results into `processImprovements` — reference any recommendations that remain unacted on.
 
 ### 1. Staleness Check
 
