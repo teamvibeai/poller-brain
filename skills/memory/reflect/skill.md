@@ -111,9 +111,9 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
   - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence
   - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence
   - Vague impact language like "this may affect quality" does NOT qualify — the consequence must be specific and already observed.
-- `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
-  - "Split semantic/projects.md into per-project files — currently 120 lines"
-  - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
+- `recommendations`: Specific actions for the next maintenance cycle. **At least one recommendation MUST include a success criterion** (required by `verifiable-recommendations` eval criterion): state (1) the concrete change, (2) the current problem, and (3) a verifiable condition confirming it worked. Use the format: `"<action> — <problem>; success = <verifiable outcome>."` If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
+  - "Split semantic/projects.md into per-project files — currently 120 lines causing slow grep lookups; success = each file under 60 lines by next reflection."
+  - "[base-brain] Add a merge-on-promotion step to LEARNINGS.md so new MEM entries merge into existing rules instead of appending — LEARNINGS.md has grown 40% in 3 cycles from duplicate bullets; success = LEARNINGS.md stays under 5000B across two consecutive post-promotion cycles."
 - `selfAssessment`: Include at minimum `assess-memory-quality`, `actionable-recommendations`, `no-data-loss`.
 - `processImprovements`: Required for reflection reports. Include at least one entry per prefix type (`[self-critique]`, `[proposal]`, `[blocked]`). Reference prior recommendations that went unacted on. Examples:
   - `[self-critique] Reflection is running 45 days late — monthly schedule not enforced by any heartbeat check`
