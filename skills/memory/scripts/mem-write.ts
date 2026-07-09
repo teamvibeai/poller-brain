@@ -15,10 +15,10 @@
  */
 
 import * as fs from "fs";
-import * as path from "path";
+import { brainPath } from "./lib/brain-root.js";
 
-const REGISTRY_PATH = "memory/MEM_REGISTRY.md";
-const TODAY_PATH = "memory/TODAY.md";
+const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
+const TODAY_PATH = brainPath("memory/TODAY.md");
 
 const REGISTRY_HEADER = `# MEM Registry
 
@@ -48,14 +48,12 @@ function getNextKey(): number {
 
 function ensureRegistry(): void {
   if (!fs.existsSync(REGISTRY_PATH)) {
-    fs.mkdirSync(path.dirname(REGISTRY_PATH), { recursive: true });
     fs.writeFileSync(REGISTRY_PATH, REGISTRY_HEADER);
   }
 }
 
 function ensureToday(): void {
   if (!fs.existsSync(TODAY_PATH)) {
-    fs.mkdirSync(path.dirname(TODAY_PATH), { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
     fs.writeFileSync(TODAY_PATH, `# ${today}\n\n`);
   }
