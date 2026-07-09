@@ -105,7 +105,11 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
 
 **JSON:** `reports/YYYY-MM-DD-memory-reflection.json` — populate every field:
 
-- `observations`: List specific findings from this reflection. Each entry should name a concrete memory strength, OR pair a memory gap with the *operational consequence it has already produced* in recent maintenance cycles. Gap-only observations ("X is missing", "Y is thin") do NOT qualify — they go to `processImprovements` as `[proposal]` instead. Examples:
+- `observations`: List specific findings from this reflection. Each entry should name a concrete memory strength, OR pair a memory gap with the *operational consequence it has already produced* in recent maintenance cycles. Gap-only observations ("X is missing", "Y is thin") do NOT qualify — they go to `processImprovements` as `[proposal]` instead.
+
+  **Pre-write self-check (required):** Before finalizing this list, scan every draft observation for gap-class words: `lacks`, `missing`, `thin`, `no entry for`, `gap in coverage`. For each match, confirm the item includes a specific outcome AND a date: "which caused [outcome] in [cycle] on [YYYY-MM-DD]." If you cannot supply both, move the item to `processImprovements` as `[proposal]` — do NOT leave it in `observations`. An observation with gap language but no dated consequence will fail the `gap-impact-analysis` eval criterion.
+
+  Examples:
   - "semantic/team-members.md has complete profiles for all 4 active members" — concrete strength
   - "memory/core/LEARNINGS.md has grown to 80 lines and the last 2 promotions appended new bullets rather than merging into the existing entry, creating 3 near-duplicate rules" — gap + observed consequence
   - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence
