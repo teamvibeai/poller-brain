@@ -213,6 +213,11 @@ function computePipeTableWarning(text) {
 // flagged: **bold**/__bold__ → *bold*, [label](url) → <url|label>,
 // ~~strike~~ → ~strike~. Italics via _x_ are already valid mrkdwn.
 // See teamvibeai/teamvibe.ai#228.
+// Known limits (documented, non-blocking — see #206 review): normalization is
+// not code-span/fence aware (markers inside `inline code` are still converted —
+// rare in prose), link URLs containing `)` (wiki-style `.../Foo_(bar)`) are not
+// matched, and `***bold-italic***` triple-star is out of scope. These degrade
+// to the literal marker, never to broken rendering.
 function gfmInlineToMrkdwn(text) {
   return text
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<$2|$1>')
