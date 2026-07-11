@@ -115,9 +115,9 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
   - "No procedural documentation exists for the weekly-standup workflow, which led to 4 inconsistent invocations across the last 5 standup runs" — gap + observed consequence
   - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence
   - Vague impact language like "this may affect quality" does NOT qualify — the consequence must be specific and already observed.
-- `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. Examples:
-  - "Split semantic/projects.md into per-project files — currently 120 lines"
-  - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics to prevent agents repeating the same question across days"
+- `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. **At least one recommendation MUST include all three of: (1) the concrete change to make, (2) the current problem it addresses, and (3) a verifiable success condition** — a checkable outcome that confirms the recommendation was implemented and effective. Format: `"[change] — [problem] — success: [verifiable condition]"`. Examples:
+  - "Split semantic/projects.md into per-project files — currently 120 lines, causes slow lookups — success: each resulting file under 60 lines at next reflection"
+  - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics — same question appears in consecutive daily logs without resolution — success: next reflection finds no unresolved repeated question across 3 consecutive logs"
 - `selfAssessment`: Use the actual reflection eval criterion IDs: `concrete-improvement-proposal`, `previous-recommendations-reviewed`, `gap-impact-analysis`, `verifiable-recommendations`, `deletion-with-preservation-evidence`.
 - `processImprovements`: Required for reflection reports. Include at least one entry per prefix type (`[self-critique]`, `[proposal]`, `[blocked]`). Reference prior recommendations that went unacted on. Examples:
   - `[self-critique] Reflection is running 45 days late — monthly schedule not enforced by any heartbeat check`
