@@ -172,6 +172,14 @@ async function computeMissingTagWarning(channel, threadTs, text, justSentTs = nu
   }
 }
 
+// Single source of truth for "is this a pipe-table row?" — shared by the
+// detection gate (computePipeTableWarning) and the auto-convert splitter
+// (convertPipeTablesToBlocks) so the two can never disagree on what a table
+// line is. See teamvibeai/teamvibe.ai#228.
+function isTableLine(line) {
+  return /^\s*\|.*\|.*$/.test(line)
+}
+
 // Returns a warning hint object if outgoing `text` contains a markdown pipe
 // table (2+ consecutive `^\s*\|.*\|.*$` lines), or null. Slack renders pipe
 // tables in the `text` field as monospace ASCII without column alignment;
@@ -185,7 +193,7 @@ function computePipeTableWarning(text) {
   const lines = stripped.split('\n')
   let consecutive = 0
   for (const line of lines) {
-    if (/^\s*\|.*\|.*$/.test(line)) {
+    if (isTableLine(line)) {
       consecutive++
       if (consecutive >= 2) {
         return {
@@ -198,6 +206,87 @@ function computePipeTableWarning(text) {
     }
   }
   return null
+}
+
+// Convert GFM inline syntax to Slack mrkdwn for PROSE segments only (never
+// tables — those go raw into a `markdown` block). Covers the cases DevGuru
+// flagged: **bold**/__bold__ → *bold*, [label](url) → <url|label>,
+// ~~strike~~ → ~strike~. Italics via _x_ are already valid mrkdwn.
+// See teamvibeai/teamvibe.ai#228.
+function gfmInlineToMrkdwn(text) {
+  return text
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<$2|$1>')
+    .replace(/\*\*([^*]+?)\*\*/g, '*$1*')
+    .replace(/__([^_]+?)__/g, '*$1*')
+    .replace(/~~([^~]+?)~~/g, '~$1~')
+}
+
+// Auto-convert (teamvibeai/teamvibe.ai#228, Variant B): split `text` into
+// prose + pipe-table segments IN ORDER, render prose as section(mrkdwn) blocks
+// and each table as a raw `markdown` block. Returns { blocks, fallbackText,
+// transformed } — or null if no real table run was produced, so the caller
+// keeps existing behavior (eliminates any gate/splitter mismatch — the convert
+// only "takes" when it actually built a table block). Uses isTableLine, the
+// SAME predicate as the detection gate. Fenced code (```) is treated as prose
+// so literal pipe-tables inside fences stay verbatim.
+function convertPipeTablesToBlocks(text) {
+  const lines = text.split('\n')
+  // 1) mark each line: table-candidate (pipe row outside a fence) vs prose
+  let inFence = false
+  const marks = lines.map((l) => {
+    if (/^\s*```/.test(l)) {
+      inFence = !inFence
+      return 'prose'
+    }
+    return !inFence && isTableLine(l) ? 'tc' : 'prose'
+  })
+  // 2) a real table needs >=2 consecutive rows (matches the gate); downgrade
+  //    isolated single pipe-rows back to prose
+  for (let i = 0; i < marks.length; ) {
+    if (marks[i] === 'tc') {
+      let j = i
+      while (j < marks.length && marks[j] === 'tc') j++
+      const kind = j - i >= 2 ? 'table' : 'prose'
+      for (let k = i; k < j; k++) marks[k] = kind
+      i = j
+    } else i++
+  }
+  // 3) group contiguous same-kind lines into ordered segments
+  const segments = []
+  for (let i = 0; i < lines.length; i++) {
+    const kind = marks[i] === 'table' ? 'table' : 'prose'
+    const last = segments[segments.length - 1]
+    if (last && last.kind === kind) last.lines.push(lines[i])
+    else segments.push({ kind, lines: [lines[i]] })
+  }
+  // 4) build blocks + verbatim-prose fallback
+  const blocks = []
+  const proseParts = []
+  for (const seg of segments) {
+    if (seg.kind === 'table') {
+      blocks.push({ type: 'markdown', text: seg.lines.join('\n').trim() })
+    } else {
+      const raw = seg.lines.join('\n').replace(/^\n+|\n+$/g, '').trim()
+      if (!raw) continue
+      proseParts.push(raw)
+      for (const s of textToSections(gfmInlineToMrkdwn(raw))) blocks.push(s)
+    }
+  }
+  if (!blocks.some((b) => b.type === 'markdown')) return null // no table → passthrough
+  // Verbatim prose is the notification fallback (mentions preserved → ping
+  // survives). Table-only messages have no prose → never let top-level text be
+  // empty (that reintroduces the empty-preview problem, tv.ai#108).
+  let fallbackText = proseParts.join(' ').replace(/\s+/g, ' ').trim()
+  if (!fallbackText) fallbackText = ':bar_chart: Tabulka'
+  return {
+    blocks,
+    fallbackText,
+    transformed: {
+      reason: 'pipe_table_in_text',
+      table_moved_to: 'markdown_block',
+      fallback_text: fallbackText,
+    },
+  }
 }
 
 // Resolve a Slack user_id to a friendly display name. Caches per-process for
@@ -231,8 +320,8 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). When blocks are also provided, text is auto-prepended as section block(s) so it stays visible (Slack hides the raw text field when blocks exist) AND is used as the notification/accessibility fallback.' },
-        blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions with buttons). See https://api.slack.com/block-kit. The `text` field is auto-prepended as a section block.', items: { type: 'object' } },
+        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback.' },
+        blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions, or a `markdown` block for tables/GFM). See https://api.slack.com/block-kit. Providing blocks OPTS OUT of table auto-convert — your blocks are sent as-is and `text` is prepended as a visible section block. Omit blocks to let a GFM table in `text` auto-convert.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread). Pass null to send a top-level channel message even when in a thread session.' },
         modals: {
@@ -446,7 +535,26 @@ async function handleTool(name, args) {
 
       let blocks = args.blocks ? [...args.blocks] : []
       const hasModals = args.modals?.length && API_URL && TOKEN
-      if (args.text?.trim() && (blocks.length || hasModals)) {
+      const agentSuppliedBlocks = blocks.length > 0
+
+      // tv.ai#228 auto-convert: if `text` carries a pipe-table AND the agent
+      // did NOT supply its own blocks, move the table(s) into `markdown` block(s)
+      // and use a native (non-prepended) plain-text fallback. Deterministic,
+      // opt-out by supplying blocks, echoed to the LLM via `transformed`.
+      // Everything else keeps the exact prior behavior (fleet-safety: agents
+      // that already send blocks+text are untouched).
+      const tableWarning = computePipeTableWarning(args.text)
+      let transformed = null
+      let effectiveText = args.text
+      const converted =
+        args.text?.trim() && tableWarning && !agentSuppliedBlocks
+          ? convertPipeTablesToBlocks(args.text)
+          : null
+      if (converted) {
+        blocks = converted.blocks
+        effectiveText = converted.fallbackText
+        transformed = converted.transformed
+      } else if (args.text?.trim() && (blocks.length || hasModals)) {
         blocks = [...textToSections(args.text), ...blocks]
       }
 
@@ -454,7 +562,7 @@ async function handleTool(name, args) {
       // We need the message ts for thread context when there's no thread_ts
       const body = {
         channel,
-        text: args.text,
+        text: effectiveText,
         unfurl_links: false,
         unfurl_media: false,
       }
@@ -506,7 +614,7 @@ async function handleTool(name, args) {
           await slackApi('chat.update', {
             channel,
             ts: result.ts,
-            text: args.text,
+            text: effectiveText,
             blocks: updatedBlocks,
           })
         }
@@ -517,11 +625,17 @@ async function handleTool(name, args) {
       // follow up with a tagged message if needed. Pass result.ts so the
       // lookback skips the just-sent message (self) — eliminates the race
       // where self appears as last_speaker. See teamvibeai/teamvibe.ai#108.
-      const warning = await computeMissingTagWarning(channel, thread_ts, args.text, result.ts)
-      const tableWarning = computePipeTableWarning(args.text)
-      const warnings = [warning, tableWarning].filter(Boolean)
+      const warning = await computeMissingTagWarning(channel, thread_ts, effectiveText, result.ts)
+      // One signal per branch (DevGuru): the convert branch echoes `transformed`
+      // and suppresses the #224 table warning (the table was handled); the
+      // opt-out/passthrough branch keeps the table warning. missing_recipient_tag
+      // is an orthogonal concern and applies to both.
+      const warnings = [warning]
+      if (!transformed && tableWarning) warnings.push(tableWarning)
       const response = { ok: true, ts: result.ts }
-      if (warnings.length) response.warnings = warnings
+      if (transformed) response.transformed = transformed
+      const finalWarnings = warnings.filter(Boolean)
+      if (finalWarnings.length) response.warnings = finalWarnings
       return response
     }
 
