@@ -294,6 +294,38 @@ function convertPipeTablesToBlocks(text) {
   }
 }
 
+// Pure payload builder for send_message: decides final blocks / effective text /
+// transform echo BEFORE any network I/O, so the three-way branch (auto-convert
+// vs section-prepend vs verbatim passthrough) is unit-testable without Slack.
+// tv.ai#228 follow-up #4. `hasModals` is passed in rather than derived here
+// because it depends on runtime API_URL/TOKEN presence. Returns the raw
+// `tableWarning` (the caller decides suppression: convert branch handled the
+// table, opt-out/passthrough keeps the #224 warning). No behavior change vs the
+// prior inline logic — this is an extraction to lock the branches regressibly.
+function buildSendPayload(args, { hasModals = false } = {}) {
+  const agentBlocks = args.blocks ? [...args.blocks] : []
+  const agentSuppliedBlocks = agentBlocks.length > 0
+  const tableWarning = computePipeTableWarning(args.text)
+
+  let blocks = agentBlocks
+  let effectiveText = args.text
+  let transformed = null
+
+  const converted =
+    args.text?.trim() && tableWarning && !agentSuppliedBlocks
+      ? convertPipeTablesToBlocks(args.text)
+      : null
+  if (converted) {
+    blocks = converted.blocks
+    effectiveText = converted.fallbackText
+    transformed = converted.transformed
+  } else if (args.text?.trim() && (agentSuppliedBlocks || hasModals)) {
+    blocks = [...textToSections(args.text), ...agentBlocks]
+  }
+
+  return { blocks, effectiveText, transformed, tableWarning, agentSuppliedBlocks }
+}
+
 // Resolve a Slack user_id to a friendly display name. Caches per-process for
 // the session lifetime since display names rarely change mid-conversation.
 const _userInfoCache = new Map()
@@ -538,30 +570,18 @@ async function handleTool(name, args) {
       const thread_ts = args.thread_ts === undefined ? DEFAULT_THREAD_TS : args.thread_ts
       if (!channel) throw new Error('channel required')
 
-      let blocks = args.blocks ? [...args.blocks] : []
       const hasModals = args.modals?.length && API_URL && TOKEN
-      const agentSuppliedBlocks = blocks.length > 0
 
       // tv.ai#228 auto-convert: if `text` carries a pipe-table AND the agent
       // did NOT supply its own blocks, move the table(s) into `markdown` block(s)
       // and use a native (non-prepended) plain-text fallback. Deterministic,
       // opt-out by supplying blocks, echoed to the LLM via `transformed`.
       // Everything else keeps the exact prior behavior (fleet-safety: agents
-      // that already send blocks+text are untouched).
-      const tableWarning = computePipeTableWarning(args.text)
-      let transformed = null
-      let effectiveText = args.text
-      const converted =
-        args.text?.trim() && tableWarning && !agentSuppliedBlocks
-          ? convertPipeTablesToBlocks(args.text)
-          : null
-      if (converted) {
-        blocks = converted.blocks
-        effectiveText = converted.fallbackText
-        transformed = converted.transformed
-      } else if (args.text?.trim() && (blocks.length || hasModals)) {
-        blocks = [...textToSections(args.text), ...blocks]
-      }
+      // that already send blocks+text are untouched). Branch logic lives in the
+      // pure buildSendPayload() (unit-tested, no I/O).
+      const { blocks, effectiveText, transformed, tableWarning } = buildSendPayload(args, {
+        hasModals: Boolean(hasModals),
+      })
 
       // Send the message first (without modal buttons if top-level)
       // We need the message ts for thread context when there's no thread_ts
