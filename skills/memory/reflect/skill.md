@@ -13,9 +13,17 @@ Periodic self-assessment of memory quality. Run monthly.
 
 ### 0. Previous Recommendations Review
 
-Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Check which recommendations from that report were acted on since then.
+Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Read its `recommendations` array.
 
-**Action:** Note in this reflection which prior recommendations were implemented, which were ignored, and why. This feeds the `processImprovements` field.
+**If no prior reflection exists:** Add to `processImprovements`: `"[self-critique] No prior reflection found — first reflection run; no prior recommendations to review."` This satisfies the `previous-recommendations-reviewed` criterion.
+
+**If a prior reflection exists:** For each recommendation in that report, determine its status: `implemented`, `partially addressed`, or `pending`. Add **at least one entry** to `processImprovements` that names the specific recommendation text and its status. Required format:
+
+```
+[self-critique] Prior rec: "<recommendation text>" — status: implemented/partially addressed/pending. <one-sentence reason>.
+```
+
+All prior-recommendation review entries MUST appear in `processImprovements`. The `previous-recommendations-reviewed` eval criterion passes only when the report explicitly names at least one prior recommendation and states its status. A generic "reviewed prior recommendations" without naming one fails the criterion.
 
 ### 1. Staleness Check
 
