@@ -420,7 +420,10 @@ Before self-critique, run observable checks on the daily log scratchpad and reco
 
 Checks (all over the last 7 days unless specified):
 
-1. **Today's log exists.** If any session ran today (commits, reports, or MCP tool calls today), verify `memory/TODAY.md` exists and has non-empty content (or `memory/daily/YYYY-MM-DD.md` for today exists after archival). If no sessions ran today, pass.
+1. **Today's log exists.** First, determine if user sessions ran today *before* this consolidation by running `git log --oneline --since='midnight'`. This lists commits from today that predate the current run (since the consolidation commit hasn't been made yet).
+   - **No pre-consolidation commits today:** write `Today's log: no user sessions before this consolidation — not applicable` in the compliance section; set `daily-log-exists-today` to `true` in selfAssessment (criterion is excluded from scoring for this report).
+   - **Pre-consolidation commits exist today:** verify `memory/daily/YYYY-MM-DD.md` (the file that Step 0 archived from TODAY.md) exists and contains content from those sessions (more than just a consolidation stub line). If it does, write `Today's log: present, N entries ✅`; set `daily-log-exists-today` to `true`. If it is missing or contains only a consolidation stub, write `Today's log: missing or stub-only despite N commits today ❌`; set `daily-log-exists-today` to `false`.
+   - **Important:** Do NOT use `memory/TODAY.md` for this check — Step 0 resets it to a bare consolidation stub regardless of whether sessions ran. Only `memory/daily/YYYY-MM-DD.md` contains actual pre-consolidation session content.
 2. **Continuous appends.** Today's log (or the most recent day that had 2+ sessions) contains 2+ distinct timestamped or bulleted entries — not a single dump. A file with a lone session-end paragraph fails this check.
 3. **Retention.** `memory/TODAY.md` exists with today's header, and `memory/daily/<yesterday>.md` is present after consolidation completes.
 4. **No empty logs.** No `memory/daily/*.md` file is empty or contains only a header.
