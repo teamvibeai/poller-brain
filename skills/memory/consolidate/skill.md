@@ -481,6 +481,8 @@ Example entries:
 
 ### 12. Produce Report
 
+**Required top-level field — `operationType` (set FIRST, verify before commit):** The JSON report MUST contain `"operationType": "consolidation"` as a top-level field (NOT inside `selfAssessment`). This is the *single hard-required* field: the poller **permanently deletes** any report missing it — no retry, and the run never reaches the eval pipeline. After writing the JSON, grep the file for `"operationType"` and confirm (a) the value is exactly `consolidation` and (b) the match is a *top-level* key — same indentation as `"filesChanged"`/`"selfAssessment"`, not nested inside `selfAssessment` (a nested match still gets the report deleted). If absent or nested, fix it before committing.
+
 **Pre-report `filesChanged` verification:** Before writing the report, confirm these required entries are in `filesChanged`:
 - `memory/SUMMARY.md` — mandatory every run (Step 6). If missing from `filesChanged`: do NOT just add the filename — go back and execute Step 6 now, regenerate `memory/SUMMARY.md` from current memory state, then add it to `filesChanged`. Skipping Step 6 silently is not allowed.
 - `selfAssessment["summary-md-regenerated"]` — must be explicitly set to `true` every run. This is a separate requirement from `filesChanged`. If not yet set: set it to `true` now. Evaluators check this field independently — a missing or `false` value fails the criterion even when SUMMARY.md is in `filesChanged`.

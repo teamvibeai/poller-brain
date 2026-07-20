@@ -133,6 +133,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
+- `operationType` is a REQUIRED top-level field (`consolidation` or `reflection`) — the poller permanently deletes any report missing it, with no retry, before it reaches the eval pipeline. Always set it and verify it is present before committing.
 - The `brainCommitSha` MUST be obtained by running `git rev-parse HEAD` in the brain repo.
 - The `selfAssessment` keys MUST match the criterion IDs defined in the Eval Criteria section below.
 - The JSON file MUST be valid JSON (no trailing commas, no comments).
