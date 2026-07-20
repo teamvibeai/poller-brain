@@ -468,7 +468,7 @@ Ask yourself:
 - Are there issues I've noticed but haven't acted on?
 - Are MEM keys being lost or not promoted correctly?
 
-Write your answer as a `[self-critique]` entry even if things seem fine (e.g., "No recurring problems observed this cycle — memory tier coverage looks balanced"). The entry must reflect on process effectiveness, not just confirm that maintenance ran.
+Write your answer as a `[self-critique]` entry that names what you checked and what you found. A bare assertion like "No recurring problems observed" does NOT pass — the criterion requires evidence of active reflection on whether the process is working. Even in healthy cycles, explicitly name the checks you ran and their result: e.g., `"[self-critique] Checked HEARTBEAT status (migrated, no residual items), recurring themes (none — no pattern repeating across 3+ logs), memory tier coverage (all four tiers touched this cycle), and carry-forward recs (0 recs in pending state beyond 2 cycles). No process gaps identified this cycle."` This evidence-of-checking format satisfies the criterion even when no problems exist; a bare "no problems" without naming what was checked fails it.
 
 **Do NOT use generic filler** like "ran consolidation as scheduled" or "maintenance completed normally". The entry must identify a real gap, recurring problem, or process weakness observed during this run.
 
