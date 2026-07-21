@@ -250,6 +250,7 @@ Users can ask you to report issues about the platform or base brain. When a user
     - Gaps: 2026-04-11 (had sessions per git log, no daily log written)
     ```
     Populate the `selfAssessment` fields `daily-log-exists-today`, `daily-log-continuous-appends`, `daily-log-recent-retention`, and `daily-log-weekly-coverage` based on this block.
+    **`daily-log-weekly-coverage` self-assessment rule:** Set to `true` only if the ratio in the compliance block is ≥ 0.8. If < 0.8, set to `false` AND add a `[self-critique]` entry in `processImprovements` explicitly naming the missing days and why (e.g., `[self-critique] Coverage 5/7 this week — 2026-04-11 and 2026-04-12 had sessions but no log written`). The evaluator reads the compliance block directly and ignores a `true` selfAssessment when the block shows < 0.8; the `[self-critique]` entry is the ONLY way to pass when coverage is below threshold.
 
 ## Twice Weekly
 
