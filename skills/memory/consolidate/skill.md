@@ -414,6 +414,28 @@ If the Memory Metrics table (Step 9b) shows `CLAUDE.md` exceeding 10000 bytes, p
 
 This ensures steady progress toward the threshold while allowing time to detect regressions between cycles.
 
+#### 9d. MEM_REGISTRY.md REMOVED-Row Archival
+
+`MEM_REGISTRY.md` is append-only for audit reasons — REMOVED rows are never deleted (Step 1c), so the registry grows unbounded. This step relocates **dead REMOVED audit rows** to `memory/MEM_REGISTRY_ARCHIVE.md`, leaving a single navigable pointer stub in the live registry. ACTIVE / OBSOLETE rows and all prose stay untouched.
+
+> **Scope — mechanical only.** This automates relocation of *dead* data (rows already marked REMOVED via the MEM lifecycle). It does **not** touch ACTIVE/OBSOLETE rows or inline policy prose (e.g. HOLD-rule sections) — relocating live content is a semantic judgment that stays with reflection, not this automated step. On registries whose bulk is live prose, the byte target may need a complementary manual prose move; that is out of scope here.
+
+If the Memory Metrics table (Step 9b) shows `MEM_REGISTRY.md` exceeding 5000 bytes, run the deterministic archival script:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-archive.ts"
+```
+
+The script is **idempotent** (a second consecutive run is a byte-identical no-op) and performs its own **count-verify** before writing — it aborts (exit 1) without writing if any REMOVED row would be dropped (round-trip identity) or if the live REMOVED count would not reach 0. Do not hand-edit `MEM_REGISTRY.md` to remove REMOVED rows; always use the script.
+
+1. **Run it** and read the printed summary (relocated keys, `removedFromLive`, `newlyArchived`, `alreadyInArchive`, `liveRemovedAfter`, size delta, verify checks).
+2. **On non-zero exit**, treat it as an integrity alarm: do NOT commit a partial state, and record the failure in the report. Investigate before retrying.
+3. **Log it** in the markdown report under `## MEM_REGISTRY Archival`: relocated keys, size delta, and the three verify checks (`round-trip`, `count`, `live REMOVED == 0`).
+4. **Report tracking:** add `memory/MEM_REGISTRY.md` and `memory/MEM_REGISTRY_ARCHIVE.md` to `filesChanged` when the script relocated any rows (skip both when it was a no-op).
+5. If `MEM_REGISTRY.md` is under 5000 bytes, or the script reports a no-op, skip logging this step.
+
+The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries archived to [MEM_REGISTRY_ARCHIVE.md](...) — Keys: ...` — so the audit trail stays navigable from the live registry. The key list in the stub also keeps the `mem-write.ts` next-key counter correct (it additionally scans the archive as defense-in-depth).
+
 ### 10. Assess Daily Log Compliance
 
 Before self-critique, run observable checks on the daily log scratchpad and record the outcome in both reports.
