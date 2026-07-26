@@ -289,6 +289,20 @@ This replaces the old "Update MEMORY.md" step. SUMMARY.md is the new authoritati
 
 **Report tracking (required):** Add `memory/SUMMARY.md` to the JSON report's `filesChanged` array immediately after completing this step — do not defer to Step 12. Also set `selfAssessment["summary-md-regenerated"]` to `true` in the JSON report at this point. Evaluators check both `filesChanged` and `selfAssessment["summary-md-regenerated"]` to verify this step ran. Omitting `memory/SUMMARY.md` from `filesChanged` fails the `summary-md-regenerated` criterion even when the file was correctly regenerated.
 
+**Size-cap inline-trim trigger (deterministic — do not defer to reflection):** After regenerating SUMMARY.md, run `wc -c memory/SUMMARY.md`. If it exceeds **9000 bytes**, the run MUST execute exactly one inline trim action before finishing Step 6, then re-measure and note the new size in the report.
+
+Pick the trim target **by property, not by section name** — SUMMARY structure varies across the fleet, so never hardcode a brain's section titles:
+- **Trimmable (volatile):** the single largest section whose content is *regenerable from a lower memory tier* (`memory/semantic/`, `memory/episodic/`, `memory/daily/`) — i.e. it just re-compiles source-tier state (a running-projects list, a chronological consolidation/history ledger, etc.). *("Active Projects" is a common example, not the rule.)*
+- **Never trim (static / load-bearing):** any section that cannot be reconstructed from a lower tier — identity, the "How this memory works" block, repo tables, and Key Rules whose full text lives only here. If trimming a section would lose information that exists nowhere else, it is static by definition.
+
+- **Relocate, don't delete.** Move the overflow detail *verbatim* into the source-tier file it derives from (`semantic/` or `episodic/`) and replace it in SUMMARY.md with a one-line pointer (e.g. `→ semantic/<file>.md`). Never drop content to hit the threshold.
+- **Make the trim survive the next regeneration.** Because Step 6 regenerates SUMMARY.md from scratch every run, a trim only sticks if regeneration treats an existing pointer as authoritative: when a section already points to a source-tier file, re-emit the pointer — do NOT re-expand it to full length. The relocation above is what puts the content into the source tier so the next from-scratch regeneration naturally produces the short (pointer) form. Without this rule the content re-inflates every run (oscillation), or — if it lived only in SUMMARY and was not relocated first — the trim is a silent no-op.
+- Trim **at most one section per run** — gradual reduction, mirroring the LEARNINGS.md archival constraint in Step 5. If still over cap after one trim, the next run continues; do not big-bang refactor.
+- If no section qualifies as volatile (everything is load-bearing or already pointer-only), skip and note `over cap at N bytes, no safe trim candidate` in the report rather than forcing a trim.
+- Log the trim in the report under `## SUMMARY.md Reduction`: section trimmed, destination file, bytes before → after.
+
+The 9000 B cap is a soft bound that keeps the always-in-context SUMMARY.md from crowding the working context. Encoding the trigger here removes the prior reliance on reflection-cycle recommendation chaining, where the same trim was re-proposed across cycles without ever landing (`teamvibeai/poller-brain#186`).
+
 ### 7. Archive Old Daily Logs
 
 For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older than 30 days:
