@@ -18,6 +18,7 @@ import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
+const ARCHIVE_PATH = brainPath("memory/MEM_REGISTRY_ARCHIVE.md");
 const TODAY_PATH = brainPath("memory/TODAY.md");
 
 const REGISTRY_HEADER = `# MEM Registry
@@ -41,9 +42,14 @@ function scanMaxKey(filePath: string, pattern: RegExp): number {
 function getNextKey(): number {
   // REGISTRY rows are pipe-tabled (`| MEM-N | ACTIVE | ...`) and have no prose drift risk — full scan is safe and acts as defense-in-depth.
   const fromRegistry = scanMaxKey(REGISTRY_PATH, /MEM-(\d+)/g);
+  // MEM_REGISTRY_ARCHIVE.md holds REMOVED rows relocated out of the live registry
+  // (see mem-registry-archive.ts). If the highest-numbered key was REMOVED and
+  // archived, it no longer appears as a table row in the live registry — scan the
+  // archive too so the counter never reuses an archived number.
+  const fromArchive = scanMaxKey(ARCHIVE_PATH, /MEM-(\d+)/g);
   // TODAY.md mixes canonical write rows with prose mentions (e.g. review summaries). Restrict to anchored canonical rows: `- [MEM-N] ...`. Permit whitespace or colon after `]` for forward-compat with format drift.
   const fromToday = scanMaxKey(TODAY_PATH, /^- \[MEM-(\d+)\][\s:\]]/gm);
-  return Math.max(fromRegistry, fromToday) + 1;
+  return Math.max(fromRegistry, fromArchive, fromToday) + 1;
 }
 
 function ensureRegistry(): void {
