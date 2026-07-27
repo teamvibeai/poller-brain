@@ -13,11 +13,22 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
+// The env is read at module scope, so it has to be set before the import below.
+// SESSION_CHANNEL is where the session lives; the resolver must always read the
+// trigger message from there, never from a message's target channel.
+const SESSION_CHANNEL = 'C_SESSION'
+const OTHER_CHANNEL = 'C_ELSEWHERE'
+const TRIGGER_TS = '1780639300.111111'
+process.env.SLACK_CHANNEL = SESSION_CHANNEL
+process.env.SLACK_MESSAGE_TS = TRIGGER_TS
+process.env.SLACK_BOT_TOKEN = 'xoxb-test'
+
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
-const exports = '\nexport { computeThreadOverrideWarning, referencesThreadTs }\n'
+const exports =
+  '\nexport { computeThreadOverrideWarning, referencesThreadTs, resolveThreadOverrideWarning }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
-const { computeThreadOverrideWarning, referencesThreadTs } = mod
+const { computeThreadOverrideWarning, referencesThreadTs, resolveThreadOverrideWarning } = mod
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
@@ -156,6 +167,78 @@ const BRIEFING = '1780637428.794809' // thread recalled from memory
   ok('ref: unrelated text does not match', !referencesThreadTs('nic tu neni', BRIEFING))
   ok('ref: empty text does not match', !referencesThreadTs('', BRIEFING))
   ok('ref: missing thread ts does not match', !referencesThreadTs('cokoliv', null))
+}
+
+// --- resolveThreadOverrideWarning: the I/O half (DevGuru diff-check #1-#3) ---
+// fetch is stubbed, so these assert what the resolver *asks Slack for* and what
+// it does when the answer never comes.
+const calls = []
+function stubFetch(reply) {
+  globalThis.fetch = async (url, init) => {
+    const params = Object.fromEntries(new URLSearchParams(init.body))
+    calls.push({ method: String(url).split('/api/')[1], params })
+    return { json: async () => reply }
+  }
+}
+const repliesWith = (text) => ({
+  ok: true,
+  messages: [{ ts: '1780639227.036509', text: 'parent' }, { ts: TRIGGER_TS, text }],
+})
+
+// The trigger message must be fetched from the session channel. Reading the
+// target channel instead made the guardrail silent on exactly the cross-channel
+// posts it exists to catch.
+{
+  calls.length = 0
+  stubFetch(repliesWith('posli to nekam jinam'))
+  const w = await resolveThreadOverrideWarning(BRIEFING, RUN)
+  ok('cross-channel: warning still fires', w?.code === 'thread_ts_override_unjustified')
+  ok('cross-channel: trigger read from the session channel', calls[0]?.params.channel === SESSION_CHANNEL)
+  ok('cross-channel: never reads the target channel', !calls.some((c) => c.params.channel === OTHER_CHANNEL))
+}
+
+// Windowed fetch: ask for the one message, do not depend on how Slack pages.
+{
+  calls.length = 0
+  stubFetch(repliesWith('nic'))
+  await resolveThreadOverrideWarning(BRIEFING, RUN)
+  ok('fetch targets the trigger message', calls[0]?.params.latest === TRIGGER_TS)
+  ok('fetch is inclusive of it', calls[0]?.params.inclusive === 'true')
+  ok('fetch walks the session thread', calls[0]?.params.ts === RUN)
+}
+
+// Signal C unreadable → a distinct code, not silence. Phase 3 needs to tell
+// "could not verify" apart from "no override happened".
+{
+  calls.length = 0
+  globalThis.fetch = async () => ({ json: async () => ({ ok: false, error: 'thread_not_found' }) })
+  const w = await resolveThreadOverrideWarning(BRIEFING, RUN)
+  ok('unreachable trigger → unverified code', w?.code === 'thread_ts_override_unverified')
+  ok('unverified carries both timestamps', w?.session_thread_ts === RUN && w?.override_thread_ts === BRIEFING)
+}
+{
+  calls.length = 0
+  stubFetch({ ok: true, messages: [{ ts: 'someone.else', text: 'jina zprava' }] })
+  const w = await resolveThreadOverrideWarning(BRIEFING, RUN)
+  ok('trigger missing from the window → unverified, not silence', w?.code === 'thread_ts_override_unverified')
+}
+
+// Signal C readable and referencing the target → suppressed, as before.
+{
+  calls.length = 0
+  stubFetch(repliesWith(`odpovez prosim v ${BRIEFING}`))
+  ok('referenced target → no warning', (await resolveThreadOverrideWarning(BRIEFING, RUN)) === null)
+}
+
+// The default path must not cost a Slack call.
+{
+  calls.length = 0
+  stubFetch(repliesWith('nic'))
+  ok('default path → null', (await resolveThreadOverrideWarning(undefined, RUN)) === null)
+  ok('broadcast (null) → null', (await resolveThreadOverrideWarning(null, RUN)) === null)
+  ok('same thread → null', (await resolveThreadOverrideWarning(RUN, RUN)) === null)
+  ok('no session thread → null', (await resolveThreadOverrideWarning(BRIEFING, '')) === null)
+  ok('cheap gates make no API call', calls.length === 0)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -174,12 +174,17 @@ async function computeMissingTagWarning(channel, threadTs, text, justSentTs = nu
 
 // --- thread_ts override guardrail (teamvibeai/teamvibe.ai#184, phase 1) ---
 //
-// Measurement rail for phase 3: the returned `warnings[]` payload itself. The
+// Measurement rail for phase 3: the `warning_codes` field of the response. The
 // poller already logs every tool_result into the session log (claude-spawner.ts
 // formatStreamEvent → sessionLog.claude('stdout', …)), so counting occurrences
-// of the warning code needs no new plumbing. A stderr marker from this file
+// of a warning code needs no new plumbing. A stderr marker from this file
 // would NOT work — the poller captures the claude CLI's stderr, not an MCP
 // child's, so it would be a silent-green counter (DevGuru review #1).
+//
+// Two codes, deliberately: `thread_ts_override_unjustified` (signals A and C
+// both fired) and `thread_ts_override_unverified` (A fired, C unreadable). A
+// silent third case would make "we could not tell" indistinguishable from
+// "nothing happened" and would bias phase 3 toward a false all-clear.
 
 // "Did the user point at this thread?" — three forms count, because an archive
 // URL carries the *message* ts in its `p<ts>` path segment and the thread ts
@@ -241,10 +246,22 @@ function computeThreadOverrideWarning({ explicitThreadTs, sessionThreadTs, trigg
 // evaluated. Returns '' for a genuinely empty message and null when the text
 // could not be determined (API failure, message not in the thread) — the two
 // cases must not collapse, see resolveThreadOverrideWarning.
+//
+// Windowed with `latest`/`inclusive` rather than a plain `limit`, so the fetch
+// asks for exactly the one message it needs instead of leaning on how Slack
+// pages a thread. (Measured: `limit: N` returns the parent plus the N *newest*
+// replies, so a plain limit would in fact have found the trigger message — but
+// that direction is not in the docs and is not worth depending on.)
 async function getTriggerMessageText(channel, threadTs, messageTs) {
   if (!channel || !threadTs || !messageTs) return null
   try {
-    const result = await slackApi('conversations.replies', { channel, ts: threadTs, limit: 50 })
+    const result = await slackApi('conversations.replies', {
+      channel,
+      ts: threadTs,
+      latest: messageTs,
+      inclusive: true,
+      limit: 1,
+    })
     const msg = (result.messages || []).find((m) => m.ts === messageTs)
     return msg ? msg.text || '' : null
   } catch {
@@ -252,7 +269,23 @@ async function getTriggerMessageText(channel, threadTs, messageTs) {
   }
 }
 
-async function resolveThreadOverrideWarning(channel, explicitThreadTs, sessionThreadTs) {
+// Emitted when an override is real (signal A fired) but signal C could not be
+// evaluated: the trigger message was unreachable. Without it, "override we
+// could not verify" and "no override at all" look identical in the session log,
+// and phase 3 would count a zero and read it as a low false-positive rate
+// (DevGuru diff-check #3). This gives that measurement a denominator.
+function unverifiedOverrideWarning(session, target) {
+  return {
+    code: 'thread_ts_override_unverified',
+    detail:
+      `You passed thread_ts=${target} while this session's thread is ${session}. Could not read the ` +
+      `message that woke you, so whether you were asked to post there is unknown. Check the target thread is right.`,
+    session_thread_ts: session,
+    override_thread_ts: target,
+  }
+}
+
+async function resolveThreadOverrideWarning(explicitThreadTs, sessionThreadTs) {
   // Cheap pure gates first: no Slack API call unless a real override is on the
   // table (triggerText: null here only defers the signal C check).
   const provisional = computeThreadOverrideWarning({
@@ -261,11 +294,14 @@ async function resolveThreadOverrideWarning(channel, explicitThreadTs, sessionTh
     triggerText: null,
   })
   if (!provisional) return null
-  const triggerText = await getTriggerMessageText(channel, sessionThreadTs, DEFAULT_MESSAGE_TS)
-  // Signal C is unknowable (API failure, message not in this thread) — stay
-  // silent rather than warn on what may be a legitimate handoff. Same
-  // best-effort convention as computeMissingTagWarning above.
-  if (triggerText === null) return null
+  // DEFAULT_CHANNEL, not the message's target channel: the session thread and
+  // the message that woke us live in the channel we were woken from. Reading
+  // the target channel made the guardrail silent on cross-channel posts —
+  // exactly where a misrouted reply is most expensive (DevGuru diff-check #2).
+  const triggerText = await getTriggerMessageText(DEFAULT_CHANNEL, sessionThreadTs, DEFAULT_MESSAGE_TS)
+  if (triggerText === null) {
+    return unverifiedOverrideWarning(provisional.session_thread_ts, provisional.override_thread_ts)
+  }
   return computeThreadOverrideWarning({ explicitThreadTs, sessionThreadTs, triggerText })
 }
 
@@ -751,21 +787,25 @@ async function handleTool(name, args) {
       // Did we reply into a thread the user isn't in? Reads args.thread_ts (not
       // the resolved thread_ts) because the guardrail must tell an explicit
       // override apart from the omitted default. See teamvibeai/teamvibe.ai#184.
-      const overrideWarning = await resolveThreadOverrideWarning(channel, args.thread_ts, DEFAULT_THREAD_TS)
+      const overrideWarning = await resolveThreadOverrideWarning(args.thread_ts, DEFAULT_THREAD_TS)
       // One signal per branch (DevGuru): the convert branch echoes `transformed`
       // and suppresses the #224 table warning (the table was handled); the
       // opt-out/passthrough branch keeps the table warning. missing_recipient_tag
       // is an orthogonal concern and applies to both.
-      //
-      // Order matters: the override warning goes first so its `code` survives
-      // the poller's tool_result truncation (200 chars, claude-spawner.ts
-      // truncateOutput) — the session log is what phase 3 of #184 counts from.
-      const warnings = [overrideWarning, warning]
+      const warnings = [warning, overrideWarning]
       if (!transformed && tableWarning) warnings.push(tableWarning)
       const response = { ok: true, ts: result.ts }
       if (transformed) response.transformed = transformed
       const finalWarnings = warnings.filter(Boolean)
-      if (finalWarnings.length) response.warnings = finalWarnings
+      if (finalWarnings.length) {
+        // Codes first, before any `detail` prose can push them past the poller's
+        // 200-char tool_result truncation (claude-spawner.ts truncateOutput).
+        // The session log is the measurement rail for #184 phase 3 and for the
+        // #108 counting that predates it; neither should depend on which warning
+        // happens to be listed first or how long its detail runs.
+        response.warning_codes = finalWarnings.map((w) => w.code)
+        response.warnings = finalWarnings
+      }
       return response
     }
 
