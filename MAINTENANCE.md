@@ -242,7 +242,7 @@ Users can ask you to report issues about the platform or base brain. When a user
   - **Daily log compliance block**: Every consolidation report MUST include a `## Daily Log Compliance` section in the markdown with observable metrics for the last 7 days. If any metric fails, either backfill (reconstruct entries from git log / reports / this session's memory) or explicitly flag the gap in `processImprovements` as a `[self-critique]`. Example block:
     ```markdown
     ## Daily Log Compliance
-    - Coverage (last 7d): 5/7 days with sessions covered ✅
+    - Coverage (last 7d): 5/6 session-days logged (1 idle day excluded from denominator) ✅
     - Today's log: present, 8 entries, first append 09:14, last 16:42 ✅
     - Continuous appends: 8 distinct timestamped entries (not a single end-of-session dump) ✅
     - Retention: today + yesterday preserved ✅
@@ -250,9 +250,9 @@ Users can ask you to report issues about the platform or base brain. When a user
     - Gaps: 2026-04-11 (had sessions per git log, no daily log written)
     ```
     Populate the `selfAssessment` fields `daily-log-exists-today`, `daily-log-continuous-appends`, `daily-log-recent-retention`, and `daily-log-weekly-coverage` based on this block.
-    **`daily-log-weekly-coverage` self-assessment rule:** Set to `true` only if the ratio in the compliance block is ≥ 0.8. If < 0.8, you MUST do BOTH of the following or this criterion automatically FAILS:
+    **`daily-log-weekly-coverage` self-assessment rule:** Compute coverage as: `days_with_daily_log / days_with_any_session` — idle days (no commits, reports, or MCP activity) are excluded from the denominator. Write the ratio using session days: e.g. "5/6 session-days logged (1 idle day excluded from denominator)", not "5/7 days". Set to `true` only if this ratio is ≥ 0.8. If < 0.8, you MUST do BOTH of the following or this criterion automatically FAILS:
     1. Set `selfAssessment.daily-log-weekly-coverage: false`
-    2. Add a `[self-critique]` entry in `processImprovements` naming the specific missing days and why (e.g., `[self-critique] Coverage 5/7 this week — 2026-04-11 and 2026-04-12 had sessions but no log written`)
+    2. Add a `[self-critique]` entry in `processImprovements` naming the specific missing days and why (e.g., `[self-critique] Coverage 5/6 session-days this week — 2026-04-11 and 2026-04-12 had sessions but no log written`)
 
     The evaluator reads the compliance block directly and ignores a `true` selfAssessment when the block shows < 0.8. **Omitting the `[self-critique]` entry causes an automatic failure for this criterion — it is not optional.**
 
