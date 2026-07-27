@@ -86,6 +86,42 @@ function annotateSchedule(row) {
   return { ...local, ...row }
 }
 
+// Build the delivery-target hint echoed back to the agent so it can verify a
+// scheduled message will reach the intended recipient. origin.channel is frozen
+// at create time and replayed every run; when it is inherited from the current
+// session it may be a DM or a different channel than intended (poller-brain#124).
+function buildDeliveryInfo(origin, wasExplicit) {
+  const channel = origin?.channel || null
+  return {
+    channel,
+    thread_ts: origin?.thread_ts || null,
+    resolvedFrom: wasExplicit
+      ? 'explicit-origin'
+      : channel
+        ? 'inherited-from-current-session'
+        : 'none',
+    note: channel
+      ? wasExplicit
+        ? `Delivery channel ${channel} (explicit).`
+        : `Delivery channel ${channel} was inherited from the CURRENT session. If this schedule is meant for a different channel/recipient, re-create it with an explicit origin.channel.`
+      : 'No origin.channel resolved — runs fall back to the channel default target.',
+  }
+}
+
+// Assembles the create_scheduled_message response. `delivery` goes ahead of
+// everything else: `annotateSchedule` already puts the rendered *Local fields
+// ahead of the raw row for the same reason (promptTemplate has no length
+// ceiling, and the poller truncates a logged tool_result at 200 chars —
+// claude-spawner.ts truncateOutput). Behind the row, delivery would never
+// reach the session log. Short/telemetry fields up, echoes down (#184).
+function buildScheduleResponse(result, storedOrigin, wasExplicit) {
+  // Our block is authoritative — drop a server-side `delivery` rather than let
+  // the spread reinstate it further down the object under the same name.
+  const { delivery: _serverDelivery, ...row } =
+    result && typeof result === 'object' ? result : { result }
+  return { delivery: buildDeliveryInfo(storedOrigin, wasExplicit), ...annotateSchedule(row) }
+}
+
 const TOOLS = [
   {
     name: 'list_scheduled_messages',
@@ -113,7 +149,7 @@ const TOOLS = [
         status: { type: 'string', enum: ['ACTIVE', 'PAUSED'], description: 'Schedule status (default: ACTIVE)' },
         origin: {
           type: 'object',
-          description: 'Origin context for response routing. Auto-populated from Slack env vars if not provided.',
+          description: 'Origin context for response routing — which Slack channel/thread the scheduled run delivers to. Auto-populated from the CURRENT session Slack channel if omitted, and FROZEN at create time (replayed on every run). Pass explicitly (esp. origin.channel) when the schedule targets a different channel/recipient than this session — e.g. scheduling from a DM for a project channel.',
           properties: {
             source: { type: 'string', enum: ['slack', 'heartbeat', 'email', 'api'] },
             channel: { type: 'string' },
@@ -190,7 +226,11 @@ async function handleTool(name, args) {
       if (args.timezone) body.timezone = args.timezone
       if (args.status) body.status = args.status
 
-      // Auto-populate origin from environment if not explicitly provided
+      // Auto-populate origin from environment if not explicitly provided.
+      // NOTE: origin.channel is FROZEN onto the schedule at create time and
+      // replayed on every run. When inherited here it is THIS session's Slack
+      // channel — which may be a DM or a different channel than the schedule is
+      // meant for (see poller-brain#124).
       if (args.origin) {
         body.origin = args.origin
       } else if (process.env.SLACK_CHANNEL) {
@@ -201,7 +241,14 @@ async function handleTool(name, args) {
         }
       }
 
-      return annotateSchedule(await apiCall('POST', '/scheduled-messages', body))
+      const result = await apiCall('POST', '/scheduled-messages', body)
+
+      // Surface the resolved delivery target so the agent can verify it matches
+      // the intended recipient before trusting the schedule (poller-brain#124, option B).
+      return {
+        ...annotateSchedule(result && typeof result === 'object' ? result : { result }),
+        delivery: buildDeliveryInfo(body.origin, Boolean(args.origin)),
+      }
     }
 
     case 'delete_scheduled_message': {
