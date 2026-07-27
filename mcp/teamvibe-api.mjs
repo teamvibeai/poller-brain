@@ -245,10 +245,11 @@ async function handleTool(name, args) {
 
       // Surface the resolved delivery target so the agent can verify it matches
       // the intended recipient before trusting the schedule (poller-brain#124, option B).
-      return {
-        ...annotateSchedule(result && typeof result === 'object' ? result : { result }),
-        delivery: buildDeliveryInfo(body.origin, Boolean(args.origin)),
-      }
+      // Prefer the origin the server actually STORED (ground truth) over the one we
+      // sent, so the block stays honest if the platform ever normalizes origin
+      // server-side (e.g. option C) — fall back to body.origin when not echoed.
+      const storedOrigin = (result && typeof result === 'object' && result.origin) || body.origin
+      return buildScheduleResponse(result, storedOrigin, Boolean(args.origin))
     }
 
     case 'delete_scheduled_message': {
