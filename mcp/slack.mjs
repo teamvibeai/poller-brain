@@ -427,6 +427,23 @@ function convertPipeTablesToBlocks(text) {
   }
 }
 
+// Assembles the send_message response. Key insertion order is load-bearing:
+// JSON.stringify emits keys in insertion order, and the poller truncates a
+// logged tool_result at 200 chars (claude-spawner.ts truncateOutput), so
+// anything unbounded placed earlier can push later keys out of the session log.
+// `warning_codes` therefore goes ahead of `transformed`, whose `fallback_text`
+// is the message's whole prose and can be arbitrarily long (DevGuru diff-check).
+// The session log is the measurement rail for #184 phase 3 and for the #108
+// counting that predates it; neither should depend on message length.
+function buildSendResponse({ ts, transformed, warnings }) {
+  const finalWarnings = (warnings || []).filter(Boolean)
+  const response = { ok: true, ts }
+  if (finalWarnings.length) response.warning_codes = finalWarnings.map((w) => w.code)
+  if (transformed) response.transformed = transformed
+  if (finalWarnings.length) response.warnings = finalWarnings
+  return response
+}
+
 // Pure payload builder for send_message: decides final blocks / effective text /
 // transform echo BEFORE any network I/O, so the three-way branch (auto-convert
 // vs section-prepend vs verbatim passthrough) is unit-testable without Slack.
@@ -794,19 +811,7 @@ async function handleTool(name, args) {
       // is an orthogonal concern and applies to both.
       const warnings = [warning, overrideWarning]
       if (!transformed && tableWarning) warnings.push(tableWarning)
-      const response = { ok: true, ts: result.ts }
-      if (transformed) response.transformed = transformed
-      const finalWarnings = warnings.filter(Boolean)
-      if (finalWarnings.length) {
-        // Codes first, before any `detail` prose can push them past the poller's
-        // 200-char tool_result truncation (claude-spawner.ts truncateOutput).
-        // The session log is the measurement rail for #184 phase 3 and for the
-        // #108 counting that predates it; neither should depend on which warning
-        // happens to be listed first or how long its detail runs.
-        response.warning_codes = finalWarnings.map((w) => w.code)
-        response.warnings = finalWarnings
-      }
-      return response
+      return buildSendResponse({ ts: result.ts, transformed, warnings })
     }
 
     case 'add_reaction': {
