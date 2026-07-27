@@ -11,9 +11,9 @@ import { dirname, join } from 'node:path'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'teamvibe-api.mjs'), 'utf8')
 const prelude = src.split('// --- JSON-RPC 2.0 / MCP protocol ---')[0]
-const exports = '\nexport { buildDeliveryInfo }\n'
+const exports = '\nexport { buildDeliveryInfo, buildScheduleResponse }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
-const { buildDeliveryInfo } = mod
+const { buildDeliveryInfo, buildScheduleResponse } = mod
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
@@ -47,6 +47,32 @@ const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++;
   ok('4 channel null', d.channel === null)
   ok('4 resolvedFrom = explicit', d.resolvedFrom === 'explicit-origin')
   ok('4 note = fallback', /fall back to the channel default/.test(d.note))
+}
+
+// (5) response key order — the poller truncates a logged tool_result at 200 chars,
+// and the stored row echoes back promptTemplate, which is unbounded. Behind the
+// row, delivery never reaches the session log.
+{
+  const truncate = (s) => (s.length > 200 ? s.slice(0, 200) + '...' : s) // claude-spawner.ts truncateOutput
+  const row = {
+    scheduleId: '01KYH000000000000000000000',
+    workspaceId: 'W1',
+    scheduleType: 'ONE_TIME',
+    promptTemplate: 'Zkontroluj stav PR a pokud je zeleny, napis do vlakna shrnuti; jinak vypis duvod selhani a navrhni dalsi krok.',
+    origin: { channel: 'C_TARGET', thread_ts: '1.1', source: 'slack' },
+  }
+  const r = buildScheduleResponse(row, row.origin, true)
+  const keys = Object.keys(r)
+  ok('5 delivery precedes the stored row', keys[0] === 'delivery')
+  ok('5 delivery survives truncation', truncate(JSON.stringify(r)).includes('"channel":"C_TARGET"'))
+  ok('5 row fields still returned in full', r.scheduleId === row.scheduleId && r.promptTemplate === row.promptTemplate)
+
+  const old = JSON.stringify({ ...row, delivery: r.delivery })
+  ok('5 old order would have lost it', !truncate(old).includes('resolvedFrom'))
+
+  ok('5 non-object result is wrapped, not spread', buildScheduleResponse('nope', null, false).result === 'nope')
+  const clash = buildScheduleResponse({ ...row, delivery: { channel: 'C_SERVER' } }, row.origin, true)
+  ok('5 our delivery block wins over a server-side one', clash.delivery.channel === 'C_TARGET')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
