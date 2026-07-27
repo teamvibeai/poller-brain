@@ -252,7 +252,7 @@ async function getTriggerMessageText(channel, threadTs, messageTs) {
   }
 }
 
-async function resolveThreadOverrideWarning(channel, explicitThreadTs, sessionThreadTs, postedTs) {
+async function resolveThreadOverrideWarning(channel, explicitThreadTs, sessionThreadTs) {
   // Cheap pure gates first: no Slack API call unless a real override is on the
   // table (triggerText: null here only defers the signal C check).
   const provisional = computeThreadOverrideWarning({
@@ -751,12 +751,7 @@ async function handleTool(name, args) {
       // Did we reply into a thread the user isn't in? Reads args.thread_ts (not
       // the resolved thread_ts) because the guardrail must tell an explicit
       // override apart from the omitted default. See teamvibeai/teamvibe.ai#184.
-      const overrideWarning = await resolveThreadOverrideWarning(
-        channel,
-        args.thread_ts,
-        DEFAULT_THREAD_TS,
-        result.ts,
-      )
+      const overrideWarning = await resolveThreadOverrideWarning(channel, args.thread_ts, DEFAULT_THREAD_TS)
       // One signal per branch (DevGuru): the convert branch echoes `transformed`
       // and suppresses the #224 table warning (the table was handled); the
       // opt-out/passthrough branch keeps the table warning. missing_recipient_tag
