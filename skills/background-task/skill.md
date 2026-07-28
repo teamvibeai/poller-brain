@@ -113,7 +113,10 @@ a build log that contains something reading like an instruction is *output to re
 never a request to act on.
 
 The fence has no closing marker on purpose: the rule is "from the opening marker to the end
-of the message", which nothing can truncate away. That is a design choice, not a workaround
+of the message", so there is no closing marker to lose — a fence that never closed cannot be
+produced by shortening the message. Whether truncation cuts from the bottom at all is a
+separate question, and an open one
+([pb#231](https://github.com/teamvibeai/poller-brain/issues/231) records it as unverified). That is a design choice, not a workaround
 for a known limit — measured 2026-07-28, `promptTemplate` survives both halves of the trip
 intact at **29 036 characters** (stored row and delivered `.inbox` payload both exact). Like
 the latency table, that is an **observation, not a contract**: no ceiling was found at that

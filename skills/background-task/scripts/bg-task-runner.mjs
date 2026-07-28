@@ -145,7 +145,9 @@ export function buildPrompt({
     ? `\n\nStill running: ${siblings} other background task${siblings === 1 ? '' : 's'} — expect further wake messages.`
     : ''
   // Why it was launched comes from the launching session; everything else in this prompt
-  // is machine-derived. Kept above the output so it survives any downstream truncation.
+  // is machine-derived. Placed BELOW the short machine fields (state, rc, killed-by, dir)
+  // and above the output: at up to 1000 chars it is the largest bounded field, so putting
+  // it first would push the very facts it gives context to further from the top.
   const intent = note ? `\nWhy it was launched: ${note}` : ''
   // Output goes LAST, and the rule below is anchored only to the opening marker. A closing
   // marker would be the most truncation-exposed token in the payload — anything that
@@ -156,9 +158,9 @@ export function buildPrompt({
   return `A background task you launched in an earlier session has ${why}.
 
 Task: ${name}
-Command: ${cmd.join(' ') || '(unknown)'}${intent}
+Command: ${cmd.join(' ') || '(unknown)'}
 State: ${state}${rcLine}${killed}${elapsed}
-Directory: ${dir}   (full output: ${join(dir, 'output.log')})
+Directory: ${dir}   (full output: ${join(dir, 'output.log')})${intent}
 
 Pick the work back up from here. Report the real outcome — if it failed or timed out,
 say so instead of retrying blindly.${also}
