@@ -30,10 +30,66 @@ async function apiCall(method, path, body) {
   return data
 }
 
+// --- schedule timestamp rendering (#240) ---
+//
+// Stored schedules carry bare ISO-UTC timestamps. Reading one then means converting
+// UTC -> schedule timezone -> weekday in your head, with nothing to check the result
+// against — which is how #145 got filed as a day-of-week bug against a schedule that
+// had run correctly (the "skipped Thursday" was a Friday). These fields render what
+// the server already decided, in the schedule's own timezone, weekday spelled out.
+//
+// Deliberately NOT a preview of upcoming runs: `nextRunAt` is computed server-side by
+// cron-parser, and a locally recomputed occurrence list that disagreed with it would
+// be worse than none. Rendering only, no cron evaluation, no dependencies.
+
+const LOCAL_TIME_FIELDS = [
+  ['lastRunAt', 'lastRunAtLocal'],
+  ['nextRunAt', 'nextRunAtLocal'],
+  ['scheduledAt', 'scheduledAtLocal'],
+]
+
+function formatLocalTime(iso, timezone) {
+  if (typeof iso !== 'string' || !iso) return undefined
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return undefined
+  const tz = timezone || 'UTC'
+  let parts
+  try {
+    parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      weekday: 'short',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date)
+  } catch {
+    return undefined // unknown IANA zone — annotate nothing rather than render a wrong offset
+  }
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+  return `${p.weekday} ${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second} (${tz})`
+}
+
+function annotateSchedule(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+  const local = {}
+  for (const [source, target] of LOCAL_TIME_FIELDS) {
+    const rendered = formatLocalTime(row[source], row.timezone)
+    if (rendered) local[target] = rendered
+  }
+  if (Object.keys(local).length === 0) return row
+  // Annotations first: `promptTemplate` has no length ceiling, and anything below it
+  // is the first thing a truncated log drops. Original fields keep their exact values.
+  return { ...local, ...row }
+}
+
 const TOOLS = [
   {
     name: 'list_scheduled_messages',
-    description: 'List scheduled messages for the current workspace/channel. Returns all schedules with their status, cron expression, and next run time.',
+    description: 'List scheduled messages for the current workspace/channel. Returns all schedules with their status, cron expression, and next run time. Run timestamps are ISO-UTC; the matching *Local fields render them in the schedule timezone with the weekday — read those before concluding a schedule misfired.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -43,7 +99,7 @@ const TOOLS = [
   },
   {
     name: 'create_scheduled_message',
-    description: 'Create or update a scheduled message. For recurring schedules use CRON type with a cron expression. For one-time schedules use ONE_TIME type with scheduledAt.',
+    description: 'Create or update a scheduled message. For recurring schedules use CRON type with a cron expression. For one-time schedules use ONE_TIME type with scheduledAt. The response echoes the stored row including nextRunAt and nextRunAtLocal (schedule timezone + weekday) — check it fires when you intended.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -115,7 +171,9 @@ async function handleTool(name, args) {
       const channelId = args.channelId || CHANNEL_ID
       const params = new URLSearchParams({ workspaceId: WORKSPACE_ID })
       if (channelId) params.set('channelId', channelId)
-      return await apiCall('GET', `/scheduled-messages?${params}`)
+      const result = await apiCall('GET', `/scheduled-messages?${params}`)
+      if (!Array.isArray(result?.items)) return result
+      return { ...result, items: result.items.map(annotateSchedule) }
     }
 
     case 'create_scheduled_message': {
@@ -143,7 +201,7 @@ async function handleTool(name, args) {
         }
       }
 
-      return await apiCall('POST', '/scheduled-messages', body)
+      return annotateSchedule(await apiCall('POST', '/scheduled-messages', body))
     }
 
     case 'delete_scheduled_message': {
