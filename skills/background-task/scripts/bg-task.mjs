@@ -26,7 +26,7 @@ const DEFAULT_WAKE_DELAY = 30
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--channel SLACK_CHANNEL] ' +
-  '[--thread THREAD_TS] [--dry-run] -- <command...>\n' +
+  '[--thread THREAD_TS] [--note TEXT] [--dry-run] -- <command...>\n' +
   '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
@@ -44,6 +44,7 @@ export function parseArgs(argv, env = {}) {
     thread: env.SLACK_THREAD_TS || '',
     dryRun: env.BG_TASK_DRY === '1',
     wakeDelay: env.BG_TASK_WAKE_DELAY ?? String(DEFAULT_WAKE_DELAY),
+    note: '',
     cmd: [],
   }
   let i = 0
@@ -51,13 +52,14 @@ export function parseArgs(argv, env = {}) {
     const a = argv[i]
     if (a === '--') { i++; break }
     if (a === '--list') return { list: true }
-    const needsValue = ['--name', '--ttl', '--channel', '--thread'].includes(a)
+    const needsValue = ['--name', '--ttl', '--channel', '--thread', '--note'].includes(a)
     if (needsValue && i + 1 >= argv.length) return { error: `${a} needs a value` }
     switch (a) {
       case '--name': opts.name = argv[++i]; break
       case '--ttl': opts.ttl = argv[++i]; break
       case '--channel': opts.channel = argv[++i]; break
       case '--thread': opts.thread = argv[++i]; break
+      case '--note': opts.note = argv[++i]; break
       case '--dry-run': opts.dryRun = true; break
       case '-h': case '--help': return { help: true }
       default: return { error: `unknown argument: ${a}` }
@@ -228,6 +230,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   // One argument per line — the reviewable record of what was actually launched.
   writeFileSync(join(dir, 'cmd'), opts.cmd.join('\n') + '\n')
+
+  // The wake payload can only ever report WHAT happened (state, rc, output). WHY the task
+  // was launched, and what to do with the answer, is known only here — by the session that
+  // is still alive. Without it the woken session can report the result but cannot continue
+  // the work (canary finding, pb#231). Written as a file rather than threaded through
+  // argv: it is free text, and the runner reads the task dir anyway.
+  if (opts.note) writeFileSync(join(dir, 'note'), opts.note.endsWith('\n') ? opts.note : opts.note + '\n')
 
   const out = openSync(join(dir, 'runner.stdout'), 'a')
   // detached: true puts the runner in its own session and process group, so the
