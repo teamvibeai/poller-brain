@@ -37,17 +37,23 @@ Two things to know about that wake, because both have bitten people:
   the reply in the thread you launched from; without it the wake goes to the channel
   top level and the user has to work out what it refers to.
 
-Measured latency from end-of-command to a live session, across three canary rounds:
+Measured latency from end-of-command to a live session, across four canary rounds:
 
 | round | platform overhead after `scheduledAt` | end-to-end |
 |---|---|---|
 | 1 | 9–19 s | ~75–85 s |
 | 2 | 46–47 s | ~111–112 s |
 | 3 | 4.7 s, 4.85 s | ~35 s |
+| 4 | 50.3 s, 50.3 s | ~80 s |
 
 That overhead is an **observation, not a contract**, and the table is the proof: it moved
-by an order of magnitude in a single morning with no change on our side. Don't build
-anything that assumes headroom. The deliberate part of the gap is `BG_TASK_WAKE_DELAY`
+by an order of magnitude in a single morning with no change on our side. Rounds 3 and 4
+ran within the same hour on the same container, so the spread is **between runs, not
+between days** — and within a single round it is stable to the tenth of a second (4.7/4.85,
+then 50.3/50.3). You cannot infer "it's about 5 s" any more than "it's about 50 s"; the
+only safe reading is that you do not know. Don't build anything that assumes headroom.
+
+The deliberate part of the gap is `BG_TASK_WAKE_DELAY`
 (see *Why the wake is delayed*); the scheduler's own latency is a bonus that could vanish
 in any deploy — at round-3 speeds it very nearly has, leaving the 30 s constant as
 essentially the whole gap. Neither one prevents two sessions over one brain repo — they
