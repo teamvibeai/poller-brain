@@ -14,6 +14,7 @@ import { appendFileSync, closeSync, openSync, readdirSync, readFileSync, readSyn
 import { dirname, join } from 'node:path'
 
 const TAIL_BYTES = 1500
+const NOTE_CHARS = 1000 // see noteOf: the note is the only agent-authored field in the payload
 const KILL_GRACE_MS = 5000
 const DEFAULT_HTTP_TIMEOUT = 30 // seconds; overridable via BG_TASK_HTTP_TIMEOUT (tests)
 const TIMEOUT_RC = 124 // same code GNU `timeout` uses, so docs and habits carry over
@@ -90,12 +91,22 @@ export function countRunningSiblings(root, selfDir) {
 
 // The note written at launch (--note), if any. Free text authored by the launching agent,
 // so it carries the same trust as the command itself — unlike the command's output.
-export function noteOf(dir) {
+//
+// Capped, and the cap is the point: the note sits ABOVE the output, so an uncapped note
+// would push the log out of any downstream truncation while claiming the space itself.
+// Every other field in the payload has a ceiling (the tail has TAIL_BYTES, the rest are
+// short and machine-derived); leaving one field unbounded re-creates exactly the problem
+// putting the output last was meant to solve. Truncation is announced, never silent —
+// the full text stays in the task dir, whose path is in the payload.
+export function noteOf(dir, limit = NOTE_CHARS) {
+  let text
   try {
-    return readFileSync(join(dir, 'note'), 'utf8').trim()
+    text = readFileSync(join(dir, 'note'), 'utf8').trim()
   } catch {
     return ''
   }
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit)}… (note truncated at ${limit} chars — full text in ${join(dir, 'note')})`
 }
 
 export function buildPrompt({
@@ -120,7 +131,8 @@ export function buildPrompt({
   // marker would be the most truncation-exposed token in the payload — anything that
   // shortens the message eats it first, leaving a fence that never closed and output that
   // reads as if it were outside one. "Opening marker to the end of the message" cannot be
-  // broken that way. It also puts the one unbounded field where truncation belongs.
+  // broken that way. It also puts the largest and least valuable field last, which is
+  // where downstream truncation should bite.
   return `A background task you launched in an earlier session has ${why}.
 
 Task: ${name}

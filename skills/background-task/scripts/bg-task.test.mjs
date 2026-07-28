@@ -238,6 +238,16 @@ console.log('noteOf')
   eq('missing note file is empty, not an error', noteOf(dir), '')
   writeFileSync(join(dir, 'note'), 'why it ran\n')
   eq('note is read and trimmed', noteOf(dir), 'why it ran')
+
+  // The note is the only agent-authored field in the payload, and it sits ABOVE the
+  // output. Uncapped, a long note would push the log out of any downstream truncation
+  // and take the space itself — undoing the reason the output was moved last.
+  writeFileSync(join(dir, 'note'), 'x'.repeat(50_000))
+  const capped = noteOf(dir, 1000)
+  ok('a long note cannot inflate the payload without bound', capped.length < 1200, capped.length)
+  has('truncation is announced, not silent', capped, 'note truncated at 1000 chars')
+  has('the full text is still reachable', capped, join(dir, 'note'))
+  eq('a note within the limit is untouched', noteOf(dir, 50_000).length, 50_000)
   rmSync(dir, { recursive: true, force: true })
 }
 
