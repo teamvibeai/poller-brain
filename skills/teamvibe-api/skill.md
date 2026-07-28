@@ -26,6 +26,20 @@ Create or update a schedule.
 | `endDate` | no | Optional end date for recurring schedules |
 | `scheduleId` | no | Pass existing ID to update a schedule |
 | `status` | no | `ACTIVE` (default) or `PAUSED` |
+| `origin` | no | *Delivery target* (`channel`, `thread_ts`, `source`) for the scheduled runs. Auto-inherits **this session's** channel if omitted, and is **frozen** at create time — see the warning below. |
+
+> ⚠️ **Delivery target is frozen from the creating session.** If you omit `origin`, the schedule's delivery channel is captured from **the Slack channel you are in right now** and replayed on every run. Create a schedule from a **DM** (or any channel that isn't the intended recipient) and every run is delivered *there*, not where you meant. This caused a real misdelivery — a reminder went to the wrong person's DM ([poller-brain#124](https://github.com/teamvibeai/poller-brain/issues/124)).
+>
+> **Rule:** when the schedule is meant for a **different channel/recipient than your current session**, pass `origin` explicitly:
+> ```json
+> {
+>   "scheduleType": "ONE_TIME",
+>   "scheduledAt": "2026-03-15T09:00:00Z",
+>   "promptTemplate": "Post: 'Reminder: ...'",
+>   "origin": { "source": "slack", "channel": "C0PROJECT123" }
+> }
+> ```
+> The `create_scheduled_message` response echoes a `delivery` block with the resolved `channel` and a `resolvedFrom` flag (`inherited-from-current-session` vs `explicit-origin`) — **verify it matches the intended recipient** before trusting the schedule.
 
 ### list_scheduled_messages
 
