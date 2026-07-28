@@ -172,6 +172,139 @@ async function computeMissingTagWarning(channel, threadTs, text, justSentTs = nu
   }
 }
 
+// --- thread_ts override guardrail (teamvibeai/teamvibe.ai#184, phase 1) ---
+//
+// Measurement rail for phase 3: the `warning_codes` field of the response. The
+// poller already logs every tool_result into the session log (claude-spawner.ts
+// formatStreamEvent → sessionLog.claude('stdout', …)), so counting occurrences
+// of a warning code needs no new plumbing. A stderr marker from this file
+// would NOT work — the poller captures the claude CLI's stderr, not an MCP
+// child's, so it would be a silent-green counter (DevGuru review #1).
+//
+// Two codes, deliberately: `thread_ts_override_unjustified` (signals A and C
+// both fired) and `thread_ts_override_unverified` (A fired, C unreadable). A
+// silent third case would make "we could not tell" indistinguishable from
+// "nothing happened" and would bias phase 3 toward a false all-clear.
+
+// "Did the user point at this thread?" — three forms count, because an archive
+// URL carries the *message* ts in its `p<ts>` path segment and the thread ts
+// only in the `?thread_ts=` query param (DevGuru review #3):
+//   1. raw ts pasted in the text            → 1780637428.794809
+//   2. `?thread_ts=` on a reply permalink   → also the raw ts, same check
+//   3. thread-parent permalink path segment → p1780637428794809
+function referencesThreadTs(text, threadTs) {
+  if (!text || !threadTs) return false
+  const ts = String(threadTs).trim()
+  if (!ts) return false
+  return text.includes(ts) || text.includes(`p${ts.replace('.', '')}`)
+}
+
+// Pure decision for the `thread_ts_override_unjustified` warning. No I/O, no
+// LLM — the caller supplies the triggering user message text.
+//
+// Phase 1 implements signal A (explicit target ≠ session current thread) and
+// signal C (triggering message does not reference the target). Signal B
+// (target is among the last N wake sources) needs a per-channel wake ledger,
+// which is a new DDB access pattern — deferred to phase 3, see the issue.
+// Consequence: an agent-to-agent handoff back into a recently-woken thread
+// warns even though it is legitimate. The detail text says so explicitly.
+//
+// triggerText === null means "could not be determined" and MUST be resolved by
+// the caller before deciding — this function treats it as "no reference".
+function computeThreadOverrideWarning({ explicitThreadTs, sessionThreadTs, triggerText }) {
+  // Gate: only an explicitly passed thread_ts can be an override. Omitting it
+  // is the documented default and always routes to the session thread.
+  if (explicitThreadTs === undefined) return null
+  // Exception 4: `thread_ts: null` is the documented top-level broadcast.
+  if (explicitThreadTs === null) return null
+  // Exception 1: no session thread at all — scheduled message with its own
+  // target, or a cold start with no thread context. Nothing to deviate from.
+  if (!sessionThreadTs) return null
+  // Signal A is an exact match, so normalize both sides first: a stray space or
+  // a numeric ts would otherwise read as a foreign thread (DevGuru review #2).
+  const target = String(explicitThreadTs).trim()
+  const session = String(sessionThreadTs).trim()
+  if (!target || !session) return null
+  if (target === session) return null
+  // Signal C / exception 2: the user's own message points at the target thread
+  // (raw ts or permalink) — that is a cross-thread handoff they asked for.
+  if (referencesThreadTs(triggerText, target)) return null
+  return {
+    code: 'thread_ts_override_unjustified',
+    detail:
+      `You passed thread_ts=${target}, but this session's current thread is ${session}, ` +
+      `and the message that woke you does not reference ${target}. The reply landed in a thread the ` +
+      `user may not be reading. If that was unintentional, delete it with chat.delete(ts) and re-send without ` +
+      `thread_ts. Ignore this warning if the override was deliberate — a handoff into a thread you were recently ` +
+      `woken from is legitimate and is not yet detected here.`,
+    session_thread_ts: session,
+    override_thread_ts: target,
+  }
+}
+
+// Fetches the text of the message that woke this session, so signal C can be
+// evaluated. Returns '' for a genuinely empty message and null when the text
+// could not be determined (API failure, message not in the thread) — the two
+// cases must not collapse, see resolveThreadOverrideWarning.
+//
+// Windowed with `latest`/`inclusive` rather than a plain `limit`, so the fetch
+// asks for exactly the one message it needs instead of leaning on how Slack
+// pages a thread. (Measured: `limit: N` returns the parent plus the N *newest*
+// replies, so a plain limit would in fact have found the trigger message — but
+// that direction is not in the docs and is not worth depending on.)
+async function getTriggerMessageText(channel, threadTs, messageTs) {
+  if (!channel || !threadTs || !messageTs) return null
+  try {
+    const result = await slackApi('conversations.replies', {
+      channel,
+      ts: threadTs,
+      latest: messageTs,
+      inclusive: true,
+      limit: 1,
+    })
+    const msg = (result.messages || []).find((m) => m.ts === messageTs)
+    return msg ? msg.text || '' : null
+  } catch {
+    return null // best-effort — never fail send_message on warning detection
+  }
+}
+
+// Emitted when an override is real (signal A fired) but signal C could not be
+// evaluated: the trigger message was unreachable. Without it, "override we
+// could not verify" and "no override at all" look identical in the session log,
+// and phase 3 would count a zero and read it as a low false-positive rate
+// (DevGuru diff-check #3). This gives that measurement a denominator.
+function unverifiedOverrideWarning(session, target) {
+  return {
+    code: 'thread_ts_override_unverified',
+    detail:
+      `You passed thread_ts=${target} while this session's thread is ${session}. Could not read the ` +
+      `message that woke you, so whether you were asked to post there is unknown. Check the target thread is right.`,
+    session_thread_ts: session,
+    override_thread_ts: target,
+  }
+}
+
+async function resolveThreadOverrideWarning(explicitThreadTs, sessionThreadTs) {
+  // Cheap pure gates first: no Slack API call unless a real override is on the
+  // table (triggerText: null here only defers the signal C check).
+  const provisional = computeThreadOverrideWarning({
+    explicitThreadTs,
+    sessionThreadTs,
+    triggerText: null,
+  })
+  if (!provisional) return null
+  // DEFAULT_CHANNEL, not the message's target channel: the session thread and
+  // the message that woke us live in the channel we were woken from. Reading
+  // the target channel made the guardrail silent on cross-channel posts —
+  // exactly where a misrouted reply is most expensive (DevGuru diff-check #2).
+  const triggerText = await getTriggerMessageText(DEFAULT_CHANNEL, sessionThreadTs, DEFAULT_MESSAGE_TS)
+  if (triggerText === null) {
+    return unverifiedOverrideWarning(provisional.session_thread_ts, provisional.override_thread_ts)
+  }
+  return computeThreadOverrideWarning({ explicitThreadTs, sessionThreadTs, triggerText })
+}
+
 // Single source of truth for "is this a pipe-table row?" — shared by the
 // detection gate (computePipeTableWarning) and the auto-convert splitter
 // (convertPipeTablesToBlocks) so the two can never disagree on what a table
@@ -292,6 +425,23 @@ function convertPipeTablesToBlocks(text) {
       fallback_text: fallbackText,
     },
   }
+}
+
+// Assembles the send_message response. Key insertion order is load-bearing:
+// JSON.stringify emits keys in insertion order, and the poller truncates a
+// logged tool_result at 200 chars (claude-spawner.ts truncateOutput), so
+// anything unbounded placed earlier can push later keys out of the session log.
+// `warning_codes` therefore goes ahead of `transformed`, whose `fallback_text`
+// is the message's whole prose and can be arbitrarily long (DevGuru diff-check).
+// The session log is the measurement rail for #184 phase 3 and for the #108
+// counting that predates it; neither should depend on message length.
+function buildSendResponse({ ts, transformed, warnings }) {
+  const finalWarnings = (warnings || []).filter(Boolean)
+  const response = { ok: true, ts }
+  if (finalWarnings.length) response.warning_codes = finalWarnings.map((w) => w.code)
+  if (transformed) response.transformed = transformed
+  if (finalWarnings.length) response.warnings = finalWarnings
+  return response
 }
 
 // Pure payload builder for send_message: decides final blocks / effective text /
@@ -651,17 +801,17 @@ async function handleTool(name, args) {
       // lookback skips the just-sent message (self) — eliminates the race
       // where self appears as last_speaker. See teamvibeai/teamvibe.ai#108.
       const warning = await computeMissingTagWarning(channel, thread_ts, effectiveText, result.ts)
+      // Did we reply into a thread the user isn't in? Reads args.thread_ts (not
+      // the resolved thread_ts) because the guardrail must tell an explicit
+      // override apart from the omitted default. See teamvibeai/teamvibe.ai#184.
+      const overrideWarning = await resolveThreadOverrideWarning(args.thread_ts, DEFAULT_THREAD_TS)
       // One signal per branch (DevGuru): the convert branch echoes `transformed`
       // and suppresses the #224 table warning (the table was handled); the
       // opt-out/passthrough branch keeps the table warning. missing_recipient_tag
       // is an orthogonal concern and applies to both.
-      const warnings = [warning]
+      const warnings = [warning, overrideWarning]
       if (!transformed && tableWarning) warnings.push(tableWarning)
-      const response = { ok: true, ts: result.ts }
-      if (transformed) response.transformed = transformed
-      const finalWarnings = warnings.filter(Boolean)
-      if (finalWarnings.length) response.warnings = finalWarnings
-      return response
+      return buildSendResponse({ ts: result.ts, transformed, warnings })
     }
 
     case 'add_reaction': {
