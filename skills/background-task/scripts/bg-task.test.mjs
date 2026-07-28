@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LAUNCHER = join(HERE, 'bg-task.mjs')
 
-const { parseArgs, taskId } = await import(join(HERE, 'bg-task.mjs'))
+const { parseArgs, taskId, taskRoot, taskRow, listTasks, formatTaskList, parseStatus } =
+  await import(join(HERE, 'bg-task.mjs'))
 const { buildPrompt, buildBody, tailOf, countRunningSiblings, parseRunnerArgs } =
   await import(join(HERE, 'bg-task-runner.mjs'))
 
@@ -85,6 +86,70 @@ console.log('parseArgs')
   eq('--thread overrides env', parseArgs(['--thread', '9.9', '--', 'true'], { ...ENV, SLACK_THREAD_TS: '123.456' }).opts.thread, '9.9')
   eq('-- separates flags from a command that has its own flags',
     JSON.stringify(parseArgs(['--', 'ls', '--color'], ENV).opts.cmd), JSON.stringify(['ls', '--color']))
+}
+
+console.log('--list parsing + rows')
+{
+  eq('--list is its own mode, no command required', parseArgs(['--list'], ENV).list, true)
+  eq('--list does not error on a missing command', !!parseArgs(['--list'], ENV).error, false)
+
+  eq('taskRoot namespaces by channel',
+    taskRoot({ BG_TASK_ROOT: '/r', TEAMVIBE_CHANNEL_ID: '01C' }), '/r/01C')
+
+  const running = taskRow('20260728T080102Z-42-build', 'started=2026-07-28T08:01:02Z\npid=1\nttl=900s\n')
+  eq('no state line → running', running.state, 'running')
+  eq('name parsed out of the id', running.name, 'build')
+  eq('running task has no wake state yet', running.wake, '-')
+  eq('running task has no elapsed', running.elapsed, '')
+
+  const done = taskRow('20260728T080102Z-42-my_build',
+    'started=2026-07-28T08:01:02Z\nstate=finished\nrc=0\nended=2026-07-28T08:05:02Z\nenqueued=x\nhttp_status=201\n')
+  eq('finished state', done.state, 'finished')
+  eq('rc surfaced', done.rc, '0')
+  eq('elapsed computed from started/ended', done.elapsed, '240s')
+  eq('wake sent', done.wake, 'sent')
+  eq('name keeps underscores', done.name, 'my_build')
+
+  // The whole point of --list: a task that ran but whose notification never landed.
+  const lost = taskRow('20260728T080102Z-42-x',
+    'started=2026-07-28T08:01:02Z\nstate=finished\nrc=0\nended=2026-07-28T08:01:12Z\nenqueue_failed=1 reason=http_500\n')
+  eq('failed wake is called out, not hidden', lost.wake, 'FAILED')
+  const crashed = taskRow('20260728T080102Z-42-x', 'started=x\nstate=finished\nrc=0\nrunner_crashed=y\n')
+  eq('runner crash counts as a failed wake', crashed.wake, 'FAILED')
+  const oddCode = taskRow('20260728T080102Z-42-x', 'state=finished\nrc=0\nenqueued=x\nhttp_status=403\n')
+  eq('non-2xx http status is shown verbatim', oddCode.wake, 'http 403')
+  const dry = taskRow('20260728T080102Z-42-x', 'state=finished\nrc=0\ndry_run=1 bytes=10\n')
+  eq('dry run is distinguishable from a real send', dry.wake, 'dry-run')
+  const stranded = taskRow('20260728T080102Z-42-x', 'state=finished\nrc=0\n')
+  eq('terminal state with no enqueue line → pending', stranded.wake, 'pending')
+
+  eq('parseStatus keeps values containing =', parseStatus('a=b=c\n').a, 'b=c')
+  eq('parseStatus ignores lines without =', Object.keys(parseStatus('junk\na=1\n')).length, 1)
+}
+
+console.log('--list rendering')
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs')
+  const root = join(WORK, 'listroot')
+  mkdirSync(join(root, '20260728T080100Z-1-older'), { recursive: true })
+  writeFileSync(join(root, '20260728T080100Z-1-older', 'status'),
+    'started=2026-07-28T08:01:00Z\nstate=finished\nrc=1\nended=2026-07-28T08:01:30Z\nenqueued=x\nhttp_status=201\n')
+  mkdirSync(join(root, '20260728T090000Z-2-newer'), { recursive: true })
+  writeFileSync(join(root, '20260728T090000Z-2-newer', 'status'), 'started=2026-07-28T09:00:00Z\n')
+  mkdirSync(join(root, '20260728T070000Z-3-nostatus'), { recursive: true })
+
+  const rows = listTasks(root)
+  eq('lists every task dir', rows.length, 3)
+  eq('newest first', rows[0].name, 'newer')
+  eq('a dir with no status file still lists as running', rows[2].state, 'running')
+  eq('missing root → empty list, no throw', listTasks(join(WORK, 'nope')).length, 0)
+
+  const out = formatTaskList(rows)
+  has('header present', out, 'NAME')
+  has('wake column present', out, 'WAKE')
+  has('failing rc visible', out, '1')
+  has('running count summarised', out, '2 still running')
+  has('empty case says so', formatTaskList([]), 'no background tasks recorded')
 }
 
 console.log('taskId')
@@ -199,6 +264,21 @@ console.log('launch validation')
   const noEnv = launch(['--', 'true'], { TEAMVIBE_POLLER_TOKEN: '' })
   eq('missing env exits 2', noEnv.code, 2)
   has('missing env names the variable', noEnv.stderr, 'TEAMVIBE_POLLER_TOKEN')
+}
+
+console.log('--list end to end')
+{
+  const r = launch(['--list'])
+  eq('--list exits 0', r.code, 0)
+  has('--list works before any task exists', r.stdout, 'no background tasks recorded')
+
+  const noChan = launch(['--list'], { TEAMVIBE_CHANNEL_ID: '' })
+  eq('--list still requires the channel namespace', noChan.code, 2)
+  has('and names the missing variable', noChan.stderr, 'TEAMVIBE_CHANNEL_ID')
+
+  // --list must not require the launch-path env (no token needed to read local state).
+  const noToken = launch(['--list'], { TEAMVIBE_POLLER_TOKEN: '', TEAMVIBE_API_URL: '' })
+  eq('--list does not require an API token', noToken.code, 0)
 }
 
 console.log('finish path')

@@ -11,7 +11,7 @@
 // Reliability bar: BEST-EFFORT (see skill.md). Survives the launching session. Does NOT
 // survive a poller restart. Never present it to a user as a durability guarantee.
 import { spawn } from 'node:child_process'
-import { mkdirSync, openSync, writeFileSync } from 'node:fs'
+import { mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -26,7 +26,8 @@ const DEFAULT_WAKE_DELAY = 30
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--channel SLACK_CHANNEL] ' +
-  '[--thread THREAD_TS] [--dry-run] -- <command...>'
+  '[--thread THREAD_TS] [--dry-run] -- <command...>\n' +
+  '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
   console.error(`bg-task: ${msg}`)
@@ -49,6 +50,7 @@ export function parseArgs(argv, env = {}) {
   for (; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--') { i++; break }
+    if (a === '--list') return { list: true }
     const needsValue = ['--name', '--ttl', '--channel', '--thread'].includes(a)
     if (needsValue && i + 1 >= argv.length) return { error: `${a} needs a value` }
     switch (a) {
@@ -88,15 +90,118 @@ export const REQUIRED_ENV = [
   'TEAMVIBE_CHANNEL_ID',
 ]
 
+// Namespaced per channel: a poller can host several brains and they share
+// $PERSISTENT_STORAGE_PATH. Without the namespace, two brains starting a same-named task
+// in the same second collide on one directory. Hygiene, not isolation — every brain on
+// the poller runs as the same user (spelled out in skill.md).
+export function taskRoot(env) {
+  return join(
+    env.BG_TASK_ROOT || join(env.PERSISTENT_STORAGE_PATH || '/tmp', 'bg-tasks'),
+    env.TEAMVIBE_CHANNEL_ID,
+  )
+}
+
 export function taskId(name, pid, now) {
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
   return `${stamp}-${pid}-${String(name).replace(/[^A-Za-z0-9_-]/g, '_')}`
+}
+
+// --- listing ----------------------------------------------------------------------
+// A task whose wake notification never arrived is invisible otherwise: the state is on
+// disk, but you have to know to go looking. --list makes that recoverable, and also
+// answers "what else is running right now", which is otherwise only visible via ps.
+
+export function parseStatus(text) {
+  const kv = {}
+  for (const line of String(text).split('\n')) {
+    const i = line.indexOf('=')
+    if (i > 0) kv[line.slice(0, i)] = line.slice(i + 1)
+  }
+  return kv
+}
+
+// Wake delivery is its own column because "the task finished" and "you were told" are
+// different facts, and only the second one can silently fail.
+function wakeStateOf(kv, state) {
+  if (kv.dry_run) return 'dry-run'
+  if (kv.enqueue_failed) return 'FAILED'
+  if (kv.runner_crashed) return 'FAILED'
+  if (kv.enqueued) {
+    const code = kv.http_status
+    return code && !['200', '201'].includes(code) ? `http ${code}` : 'sent'
+  }
+  return state === 'running' ? '-' : 'pending'
+}
+
+export function taskRow(id, statusText) {
+  const kv = parseStatus(statusText)
+  const m = /^(\d{8}T\d{6}Z)-(\d+)-(.*)$/.exec(id)
+  const state = kv.state || 'running'
+  let elapsed = ''
+  if (kv.started && kv.ended) {
+    const secs = Math.round((Date.parse(kv.ended) - Date.parse(kv.started)) / 1000)
+    if (Number.isFinite(secs)) elapsed = `${secs}s`
+  }
+  return {
+    id,
+    name: m ? m[3] : id,
+    state,
+    rc: kv.rc ?? '',
+    ended: kv.ended || '',
+    elapsed,
+    wake: wakeStateOf(kv, state),
+  }
+}
+
+export function listTasks(root) {
+  let entries
+  try {
+    entries = readdirSync(root)
+  } catch {
+    return []
+  }
+  return entries
+    .map((id) => {
+      let status = ''
+      try {
+        status = readFileSync(join(root, id, 'status'), 'utf8')
+      } catch { /* dir without status yet — still worth listing as running */ }
+      return taskRow(id, status)
+    })
+    .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+}
+
+export function formatTaskList(rows) {
+  if (!rows.length) return 'no background tasks recorded for this channel'
+  const head = { name: 'NAME', state: 'STATE', rc: 'RC', elapsed: 'RAN', ended: 'ENDED', wake: 'WAKE' }
+  const cols = ['name', 'state', 'rc', 'elapsed', 'ended', 'wake']
+  const width = {}
+  for (const c of cols) {
+    width[c] = Math.max(head[c].length, ...rows.map((r) => String(r[c]).length))
+  }
+  const line = (r) => cols.map((c) => String(r[c]).padEnd(width[c])).join('  ').trimEnd()
+  const running = rows.filter((r) => r.state === 'running').length
+  return [
+    line(head),
+    ...rows.map(line),
+    '',
+    `${rows.length} task${rows.length === 1 ? '' : 's'}, ${running} still running`,
+  ].join('\n')
 }
 
 // --- main -------------------------------------------------------------------------
 if (import.meta.url === `file://${process.argv[1]}`) {
   const parsed = parseArgs(process.argv.slice(2), process.env)
   if (parsed.help) { console.log(USAGE); process.exit(0) }
+
+  // --list is read-only: it needs the channel namespace and nothing else, so it must not
+  // be gated behind the launch-path validation (a command, an API token).
+  if (parsed.list) {
+    if (!process.env.TEAMVIBE_CHANNEL_ID) die('missing environment variable TEAMVIBE_CHANNEL_ID', 2)
+    console.log(formatTaskList(listTasks(taskRoot(process.env))))
+    process.exit(0)
+  }
+
   if (parsed.error) die(parsed.error)
   const { opts } = parsed
 
@@ -104,14 +209,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (!process.env[v]) die(`missing environment variable ${v} — cannot deliver the finish signal`, 2)
   }
 
-  // Namespaced per channel: a poller can host several brains and they share
-  // $PERSISTENT_STORAGE_PATH. Without the namespace, two brains starting a same-named
-  // task in the same second collide on one directory. Hygiene, not isolation — every
-  // brain on the poller runs as the same user (spelled out in skill.md).
-  const root = join(
-    process.env.BG_TASK_ROOT || join(process.env.PERSISTENT_STORAGE_PATH || '/tmp', 'bg-tasks'),
-    process.env.TEAMVIBE_CHANNEL_ID,
-  )
+  const root = taskRoot(process.env)
   const id = taskId(opts.name, process.pid, new Date())
   const dir = join(root, id)
   try {
