@@ -53,7 +53,11 @@ command -v timeout >/dev/null 2>&1 || { echo "bg-task: timeout not available —
 command -v python3 >/dev/null 2>&1 || { echo "bg-task: python3 not available — needed to build the finish message" >&2; exit 2; }
 [ -x "$RUNNER" ] || { echo "bg-task: runner not executable: $RUNNER" >&2; exit 2; }
 
-ROOT="${BG_TASK_ROOT:-${PERSISTENT_STORAGE_PATH:-/tmp}/bg-tasks}"
+# Namespaced per channel: a poller can host several brains, and they share
+# $PERSISTENT_STORAGE_PATH. Without the namespace two brains starting the same-named
+# task in the same second collide on one directory. This is hygiene, not isolation —
+# every brain on the poller runs as the same user (see skill.md).
+ROOT="${BG_TASK_ROOT:-${PERSISTENT_STORAGE_PATH:-/tmp}/bg-tasks}/$TEAMVIBE_CHANNEL_ID"
 SAFE_NAME="${NAME//[^A-Za-z0-9_-]/_}"
 ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-$SAFE_NAME"
 DIR="$ROOT/$ID"

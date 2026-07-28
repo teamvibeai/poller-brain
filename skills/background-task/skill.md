@@ -68,6 +68,18 @@ So: safe for "this takes a while", wrong for "this must not be lost". If a task
 absolutely has to complete, say that constraint out loud instead of hiding it behind a
 background task.
 
+## Task storage is shared, not private
+
+On a poller hosting several brains, `$PERSISTENT_STORAGE_PATH` is **shared between them**.
+Task directories are namespaced per channel (`bg-tasks/<channel id>/…`) so two brains
+cannot collide on one directory — but that is hygiene, not isolation: every brain on the
+poller runs as the same user and can read every task directory, whatever the file
+permissions say.
+
+**Do not run background tasks whose output contains secrets** — tokens, credentials,
+customer data. The output log sits on disk until cleaned up, readable by anything else
+running on that poller.
+
 ## How the wake actually works (and what not to try)
 
 The finish signal is a one-time scheduled message posted to

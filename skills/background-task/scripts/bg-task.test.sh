@@ -43,7 +43,8 @@ wait_done() {
   return 1
 }
 
-latest_dir() { ls -1dt "$BG_TASK_ROOT"/*/ 2>/dev/null | head -1 | sed 's:/$::'; }
+# Task dirs live one level down, under the channel namespace: <root>/<channel>/<id>/
+latest_dir() { ls -1dt "$BG_TASK_ROOT"/*/*/ 2>/dev/null | head -1 | sed 's:/$::'; }
 
 echo "validation"
 check "no command → exit 2"            "$(run --name x)"                       2
@@ -67,6 +68,7 @@ echo "launch + finish path"
 check "launch exits 0" "$(run --name unit-ok --ttl 60 -- /bin/echo hello-from-task)" 0
 contains "launch prints the task id" "$(cat "$WORK/out")" "bg-task launched: name=unit-ok"
 contains "launch tells the agent not to poll" "$(cat "$WORK/out")" "Do not poll"
+contains "task dir is namespaced by channel id" "$(latest_dir)" "/$TEAMVIBE_CHANNEL_ID/"
 
 D="$(latest_dir)"
 if wait_done "$D"; then
