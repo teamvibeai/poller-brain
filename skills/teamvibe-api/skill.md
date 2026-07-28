@@ -31,6 +31,8 @@ Create or update a schedule.
 
 List all schedules for the current channel. No required parameters.
 
+Every run timestamp comes back twice: the stored ISO-UTC value (`lastRunAt`, `nextRunAt`, `scheduledAt`) and a rendered `*Local` twin in the schedule's own timezone with the weekday — `"lastRunAtLocal": "Thu 2026-05-28 18:00:17 (Europe/Prague)"`. Read the `*Local` field. See [Verifying a schedule](#verifying-a-schedule).
+
 ### delete_scheduled_message
 
 | Parameter | Required | Description |
@@ -136,6 +138,21 @@ User: "Change that PR check to 9am instead"
 - **ONE_TIME:** `timezone` is **not used**. `scheduledAt` must be UTC (with `Z` suffix). Convert local times to UTC before sending.
 - If the user doesn't specify their timezone for CRON schedules, ask once and remember in MEMORY.md.
 - Common timezones: `Europe/Prague`, `America/New_York`, `America/Los_Angeles`, `Asia/Tokyo`
+
+## Verifying a schedule
+
+Before concluding that a schedule misfired — and **always** before filing a bug about one — check it against the rendered timestamps rather than your own arithmetic.
+
+**Never assert a weekday from a date without computing it.** This is not a style rule; it is the failure that produced [#145](https://github.com/teamvibeai/poller-brain/issues/145). A schedule on `0 18 * * 1-4` (Mon–Thu) was reported as having skipped Thursday `2026-05-29`. That date was a **Friday**, the Thursday run had happened normally, and the resulting bug report against the scheduler cost a full diagnosis cycle. The stored row said everything needed to refute it — but only in UTC, so the check was never made.
+
+The routine:
+
+1. Read `lastRunAtLocal` and `nextRunAtLocal`, not `lastRunAt` / `nextRunAt`. They carry the weekday and the schedule's own timezone.
+2. Confirm both weekdays are allowed by the day-of-week field of `cronExpression`. If the last run and the next run both sit inside the pattern, nothing was skipped — a gap over excluded days is the schedule working.
+3. Remember what `lastRunAt` actually means: the run was **enqueued** at that moment, not necessarily delivered. It is evidence the scheduler fired, not evidence you received anything.
+4. If you still believe a run was missed, say what you checked and what remains unexplained. "`nextRunAt` jumped from Thu to Mon and `1-4` includes Thursday" is a claim; "Thursday's run is absent from `lastRunAtLocal` although the previous and following occurrences both landed" is evidence.
+
+After `create_scheduled_message`, the response echoes the stored row with `nextRunAtLocal` — one glance confirms the cron means what you intended before you walk away from it.
 
 ## Common cron patterns
 
