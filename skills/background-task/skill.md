@@ -67,7 +67,7 @@ describe a timeout as a success.
 | `--channel C…` | `$SLACK_CHANNEL` | Where the wake goes. Only override to deliver into a different channel on purpose. |
 | `--dry-run` | off | Runs the command but writes the wake payload to `enqueue.json` instead of sending it. |
 | `-- <command…>` | required | Everything after `--` is the command. Not a shell string — no pipes or redirects unless you wrap it in `bash -c "…"`. |
-| `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the wake was delivered. Needs no API token. |
+| `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the wake was accepted. Needs no API token. |
 
 `BG_TASK_WAKE_DELAY` (env, default `30`) delays the wake by that many seconds after the
 command ends. See *Why the wake is delayed* — don't set it to `0`.
@@ -82,7 +82,7 @@ the tail isn't enough.
 ```
 $ node bg-task.mjs --list
 NAME        STATE     RC  RAN  ENDED                     WAKE
-demo-build  finished  3   0s   2026-07-28T08:23:37.776Z  sent
+demo-build  finished  3   0s   2026-07-28T08:23:37.776Z  enqueued
 
 1 task, 0 still running
 ```
@@ -91,8 +91,10 @@ Two reasons to reach for this:
 
 - **The wake can fail.** If the finish signal doesn't get through, the task still ran and
   its output is still on disk — but nothing tells you. The `WAKE` column is the one that
-  makes that visible: `sent`, `pending`, `http 4xx`, or `FAILED`. "The task finished" and
-  "you were told" are different facts, and only the second one fails silently.
+  makes that visible: `enqueued`, `pending`, `http 4xx`, or `FAILED`. "The task finished"
+  and "you were told" are different facts, and only the second one fails silently.
+  Note `enqueued` means the API accepted the wake, **not** that it was delivered — that is
+  the strongest claim the status file can support.
 - **Running tasks are otherwise invisible.** Without this there is no way to see what is
   in flight for this channel short of reading `ps`.
 

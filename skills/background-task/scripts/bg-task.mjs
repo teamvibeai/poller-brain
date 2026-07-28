@@ -122,13 +122,21 @@ export function parseStatus(text) {
 
 // Wake delivery is its own column because "the task finished" and "you were told" are
 // different facts, and only the second one can silently fail.
+//
+// Every value here asserts exactly what the status file proves and no more. `enqueued`
+// deliberately does NOT claim "delivered" — the status file cannot know that; it only
+// knows the API accepted the schedule. Naming it `sent` invited the same conflation the
+// `new/` -> `processing/` transition invites (a move proves pickup, not processing).
+// When the inbox-drop + cancel-on-pickup path lands it must add its OWN values
+// (`cancelled`, `delivered-inbox`), not reuse this one: a schedule the runner cancelled
+// because the other path delivered first is a different fact again.
 function wakeStateOf(kv, state) {
   if (kv.dry_run) return 'dry-run'
   if (kv.enqueue_failed) return 'FAILED'
   if (kv.runner_crashed) return 'FAILED'
   if (kv.enqueued) {
     const code = kv.http_status
-    return code && !['200', '201'].includes(code) ? `http ${code}` : 'sent'
+    return code && !['200', '201'].includes(code) ? `http ${code}` : 'enqueued'
   }
   return state === 'running' ? '-' : 'pending'
 }

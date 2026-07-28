@@ -107,7 +107,10 @@ console.log('--list parsing + rows')
   eq('finished state', done.state, 'finished')
   eq('rc surfaced', done.rc, '0')
   eq('elapsed computed from started/ended', done.elapsed, '240s')
-  eq('wake sent', done.wake, 'sent')
+  // The label asserts what the status file proves — the API accepted the schedule —
+  // and NOT that anything was delivered. Renaming this to something stronger would
+  // re-merge the two facts the WAKE column exists to separate.
+  eq('accepted schedule reads as enqueued, not delivered', done.wake, 'enqueued')
   eq('name keeps underscores', done.name, 'my_build')
 
   // The whole point of --list: a task that ran but whose notification never landed.
