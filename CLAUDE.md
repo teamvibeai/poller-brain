@@ -184,7 +184,7 @@ Use `mcp__teamvibe-api__*` tools (`create_scheduled_message`, `list_scheduled_me
 ## Long-Running Commands
 
 A command that outlives your session (build, full test suite, long scrape) must not run in
-the foreground — it dies with the session. Launch it via the `background-task` skill, end
+the foreground — it dies with the session. Launch it via the `background-task` skill (`node .../bg-task.mjs`), end
 your turn, and you'll be woken in this channel when it ends. Never poll or `sleep` waiting
 for one. Best-effort only: it survives session teardown, not a poller restart.
 
