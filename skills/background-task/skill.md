@@ -38,7 +38,13 @@ Two things to know about that wake, because both have bitten people:
   top level and the user has to work out what it refers to.
 
 Measured latency from end-of-command to a live session: **~110 s** (two canary runs at
-112 s and 111 s — about 50 s of that is platform overhead after `scheduledAt`).
+112 s and 111 s — about 46–50 s of that is platform overhead after `scheduledAt`).
+
+That overhead is an **observation, not a contract.** It is the only thing currently
+keeping a wake from landing while the launching session is still alive; if the scheduler
+gets faster, two sessions over one brain repo stop being a risk and become a certainty
+(see [teamvibe.ai#232](https://github.com/teamvibeai/teamvibe.ai/issues/232)). Don't build
+anything that assumes you have ~46 s of headroom.
 
 Two terminal states:
 
