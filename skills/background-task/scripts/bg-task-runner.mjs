@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path'
 
 const TAIL_BYTES = 1500
 const KILL_GRACE_MS = 5000
+const DEFAULT_HTTP_TIMEOUT = 30 // seconds; overridable via BG_TASK_HTTP_TIMEOUT (tests)
 const TIMEOUT_RC = 124 // same code GNU `timeout` uses, so docs and habits carry over
 export const DEFAULT_WAKE_DELAY = 30 // seconds; see buildBody for why this is not 0
 
@@ -98,12 +99,17 @@ export function noteOf(dir) {
 }
 
 export function buildPrompt({
-  name, state, rc, ttl, dir, tail, cmd = [], elapsedSec, siblings = 0, note = '', fence = 'bg-task-output',
+  name, state, rc, ttl, dir, tail, cmd = [], elapsedSec, siblings = 0,
+  note = '', fence = 'bg-task-output', killedBy,
 }) {
   const why = state === 'timed-out'
     ? `hit its ${ttl}s TTL and was killed`
     : `finished with exit code ${rc}`
   const elapsed = elapsedSec === undefined ? '' : `\nRan for: ${elapsedSec}s (TTL was ${ttl}s)`
+  // A signal is not an exit code. Reporting a killed child as rc=129 invents a number
+  // that means nothing; name the signal instead and keep rc for real exits.
+  const killed = killedBy ? `\nKilled by: ${killedBy}` : ''
+  const rcLine = rc === null || rc === undefined ? '' : ` (rc=${rc})`
   const also = siblings > 0
     ? `\n\nStill running: ${siblings} other background task${siblings === 1 ? '' : 's'} — expect further wake messages.`
     : ''
@@ -119,7 +125,7 @@ export function buildPrompt({
 
 Task: ${name}
 Command: ${cmd.join(' ') || '(unknown)'}${intent}
-State: ${state} (rc=${rc})${elapsed}
+State: ${state}${rcLine}${killed}${elapsed}
 Directory: ${dir}   (full output: ${join(dir, 'output.log')})
 
 Pick the work back up from here. Report the real outcome — if it failed or timed out,
@@ -165,6 +171,28 @@ export function buildBody({ prompt, channel, threadTs, env, now, wakeDelaySec = 
   }
 }
 
+// A 2xx is NOT proof the wake will happen: the API accepts a ONE_TIME row whose
+// scheduledAt is already past and stores it COMPLETED with no nextRunAt — 200, and it
+// never fires. So the verdict comes from the stored row, not the transport.
+//
+// The three outcomes are deliberately distinct. `failed:` means we have an answer and it
+// is bad. `unknown:` means the transport died and the effect is genuinely unknown — the
+// row may well exist. Collapsing them would claim more than we know, which is the same
+// error as reading a moved inbox file as proof of processing.
+export function enqueueVerdict(httpStatus, bodyText) {
+  if (!(httpStatus >= 200 && httpStatus < 300)) return `failed:http_${httpStatus}`
+  let parsed
+  try {
+    parsed = JSON.parse(bodyText)
+  } catch {
+    return 'failed:unparseable_response'
+  }
+  const row = parsed?.scheduledMessage ?? parsed
+  if (row?.status !== 'ACTIVE') return `failed:not_active_${row?.status ?? 'missing'}`
+  if (row?.nextRunAt == null) return 'failed:no_next_run'
+  return 'ok'
+}
+
 async function main() {
   const { dir, ttl, name, channel, threadTs, dry, wakeDelay, cmd } = parseRunnerArgs(process.argv.slice(2))
   const statusPath = join(dir, 'status')
@@ -189,21 +217,28 @@ async function main() {
     }, KILL_GRACE_MS)
   }, ttl * 1000)
 
-  const rc = await new Promise((resolve) => {
+  const { rc, killedBy } = await new Promise((resolve) => {
     child.on('error', (e) => {
       appendFileSync(logPath, `bg-task: cannot start command: ${e.message}\n`)
-      resolve(127)
+      resolve({ rc: 127 })
     })
     child.on('exit', (code, signal) => {
-      if (timedOut) return resolve(TIMEOUT_RC)
-      resolve(code === null ? 128 + (signal ? 1 : 0) : code)
+      // State comes from our own timer, never from the exit code — a command that
+      // legitimately exits 124 on its own is `finished`, not `timed-out`.
+      if (timedOut) return resolve({ rc: TIMEOUT_RC, killedBy: signal || 'SIGKILL' })
+      resolve({ rc: code, killedBy: signal || undefined })
     })
   })
   clearTimeout(ttlTimer)
   clearTimeout(killTimer)
 
-  const state = rc === TIMEOUT_RC && timedOut ? 'timed-out' : 'finished'
-  note([`state=${state}`, `rc=${rc}`, `ended=${stamp()}`])
+  const state = timedOut ? 'timed-out' : 'finished'
+  note([
+    `state=${state}`,
+    ...(rc === null || rc === undefined ? [] : [`rc=${rc}`]),
+    ...(killedBy ? [`killed_by=${killedBy}`] : []),
+    `ended=${stamp()}`,
+  ])
 
   const body = buildBody({
     prompt: buildPrompt({
@@ -220,6 +255,7 @@ async function main() {
       // Per-run nonce: a fixed marker could be reproduced by the command's own output,
       // which would let the output close the fence early and continue as prose.
       fence: `bg-task-output-${randomBytes(4).toString('hex')}`,
+      killedBy,
     }),
     channel,
     threadTs,
@@ -237,6 +273,7 @@ async function main() {
   // The response is the only evidence the wake was accepted; keep it verbatim in the
   // task dir. If this fails, the work is done but nobody is told — that is the
   // best-effort edge, and it must be visible here rather than silently dropped.
+  const httpTimeout = Number(process.env.BG_TASK_HTTP_TIMEOUT || DEFAULT_HTTP_TIMEOUT)
   try {
     const resp = await fetch(`${process.env.TEAMVIBE_API_URL}/scheduled-messages`, {
       method: 'POST',
@@ -245,13 +282,18 @@ async function main() {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      // Without a deadline the runner can wait on a hung API forever and the finish
+      // signal never happens at all — worse than a failed one, because nothing is logged.
+      signal: AbortSignal.timeout(httpTimeout * 1000),
     })
     const text = await resp.text()
     writeFileSync(join(dir, 'enqueue-response.json'), text)
-    note([`enqueued=${stamp()}`, `http_status=${resp.status}`])
-    if (!resp.ok) note([`enqueue_failed=1 reason=http_${resp.status}`])
+    note([`http_status=${resp.status}`, `enqueue=${enqueueVerdict(resp.status, text)}`, `enqueued_at=${stamp()}`])
   } catch (e) {
-    note([`enqueue_failed=1 reason=${e.message}`])
+    // No response: the row may or may not have been created. Saying "failed" would
+    // overclaim — this is exactly the case `unknown:` exists for.
+    const reason = e.name === 'TimeoutError' || e.name === 'AbortError' ? 'timeout' : (e.message || e.name)
+    note([`enqueue=unknown:${reason}`, `enqueued_at=${stamp()}`])
   }
 }
 
