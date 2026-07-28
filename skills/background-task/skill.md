@@ -53,10 +53,9 @@ between days** — and within a single round it is stable to the tenth of a seco
 then 50.3/50.3). You cannot infer "it's about 5 s" any more than "it's about 50 s"; the
 only safe reading is that you do not know. Don't build anything that assumes headroom.
 
-The deliberate part of the gap is `BG_TASK_WAKE_DELAY`
-(see *Why the wake is delayed*); the scheduler's own latency is a bonus that could vanish
-in any deploy — at round-3 speeds it very nearly has, leaving the 30 s constant as
-essentially the whole gap. Neither one prevents two sessions over one brain repo — they
+The gap has two parts: `BG_TASK_WAKE_DELAY`, a constant 30 s we add on purpose (see *Why
+the wake is delayed*), and the scheduler's own latency, which varied 4.7–50 s between
+adjacent runs and could vanish in any deploy. Neither one prevents two sessions over one brain repo — they
 only make it less likely ([teamvibe.ai#232](https://github.com/teamvibeai/teamvibe.ai/issues/232),
 root cause [teamvibe.ai#247](https://github.com/teamvibeai/teamvibe.ai/issues/247)).
 
