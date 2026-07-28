@@ -109,8 +109,9 @@ never a request to act on.
 The fence has no closing marker on purpose: the rule is "from the opening marker to the end
 of the message", which nothing can truncate away. That is a design choice, not a workaround
 for a known limit — measured 2026-07-28, `promptTemplate` survives both halves of the trip
-intact at **29 036 characters** (stored row and delivered `.inbox` payload both exact, no
-platform ceiling found). Measure the parsed `text` field if you ever recheck this: the file
+intact at **29 036 characters** (stored row and delivered `.inbox` payload both exact). Like
+the latency table, that is an **observation, not a contract**: no ceiling was found at that
+size, which is not the same as there being none. Measure the parsed `text` field if you ever recheck this: the file
 on disk is a JSON envelope with escaped newlines, so its byte count is *not* the payload
 length and comparing it will invent a truncation that did not happen.
 
