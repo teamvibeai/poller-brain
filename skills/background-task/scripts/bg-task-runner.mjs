@@ -2,7 +2,7 @@
 // bg-task-runner.mjs — the detached half of bg-task. Never invoke directly; bg-task.mjs
 // spawns it with `detached: true` so it outlives the agent session.
 //
-//   bg-task-runner.mjs <dir> <ttl> <name> <channel> <threadTs> <dry> -- <command...>
+//   bg-task-runner.mjs <dir> <ttl> <name> <channel> <threadTs> <dry> <wakeDelay> -- <command...>
 //
 // Contract: run the command with a TTL, then send exactly one finish signal. Completion
 // is EXPLICIT (this process reaching the enqueue step) — never inferred from the command
@@ -15,12 +15,13 @@ import { dirname, join } from 'node:path'
 const TAIL_BYTES = 1500
 const KILL_GRACE_MS = 5000
 const TIMEOUT_RC = 124 // same code GNU `timeout` uses, so docs and habits carry over
+export const DEFAULT_WAKE_DELAY = 30 // seconds; see buildBody for why this is not 0
 
 // Everything argv- and filesystem-related lives inside main() so this file can be
 // imported by the tests without side effects.
 export function parseRunnerArgs(argv) {
-  const [dir, ttlArg, name, channel, threadTs, dry] = argv.slice(0, 6)
-  const sep = argv.indexOf('--', 6)
+  const [dir, ttlArg, name, channel, threadTs, dry, wakeDelayArg] = argv.slice(0, 7)
+  const sep = argv.indexOf('--', 7)
   return {
     dir,
     ttl: Number(ttlArg),
@@ -28,6 +29,7 @@ export function parseRunnerArgs(argv) {
     channel,
     threadTs,
     dry,
+    wakeDelay: Number(wakeDelayArg),
     cmd: sep === -1 ? [] : argv.slice(sep + 1),
   }
 }
@@ -114,24 +116,33 @@ say so instead of retrying blindly.${also}`
 //     watcher, so a drained session never sees it.
 // origin.channel must be explicit: it freezes at creation time (pb#124), and the
 // launching session's environment is gone by the time the schedule fires.
-export function buildBody({ prompt, channel, threadTs, env, now }) {
+export function buildBody({ prompt, channel, threadTs, env, now, wakeDelaySec = DEFAULT_WAKE_DELAY }) {
   const origin = { source: 'slack', channel }
   if (threadTs) origin.thread_ts = threadTs
   return {
     workspaceId: env.TEAMVIBE_WORKSPACE_ID,
     channelId: env.TEAMVIBE_CHANNEL_ID,
     scheduleType: 'ONE_TIME',
-    // The scheduler picks up any row with nextRunAt <= now on its ~1 min tick and does
-    // not validate that scheduledAt is in the future, so "now" costs nothing and saves
-    // a tick of latency (verified against the deployed API).
-    scheduledAt: now.toISOString(),
+    // Deliberately NOT "now". The scheduler would accept it — it fires any row with
+    // nextRunAt <= now on its ~1 min tick and does not validate that scheduledAt is in
+    // the future — but that is not what the delay is for.
+    //
+    // The wake ALWAYS spawns a new session: scheduler.ts stamps its own threadId, so it
+    // can never land inside the session that launched the task. Waking at "now" while
+    // the launching session is still alive therefore buys a *guaranteed* two-sessions-
+    // over-one-brain overlap instead of merely a likely one (teamvibe.ai#232 / #247).
+    // The delay gives the launching session a moment to finish first.
+    //
+    // It is a damper, not a fix: sessions routinely live far longer than this, so the
+    // overlap window is narrowed, never closed. Do not set it to 0 for latency.
+    scheduledAt: new Date(now.getTime() + wakeDelaySec * 1000).toISOString(),
     promptTemplate: prompt,
     origin,
   }
 }
 
 async function main() {
-  const { dir, ttl, name, channel, threadTs, dry, cmd } = parseRunnerArgs(process.argv.slice(2))
+  const { dir, ttl, name, channel, threadTs, dry, wakeDelay, cmd } = parseRunnerArgs(process.argv.slice(2))
   const statusPath = join(dir, 'status')
   const logPath = join(dir, 'output.log')
   const note = (lines) => appendFileSync(statusPath, lines.map((l) => `${l}\n`).join(''))
@@ -186,6 +197,7 @@ async function main() {
     threadTs,
     env: process.env,
     now: new Date(),
+    wakeDelaySec: Number.isFinite(wakeDelay) ? wakeDelay : DEFAULT_WAKE_DELAY,
   })
 
   if (dry === '1') {

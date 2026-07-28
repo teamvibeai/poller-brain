@@ -20,6 +20,9 @@ const RUNNER = join(HERE, 'bg-task-runner.mjs')
 
 const TTL_MIN = 30
 const TTL_MAX = 21600
+// Wake is scheduled this many seconds after the command ends, overridable via
+// BG_TASK_WAKE_DELAY. Not zero on purpose — see buildBody in bg-task-runner.mjs.
+const DEFAULT_WAKE_DELAY = 30
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--channel SLACK_CHANNEL] ' +
@@ -39,6 +42,7 @@ export function parseArgs(argv, env = {}) {
     channel: env.SLACK_CHANNEL || '',
     thread: env.SLACK_THREAD_TS || '',
     dryRun: env.BG_TASK_DRY === '1',
+    wakeDelay: env.BG_TASK_WAKE_DELAY ?? String(DEFAULT_WAKE_DELAY),
     cmd: [],
   }
   let i = 0
@@ -70,6 +74,10 @@ export function parseArgs(argv, env = {}) {
   if (!opts.channel) {
     return { error: 'no target channel — pass --channel or run where SLACK_CHANNEL is set' }
   }
+  if (!/^\d+$/.test(String(opts.wakeDelay))) {
+    return { error: 'BG_TASK_WAKE_DELAY must be an integer number of seconds' }
+  }
+  opts.wakeDelay = Number(opts.wakeDelay)
   return { opts }
 }
 
@@ -121,7 +129,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // the whole trick — verified empirically in pb#231 (survived a full teardown).
   const child = spawn(
     process.execPath,
-    [RUNNER, dir, String(opts.ttl), opts.name, opts.channel, opts.thread, opts.dryRun ? '1' : '0', '--', ...opts.cmd],
+    [RUNNER, dir, String(opts.ttl), opts.name, opts.channel, opts.thread, opts.dryRun ? '1' : '0',
+      String(opts.wakeDelay), '--', ...opts.cmd],
     { detached: true, stdio: ['ignore', out, out] },
   )
   child.unref()

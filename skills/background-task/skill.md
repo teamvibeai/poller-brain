@@ -40,11 +40,12 @@ Two things to know about that wake, because both have bitten people:
 Measured latency from end-of-command to a live session: **~110 s** (two canary runs at
 112 s and 111 s — about 46–50 s of that is platform overhead after `scheduledAt`).
 
-That overhead is an **observation, not a contract.** It is the only thing currently
-keeping a wake from landing while the launching session is still alive; if the scheduler
-gets faster, two sessions over one brain repo stop being a risk and become a certainty
-(see [teamvibe.ai#232](https://github.com/teamvibeai/teamvibe.ai/issues/232)). Don't build
-anything that assumes you have ~46 s of headroom.
+That overhead is an **observation, not a contract** — don't build anything that assumes
+you have ~46 s of headroom. The deliberate part of the gap is `BG_TASK_WAKE_DELAY`
+(see *Why the wake is delayed*); the scheduler's own latency is a bonus that could vanish
+in any deploy. Neither one prevents two sessions over one brain repo — they only make it
+less likely ([teamvibe.ai#232](https://github.com/teamvibeai/teamvibe.ai/issues/232),
+root cause [teamvibe.ai#247](https://github.com/teamvibeai/teamvibe.ai/issues/247)).
 
 Two terminal states:
 
@@ -66,6 +67,9 @@ describe a timeout as a success.
 | `--channel C…` | `$SLACK_CHANNEL` | Where the wake goes. Only override to deliver into a different channel on purpose. |
 | `--dry-run` | off | Runs the command but writes the wake payload to `enqueue.json` instead of sending it. |
 | `-- <command…>` | required | Everything after `--` is the command. Not a shell string — no pipes or redirects unless you wrap it in `bash -c "…"`. |
+
+`BG_TASK_WAKE_DELAY` (env, default `30`) delays the wake by that many seconds after the
+command ends. See *Why the wake is delayed* — don't set it to `0`.
 
 Artifacts live in `$PERSISTENT_STORAGE_PATH/bg-tasks/<channel id>/<task id>/`: `cmd` (the argv),
 `output.log` (full stdout+stderr), `status` (timestamps, pid, session id, state, rc), and
@@ -120,6 +124,24 @@ with an explicit `origin.channel`. That is the only agent-reachable path that ca
 
 `origin.channel` must be passed explicitly because it is frozen at creation time — the
 launching session's environment is gone by the time the schedule fires.
+
+## Why the wake is delayed ~30 seconds
+
+The wake is scheduled `BG_TASK_WAKE_DELAY` seconds (default 30) after the command ends,
+not immediately. This is **not** a scheduler requirement — the scheduler ticks about once
+a minute and fires anything already due, so `now` would work and would be ~30 s faster.
+
+The delay is there because the wake **always spawns a new session**, even when a session
+for that channel is already running: the scheduler stamps its own thread id, so the wake
+cannot land inside the session that launched the task. Two sessions then run against the
+same brain repo and the same working tree. Observed on 2026-07-28: a wake session swept
+another session's uncommitted edit into an unrelated commit, silently
+(`teamvibe.ai#232`, root cause `teamvibe.ai#247`).
+
+The delay shrinks that overlap window; it does **not** close it. Sessions routinely live
+far longer than 30 s, so if your task ends while your session is still going, you get the
+overlap anyway — 30 does not mean "handled". Don't set it to `0` to save latency: that
+trades a *likely* overlap for a *guaranteed* one.
 
 ## Self-test
 

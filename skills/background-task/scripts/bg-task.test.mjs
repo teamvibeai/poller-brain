@@ -137,10 +137,11 @@ console.log('countRunningSiblings')
 
 console.log('parseRunnerArgs')
 {
-  const r = parseRunnerArgs(['/d', '60', 'n', 'C1', '111.222', '0', '--', 'echo', '--weird'])
+  const r = parseRunnerArgs(['/d', '60', 'n', 'C1', '111.222', '0', '30', '--', 'echo', '--weird'])
   eq('command after -- survives, including its own flags', JSON.stringify(r.cmd), JSON.stringify(['echo', '--weird']))
-  eq('empty threadTs stays empty', parseRunnerArgs(['/d', '60', 'n', 'C1', '', '0', '--', 'true']).threadTs, '')
+  eq('empty threadTs stays empty', parseRunnerArgs(['/d', '60', 'n', 'C1', '', '0', '30', '--', 'true']).threadTs, '')
   eq('ttl coerced', r.ttl, 60)
+  eq('wakeDelay coerced', r.wakeDelay, 30)
 }
 
 console.log('buildBody')
@@ -148,7 +149,12 @@ console.log('buildBody')
   const now = new Date('2026-07-28T08:00:00.000Z')
   const b = buildBody({ prompt: 'p', channel: 'C1', threadTs: '', env: ENV, now })
   eq('schedule is ONE_TIME', b.scheduleType, 'ONE_TIME')
-  eq('scheduledAt is now (scheduler takes nextRunAt <= now)', b.scheduledAt, '2026-07-28T08:00:00.000Z')
+  // Regression pin: the wake must NOT be scheduled at `now`. The delay gives the
+  // launching session time to finish, otherwise the overlap is guaranteed rather than
+  // likely (teamvibe.ai#247). Dropped once during the bash->Node port; this catches it.
+  eq('scheduledAt is delayed by default 30 s, not now', b.scheduledAt, '2026-07-28T08:00:30.000Z')
+  const delayed = buildBody({ prompt: 'p', channel: 'C1', threadTs: '', env: ENV, now, wakeDelaySec: 90 })
+  eq('wakeDelaySec is honoured', delayed.scheduledAt, '2026-07-28T08:01:30.000Z')
   eq('origin.channel is explicit', b.origin.channel, 'C1')
   eq('no thread_ts key when not requested', 'thread_ts' in b.origin, false)
   eq('workspace + channel come from env', `${b.workspaceId}/${b.channelId}`, '01TESTWORKSPACE/01TESTCHANNEL')
