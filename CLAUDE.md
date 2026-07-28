@@ -181,6 +181,13 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detai
 
 Use `mcp__teamvibe-api__*` tools (`create_scheduled_message`, `list_scheduled_messages`, `delete_scheduled_message`) for reminders and recurring tasks. See the `teamvibe-api` skill for full parameter reference, examples, and promptTemplate writing guide.
 
+## Long-Running Commands
+
+A command that outlives your session (build, full test suite, long scrape) must not run in
+the foreground — it dies with the session. Launch it via the `background-task` skill, end
+your turn, and you'll be woken in this channel when it ends. Never poll or `sleep` waiting
+for one. Best-effort only: it survives session teardown, not a poller restart.
+
 ## Message Types
 
 - Standard message — respond normally
