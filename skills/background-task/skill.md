@@ -129,9 +129,18 @@ the tail isn't enough.
 Nothing here is ever deleted or capped, on purpose: `output.log` is the full record of a
 task you may not have been told about, and a wrapper that silently truncated or swept it
 would lose exactly the evidence you came looking for. The cost is that this grows without
-bound on storage shared by every brain on the poller. So: don't point a chatty long-running
-command at it without a reason, and if you need space back, look at `--list` first and
-delete specific finished task dirs yourself — deliberately, not on a timer.
+bound on storage shared by every brain on the poller. If you need space back, look at
+`--list` first and delete specific finished task dirs yourself — deliberately, not on a
+timer.
+
+Two different problems hide behind "it grows", and only one of them is about old tasks:
+
+- **Old dirs pile up.** Nothing sweeps them. Slow, visible, and yours to clean up.
+- **One task fills the volume while it runs.** A command emitting hundreds of MB does that
+  in a single run, and no retention policy helps — the dir isn't old yet. Don't put such a
+  command in the background at all: only the last 1500 bytes ever reach the wake message,
+  so the other 400 MB bought you nothing but a full shared disk. Redirect the bulk
+  somewhere you chose, or filter it before it reaches the log.
 
 ## Finding tasks you weren't told about
 
