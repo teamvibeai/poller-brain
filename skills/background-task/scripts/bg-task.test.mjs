@@ -163,6 +163,24 @@ console.log('--list parsing + rows')
   eq('a crashed runner is not running', died.state, 'crashed')
   eq('and its wake is a failure', died.wake, 'FAILED')
 
+  // The other route to "nobody will tell you", and the one a state line hides: the
+  // command ENDED, then the runner died before it got a verdict written — a poller
+  // restart landing in that gap. `runner_crashed` cannot catch it (that is an exception
+  // the process lived to handle), so the only evidence is age: past the runner's own
+  // HTTP deadline nothing can still be in flight. Left alone the row reads `pending`
+  // forever, which is the exact case --list exists to surface.
+  const AGED = { now: Date.parse('2026-07-28T09:00:00Z') }
+  eq('an end seconds ago is still plausibly in flight',
+    taskRow('x', 'state=finished\nrc=0\nended=2026-07-28T08:59:50Z\n', AGED).wake, 'pending')
+  eq('an end past the HTTP deadline is NONE, not pending',
+    taskRow('x', 'state=finished\nrc=0\nended=2026-07-28T08:50:00Z\n', AGED).wake, 'NONE')
+  // Ageing only ever decides between "still coming" and "never went out". It must not
+  // touch the success/failure axis — a recorded verdict always beats the clock.
+  eq('an old end with a verdict keeps the verdict',
+    taskRow('x', 'state=finished\nrc=0\nended=2026-07-28T08:50:00Z\nenqueue=ok\n', AGED).wake, 'enqueued')
+  eq('an old end with a transport failure stays UNKNOWN',
+    taskRow('x', 'state=finished\nrc=0\nended=2026-07-28T08:50:00Z\nenqueue=unknown:timeout\n', AGED).wake, 'UNKNOWN')
+
   eq('parseStatus keeps values containing =', parseStatus('a=b=c\n').a, 'b=c')
   eq('parseStatus ignores lines without =', Object.keys(parseStatus('junk\na=1\n')).length, 1)
 }
@@ -366,6 +384,18 @@ console.log('buildPrompt — output is fenced and labelled as data')
   has('signal is named', killed, 'Killed by: SIGKILL')
   const clean = buildPrompt({ name: 'b', state: 'finished', rc: 0, ttl: 60, dir: '/d', tail: '' })
   ok('no Killed-by line for a clean exit', !clean.includes('Killed by'), clean)
+
+  // The command caught our SIGTERM and exited on its own — nothing killed it, so no
+  // signal landed. Naming one here would report a signal that never flew: the same
+  // invention as rc=129, one floor over. Report what we SENT, and keep the exit code
+  // the command actually chose instead of losing it behind the 124 verdict.
+  const caught = buildPrompt({
+    name: 'b', state: 'timed-out', rc: 124, ttl: 60, dir: '/d', tail: '',
+    signalSent: 'SIGTERM', childRc: 0,
+  })
+  ok('no Killed-by line when no signal landed', !caught.includes('Killed by'), caught)
+  has('what we actually sent is reported instead', caught, 'Sent SIGTERM')
+  has('the command own exit code survives the 124 verdict', caught, 'exited on its own with 0')
   ok('no rc line when there is no exit code',
     !buildPrompt({ name: 'b', state: 'finished', rc: null, ttl: 60, dir: '/d', tail: '' }).includes('(rc='), 'rc line present')
 }
@@ -620,6 +650,23 @@ if (process.env.BG_TASK_TEST_SLOW === '1') {
   has('state=timed-out', status || '', 'state=timed-out')
   has('rc=124', status || '', 'rc=124')
   has('prompt says it was killed', readFileSync(join(dir, 'enqueue.json'), 'utf8'), 'hit its 30s TTL and was killed')
+  has('the signal we sent is recorded', status || '', 'signal_sent=SIGTERM')
+  has('the signal that actually landed is recorded', status || '', 'killed_by=SIGTERM')
+
+  // The other half of the TTL path, and the one the status file used to lie about: the
+  // command traps SIGTERM and exits cleanly. No signal kills it, so there is nothing to
+  // name — only what we sent, plus the exit code it chose.
+  console.log('TTL with a command that catches SIGTERM (slow: ~35 s)')
+  eq('launch exits 0',
+    launch(['--name', 'unit-trap', '--ttl', '30', '--', 'sh', '-c', 'trap "exit 7" TERM; sleep 300 & wait']).code, 0)
+  const trapDir = latestDir()
+  const trapped = await waitDone(trapDir, 250)
+  has('still a TTL timeout by our own timer', trapped || '', 'state=timed-out')
+  has('verdict stays rc=124', trapped || '', 'rc=124')
+  has('what we sent is recorded', trapped || '', 'signal_sent=SIGTERM')
+  ok('no signal is invented for a command that was not killed',
+    !/killed_by=/.test(trapped || ''), trapped)
+  has('the command own exit code is kept', trapped || '', 'child_rc=7')
 } else {
   console.log('TTL kill — skipped (set BG_TASK_TEST_SLOW=1 to run it)')
 }

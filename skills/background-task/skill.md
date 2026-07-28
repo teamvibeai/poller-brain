@@ -64,7 +64,13 @@ Two terminal states:
 | State | Meaning |
 |---|---|
 | `finished` | The command exited on its own. `rc` is its exit code — `rc != 0` means it *failed*, not that it timed out. |
-| `timed-out` | The command was still running at `--ttl` and was killed. `rc=124`. |
+| `timed-out` | The command was still running at `--ttl`, so we sent SIGTERM (SIGKILL after a grace period). `rc=124` is our verdict, not the command's. |
+
+On a timeout the `status` file separates what we did from what happened:
+`signal_sent=` is what we delivered, `killed_by=` appears **only** if a signal actually
+landed, and `child_rc=` keeps the exit code the command chose if it trapped SIGTERM and
+exited by itself. A command that catches SIGTERM dies by no signal at all — nothing
+should name one for it.
 
 Report the real outcome. A failed build is a failed build — don't retry blindly and don't
 describe a timeout as a success.
@@ -173,8 +179,8 @@ Two reasons to reach for this:
   | `enqueued` | The API accepted it **and** the stored row is `ACTIVE` with a `nextRunAt`, so it will fire. Still not proof it was *delivered* — that is the strongest claim available. |
   | `FAILED` | We have an answer and it is bad: non-2xx, or a 2xx row that will never fire. |
   | `UNKNOWN` | The request never got an answer (timeout, refused). The schedule may or may not exist — deliberately not the same as `FAILED`. |
-  | `pending` | Terminal state reached, no enqueue attempt recorded. |
-  | `NONE` | The runner is gone and never recorded a verdict — no wake is coming. Not "not yet". |
+  | `pending` | Terminal state reached, no verdict recorded yet — the enqueue can still be in flight. |
+  | `NONE` | The runner is gone and never recorded a verdict — no wake is coming. Not "not yet". Either it vanished mid-command (`STATE=abandoned`), or it recorded the end and died before sending: past the HTTP deadline, nothing can still be in flight. Read the result out of the task dir. |
   | `dry-run` | `--dry-run`; nothing was sent. |
 
   The `STATE` column answers a different question — whether the task is still alive:

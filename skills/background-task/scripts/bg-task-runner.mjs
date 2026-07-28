@@ -119,7 +119,7 @@ export function noteOf(dir, limit = NOTE_CHARS) {
 
 export function buildPrompt({
   name, state, rc, ttl, dir, tail, cmd = [], elapsedSec, siblings = 0,
-  note = '', fence = 'bg-task-output', killedBy,
+  note = '', fence = 'bg-task-output', killedBy, signalSent, childRc,
 }) {
   const why = state === 'timed-out'
     ? `hit its ${ttl}s TTL and was killed`
@@ -127,7 +127,19 @@ export function buildPrompt({
   const elapsed = elapsedSec === undefined ? '' : `\nRan for: ${elapsedSec}s (TTL was ${ttl}s)`
   // A signal is not an exit code. Reporting a killed child as rc=129 invents a number
   // that means nothing; name the signal instead and keep rc for real exits.
-  const killed = killedBy ? `\nKilled by: ${killedBy}` : ''
+  //
+  // Two different facts, and only one of them is always available: `killedBy` is the
+  // signal that actually landed (the kernel's word), `signalSent` is what we delivered.
+  // A command that traps SIGTERM and exits cleanly dies by no signal at all — falling
+  // back to "SIGKILL" there would name a signal that never flew, which is the same
+  // invention as rc=129 one floor up. With no signal, report what we sent, and keep the
+  // exit code the command chose rather than losing it behind the 124 verdict.
+  const killed = killedBy
+    ? `\nKilled by: ${killedBy}`
+    : signalSent
+      ? `\nSent ${signalSent} on TTL expiry; the command caught it and exited on its own` +
+        (childRc === null || childRc === undefined ? '' : ` with ${childRc}`)
+      : ''
   const rcLine = rc === null || rc === undefined ? '' : ` (rc=${rc})`
   const also = siblings > 0
     ? `\n\nStill running: ${siblings} other background task${siblings === 1 ? '' : 's'} — expect further wake messages.`
@@ -231,16 +243,19 @@ async function main() {
   const child = spawn(cmd[0], cmd.slice(1), { stdio: ['ignore', out, out], detached: true })
 
   let timedOut = false
+  let signalSent   // what we actually delivered — recorded when sent, never guessed later
   let killTimer
   const ttlTimer = setTimeout(() => {
     timedOut = true
+    signalSent = 'SIGTERM'
     try { process.kill(-child.pid, 'SIGTERM') } catch { /* already gone */ }
     killTimer = setTimeout(() => {
+      signalSent = 'SIGKILL'
       try { process.kill(-child.pid, 'SIGKILL') } catch { /* already gone */ }
     }, KILL_GRACE_MS)
   }, ttl * 1000)
 
-  const { rc, killedBy } = await new Promise((resolve) => {
+  const { rc, killedBy, childRc } = await new Promise((resolve) => {
     child.on('error', (e) => {
       appendFileSync(logPath, `bg-task: cannot start command: ${e.message}\n`)
       resolve({ rc: 127 })
@@ -248,7 +263,13 @@ async function main() {
     child.on('exit', (code, signal) => {
       // State comes from our own timer, never from the exit code — a command that
       // legitimately exits 124 on its own is `finished`, not `timed-out`.
-      if (timedOut) return resolve({ rc: TIMEOUT_RC, killedBy: signal || 'SIGKILL' })
+      //
+      // `signal` is the only evidence that a signal actually landed, and it is null
+      // whenever the command trapped SIGTERM and exited by itself. Defaulting to
+      // SIGKILL there would report a signal that never flew — the rc=129 mistake one
+      // floor up. Record the landed signal only when there is one; `signalSent` covers
+      // what we did, and the state=timed-out + rc=124 verdict stands on its own.
+      if (timedOut) return resolve({ rc: TIMEOUT_RC, killedBy: signal || undefined, childRc: code })
       resolve({ rc: code, killedBy: signal || undefined })
     })
   })
@@ -259,7 +280,9 @@ async function main() {
   note([
     `state=${state}`,
     ...(rc === null || rc === undefined ? [] : [`rc=${rc}`]),
+    ...(signalSent ? [`signal_sent=${signalSent}`] : []),
     ...(killedBy ? [`killed_by=${killedBy}`] : []),
+    ...(childRc === null || childRc === undefined ? [] : [`child_rc=${childRc}`]),
     `ended=${stamp()}`,
   ])
 
@@ -279,6 +302,8 @@ async function main() {
       // which would let the output close the fence early and continue as prose.
       fence: `bg-task-output-${randomBytes(4).toString('hex')}`,
       killedBy,
+      signalSent,
+      childRc,
     }),
     channel,
     threadTs,

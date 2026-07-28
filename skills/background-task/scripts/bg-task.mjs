@@ -165,27 +165,51 @@ export function lifecycleOf(kv, { now = Date.now(), alive = pidAlive } = {}) {
 //   FAILED    we have an answer and it is bad (non-2xx, or a row that will never fire).
 //   UNKNOWN   the transport died; the row may or may not exist. Not the same as FAILED,
 //             and flattening the two would claim knowledge we do not have.
+//   pending   the command ended and the enqueue is plausibly still in flight.
+//   NONE      nobody is left to send one. Two routes reach it: the runner vanished
+//             mid-command (`state=abandoned`), or it recorded the end and then died
+//             before writing any verdict — a poller restart, the documented
+//             non-durability edge. `runner_crashed` does not cover the second: that is
+//             an exception the process lived to handle. Both are "never", not "not
+//             yet", and `pending` would read as "still coming". ONE value on purpose:
+//             this column answers one question — will I be told — and HOW the runner
+//             died is already in STATE. A second synonym would be a second label for
+//             the same claim.
 // When the inbox-drop + cancel-on-pickup path lands it must add its OWN values
 // (`cancelled`, `delivered-inbox`) rather than reuse these.
-//   NONE      nobody is left to send one. The runner is gone without a verdict, so this
-//             is not "not yet" — it is never, and pending would read as "still coming".
-function wakeStateOf(kv, state) {
+//
+// The runner gives up on the HTTP call after this many seconds, so an end older than
+// that plus a margin for process scheduling can no longer have a request in flight.
+// Derived from the same env var the runner uses, never a second constant: a shorter
+// deadline in a test or a longer one in production must move both together.
+const HTTP_DEADLINE_SEC = Number(process.env.BG_TASK_HTTP_TIMEOUT || 30)
+const WAKE_IN_FLIGHT_MS = (HTTP_DEADLINE_SEC + 30) * 1000
+
+function wakeStateOf(kv, state, now) {
   if (kv.dry_run) return 'dry-run'
   if (kv.runner_crashed) return 'FAILED'
   const verdict = kv.enqueue
+  // A recorded verdict always beats the clock — ageing only decides between "still
+  // coming" and "never went out", never between success and failure.
   if (verdict) {
     if (verdict === 'ok') return 'enqueued'
     if (verdict.startsWith('unknown:')) return 'UNKNOWN'
     return 'FAILED'
   }
   if (state === 'running') return '-'
-  return state === 'abandoned' ? 'NONE' : 'pending'
+  if (state === 'abandoned') return 'NONE'
+  const ended = Date.parse(kv.ended || '')
+  if (Number.isFinite(ended) && now - ended > WAKE_IN_FLIGHT_MS) return 'NONE'
+  return 'pending'
 }
 
 export function taskRow(id, statusText, opts = {}) {
   const kv = parseStatus(statusText)
   const m = /^(\d{8}T\d{6}Z)-(\d+)-(.*)$/.exec(id)
-  const state = lifecycleOf(kv, opts)
+  // One clock for both questions: the lifecycle and the wake state of a single row must
+  // never be read a few milliseconds apart and disagree about how old it is.
+  const now = opts.now ?? Date.now()
+  const state = lifecycleOf(kv, { ...opts, now })
   let elapsed = ''
   if (kv.started && kv.ended) {
     const secs = Math.round((Date.parse(kv.ended) - Date.parse(kv.started)) / 1000)
@@ -198,7 +222,7 @@ export function taskRow(id, statusText, opts = {}) {
     rc: kv.rc ?? '',
     ended: kv.ended || '',
     elapsed,
-    wake: wakeStateOf(kv, state),
+    wake: wakeStateOf(kv, state, now),
   }
 }
 
@@ -209,13 +233,17 @@ export function listTasks(root, opts = {}) {
   } catch {
     return []
   }
+  // One clock for the whole listing, read once: rows are aged against it, and two tasks
+  // that ended at the same moment must not land on different sides of the threshold
+  // because the walk took a second.
+  const at = { ...opts, now: opts.now ?? Date.now() }
   return entries
     .map((id) => {
       let status = ''
       try {
         status = readFileSync(join(root, id, 'status'), 'utf8')
       } catch { /* dir without status yet — still worth listing as running */ }
-      return taskRow(id, status, opts)
+      return taskRow(id, status, at)
     })
     .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
 }
