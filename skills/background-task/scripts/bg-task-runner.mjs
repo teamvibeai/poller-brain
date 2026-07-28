@@ -12,6 +12,9 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, closeSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+// One definition of "is this task still alive", shared with --list. Two would drift, and
+// they answer the same question for the same files.
+import { lifecycleOf, parseStatus } from './bg-task.mjs'
 
 const TAIL_BYTES = 1500
 const NOTE_CHARS = 1000 // see noteOf: the note is the only agent-authored field in the payload
@@ -68,18 +71,23 @@ export function tailOf(path, bytes = TAIL_BYTES) {
   }
 }
 
-// Count sibling task dirs that have not reached a terminal state, so the woken agent
-// knows whether more wakes are coming instead of assuming this was the last one. Called
-// with the task dir's parent, which is the per-channel namespace — so this never counts
-// another brain's tasks even though the storage root is shared.
-export function countRunningSiblings(root, selfDir) {
+// Count sibling task dirs whose runner is still alive, so the woken agent knows whether
+// more wakes are coming instead of assuming this was the last one. Called with the task
+// dir's parent, which is the per-channel namespace — so this never counts another brain's
+// tasks even though the storage root is shared.
+//
+// Shares the lifecycle predicate with --list on purpose: this number turns into the
+// promise "expect further wake messages", and a dir stranded by a poller restart has no
+// runner left to keep it. Counting those would make the promise permanently false — and
+// permanently louder, since nothing ever clears them.
+export function countRunningSiblings(root, selfDir, opts = {}) {
   try {
     return readdirSync(root)
       .map((d) => join(root, d))
       .filter((d) => d !== selfDir)
       .filter((d) => {
         try {
-          return !/^state=/m.test(readFileSync(join(d, 'status'), 'utf8'))
+          return lifecycleOf(parseStatus(readFileSync(join(d, 'status'), 'utf8')), opts) === 'running'
         } catch {
           return false
         }
@@ -178,8 +186,11 @@ export function buildBody({ prompt, channel, threadTs, env, now, wakeDelaySec = 
     // It is a damper, not a fix: sessions routinely live far longer than this, so the
     // overlap window is narrowed, never closed. Do not set it to 0 for latency.
     scheduledAt: new Date(now.getTime() + wakeDelaySec * 1000).toISOString(),
-    promptTemplate: prompt,
+    // Routing before the payload: promptTemplate is the one unbounded field here, so
+    // anything that logs or truncates this body would drop origin first — the field that
+    // decides where the wake lands. Short fields up, unbounded ones down.
     origin,
+    promptTemplate: prompt,
   }
 }
 

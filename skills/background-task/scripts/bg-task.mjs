@@ -122,6 +122,40 @@ export function parseStatus(text) {
   return kv
 }
 
+// Grace on top of the TTL before a runner that has written no terminal line is called
+// abandoned: the TTL kill has a 5 s SIGKILL grace, and clocks/scheduling add a little.
+const ABANDON_GRACE_SEC = 60
+
+const pidAlive = (pid) => {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+// What actually happened to this task, which is NOT the same question as "did it write a
+// state line". A runner killed with the container — the documented failure mode of this
+// whole feature, a poller restart takes in-flight tasks with it — writes neither `state=`
+// nor `runner_crashed=`. Reading that silence as "running" makes every such dir running
+// FOREVER: --list keeps showing it, the sibling counter keeps promising wakes that will
+// never come, and it only ever grows, because nothing expires.
+//
+// So absence of a terminal line asks two further questions: is the runner still there
+// (pid), and could it still plausibly be working (age vs its own TTL)? The age check also
+// covers pid reuse after a restart, where some unrelated process now owns that number.
+export function lifecycleOf(kv, { now = Date.now(), alive = pidAlive } = {}) {
+  if (kv.state) return kv.state // finished | timed-out — the runner said so itself
+  if (kv.runner_crashed) return 'crashed'
+  // Nothing written at all: either the runner is a few milliseconds from its first line,
+  // or the dir was orphaned before it ever wrote one. Both are consistent with this file,
+  // so say so rather than guess — `running` and `abandoned` are each a claim too far.
+  if (Object.keys(kv).length === 0) return 'unknown'
+  const pid = Number(kv.pid)
+  if (!Number.isInteger(pid) || pid <= 0 || !alive(pid)) return 'abandoned'
+  const started = Date.parse(kv.started)
+  const ttl = Number(String(kv.ttl ?? '').replace(/s$/, ''))
+  if (Number.isFinite(started) && Number.isFinite(ttl)
+    && now - started > (ttl + ABANDON_GRACE_SEC) * 1000) return 'abandoned'
+  return 'running'
+}
+
 // Wake delivery is its own column because "the task finished" and "you were told" are
 // different facts, and only the second one can silently fail.
 //
@@ -133,6 +167,8 @@ export function parseStatus(text) {
 //             and flattening the two would claim knowledge we do not have.
 // When the inbox-drop + cancel-on-pickup path lands it must add its OWN values
 // (`cancelled`, `delivered-inbox`) rather than reuse these.
+//   NONE      nobody is left to send one. The runner is gone without a verdict, so this
+//             is not "not yet" — it is never, and pending would read as "still coming".
 function wakeStateOf(kv, state) {
   if (kv.dry_run) return 'dry-run'
   if (kv.runner_crashed) return 'FAILED'
@@ -142,13 +178,14 @@ function wakeStateOf(kv, state) {
     if (verdict.startsWith('unknown:')) return 'UNKNOWN'
     return 'FAILED'
   }
-  return state === 'running' ? '-' : 'pending'
+  if (state === 'running') return '-'
+  return state === 'abandoned' ? 'NONE' : 'pending'
 }
 
-export function taskRow(id, statusText) {
+export function taskRow(id, statusText, opts = {}) {
   const kv = parseStatus(statusText)
   const m = /^(\d{8}T\d{6}Z)-(\d+)-(.*)$/.exec(id)
-  const state = kv.state || 'running'
+  const state = lifecycleOf(kv, opts)
   let elapsed = ''
   if (kv.started && kv.ended) {
     const secs = Math.round((Date.parse(kv.ended) - Date.parse(kv.started)) / 1000)
@@ -165,7 +202,7 @@ export function taskRow(id, statusText) {
   }
 }
 
-export function listTasks(root) {
+export function listTasks(root, opts = {}) {
   let entries
   try {
     entries = readdirSync(root)
@@ -178,7 +215,7 @@ export function listTasks(root) {
       try {
         status = readFileSync(join(root, id, 'status'), 'utf8')
       } catch { /* dir without status yet — still worth listing as running */ }
-      return taskRow(id, status)
+      return taskRow(id, status, opts)
     })
     .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
 }

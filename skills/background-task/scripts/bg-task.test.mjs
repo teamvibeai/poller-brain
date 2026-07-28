@@ -96,8 +96,15 @@ console.log('--list parsing + rows')
   eq('taskRoot namespaces by channel',
     taskRoot({ BG_TASK_ROOT: '/r', TEAMVIBE_CHANNEL_ID: '01C' }), '/r/01C')
 
-  const running = taskRow('20260728T080102Z-42-build', 'started=2026-07-28T08:01:02Z\npid=1\nttl=900s\n')
-  eq('no state line → running', running.state, 'running')
+  // Clock and pid liveness are injected: "is it still running" is a question about the
+  // world at read time, and a test that consulted the real one would answer differently
+  // tomorrow.
+  const LIVE = { now: Date.parse('2026-07-28T08:02:02Z'), alive: () => true }
+  const DEAD = { now: Date.parse('2026-07-28T08:02:02Z'), alive: () => false }
+  const RUNNING_STATUS = 'started=2026-07-28T08:01:02Z\npid=4242\nttl=900s\n'
+
+  const running = taskRow('20260728T080102Z-42-build', RUNNING_STATUS, LIVE)
+  eq('no state line + live runner → running', running.state, 'running')
   eq('name parsed out of the id', running.name, 'build')
   eq('running task has no wake state yet', running.wake, '-')
   eq('running task has no elapsed', running.elapsed, '')
@@ -134,6 +141,28 @@ console.log('--list parsing + rows')
   const stranded = taskRow('20260728T080102Z-42-x', 'state=finished\nrc=0\n')
   eq('terminal state with no enqueue line → pending', stranded.wake, 'pending')
 
+  // A poller restart kills in-flight runners: no state line, no crash line, nobody left.
+  // The old rule (no `state=` means running) made these dirs running forever, and they
+  // only accumulate — the one case --list exists for is the one it would get wrong.
+  const abandoned = taskRow('20260728T080102Z-42-build', RUNNING_STATUS, DEAD)
+  eq('runner gone without a terminal line → abandoned', abandoned.state, 'abandoned')
+  eq('an abandoned task will never be announced — not "pending"', abandoned.wake, 'NONE')
+  // Live pid, but long past its own TTL: either the pid was reused after a restart or the
+  // runner is wedged. Either way it is not going to finish, and saying "running" is a
+  // claim about the future.
+  const wedged = taskRow('20260728T080102Z-42-build', RUNNING_STATUS,
+    { now: Date.parse('2026-07-28T08:17:03Z'), alive: () => true })
+  eq('alive but past TTL + grace → abandoned', wedged.state, 'abandoned')
+  eq('inside TTL + grace it is still running',
+    taskRow('20260728T080102Z-42-build', RUNNING_STATUS,
+      { now: Date.parse('2026-07-28T08:15:00Z'), alive: () => true }).state, 'running')
+  // The runner crashed loudly. That is a third thing: it is neither still working nor
+  // silently gone, and the row must not read `running` next to a FAILED wake.
+  const died = taskRow('20260728T080102Z-42-build',
+    'started=2026-07-28T08:01:02Z\npid=4242\nttl=900s\nrunner_crashed=2026-07-28T08:01:30Z\n', LIVE)
+  eq('a crashed runner is not running', died.state, 'crashed')
+  eq('and its wake is a failure', died.wake, 'FAILED')
+
   eq('parseStatus keeps values containing =', parseStatus('a=b=c\n').a, 'b=c')
   eq('parseStatus ignores lines without =', Object.keys(parseStatus('junk\na=1\n')).length, 1)
 }
@@ -146,20 +175,31 @@ console.log('--list rendering')
   writeFileSync(join(root, '20260728T080100Z-1-older', 'status'),
     'started=2026-07-28T08:01:00Z\nstate=finished\nrc=1\nended=2026-07-28T08:01:30Z\nhttp_status=201\nenqueue=ok\n')
   mkdirSync(join(root, '20260728T090000Z-2-newer'), { recursive: true })
-  writeFileSync(join(root, '20260728T090000Z-2-newer', 'status'), 'started=2026-07-28T09:00:00Z\n')
+  writeFileSync(join(root, '20260728T090000Z-2-newer', 'status'),
+    'started=2026-07-28T09:00:00Z\npid=4242\nttl=900s\n')
   mkdirSync(join(root, '20260728T070000Z-3-nostatus'), { recursive: true })
+  // Stranded by a poller restart: a status file, no terminal line, no runner behind it.
+  mkdirSync(join(root, '20260728T060000Z-4-stranded'), { recursive: true })
+  writeFileSync(join(root, '20260728T060000Z-4-stranded', 'status'),
+    'started=2026-07-28T06:00:00Z\npid=9999\nttl=900s\n')
 
-  const rows = listTasks(root)
-  eq('lists every task dir', rows.length, 3)
+  const AT_0901 = { now: Date.parse('2026-07-28T09:01:00Z'), alive: (p) => p === 4242 }
+  const rows = listTasks(root, AT_0901)
+  eq('lists every task dir', rows.length, 4)
   eq('newest first', rows[0].name, 'newer')
-  eq('a dir with no status file still lists as running', rows[2].state, 'running')
+  eq('a live runner lists as running', rows[0].state, 'running')
+  eq('a dir with no status file claims nothing either way', rows[2].state, 'unknown')
+  eq('a stranded dir lists as abandoned, not running', rows[3].state, 'abandoned')
   eq('missing root → empty list, no throw', listTasks(join(WORK, 'nope')).length, 0)
 
   const out = formatTaskList(rows)
   has('header present', out, 'NAME')
   has('wake column present', out, 'WAKE')
   has('failing rc visible', out, '1')
-  has('running count summarised', out, '2 still running')
+  // The summary counts only what is really still running — the whole point of the
+  // lifecycle rule is that stranded dirs stop inflating this number after every restart.
+  has('running count summarised', out, '1 still running')
+  has('abandoned rows are visible, not filtered away', out, 'abandoned')
   has('empty case says so', formatTaskList([]), 'no background tasks recorded')
 }
 
@@ -255,15 +295,24 @@ console.log('countRunningSiblings')
 {
   const { mkdirSync, writeFileSync } = await import('node:fs')
   const root = join(WORK, 'siblings')
-  for (const [d, status] of [['a', 'started=x\nstate=finished\nrc=0\n'], ['b', 'started=x\n'], ['c', 'started=x\n']]) {
+  const ALIVE_ONLY_4242 = { now: Date.parse('2026-07-28T08:02:02Z'), alive: (p) => p === 4242 }
+  const LIVE_RUNNER = 'started=2026-07-28T08:01:02Z\npid=4242\nttl=900s\n'
+  const DEAD_RUNNER = 'started=2026-07-28T08:01:02Z\npid=9999\nttl=900s\n'
+  for (const [d, status] of [['a', 'started=x\nstate=finished\nrc=0\n'], ['b', LIVE_RUNNER], ['c', LIVE_RUNNER]]) {
     mkdirSync(join(root, d), { recursive: true })
     writeFileSync(join(root, d, 'status'), status)
   }
   mkdirSync(join(root, 'nostatus'), { recursive: true })
-  eq('counts only dirs without a terminal state', countRunningSiblings(root, join(root, 'b')), 1)
-  eq('excludes self', countRunningSiblings(root, join(root, 'c')), 1)
-  eq('a dir with no status file is not counted', countRunningSiblings(root, join(root, 'zzz')), 2)
+  eq('counts only dirs whose runner is alive', countRunningSiblings(root, join(root, 'b'), ALIVE_ONLY_4242), 1)
+  eq('excludes self', countRunningSiblings(root, join(root, 'c'), ALIVE_ONLY_4242), 1)
+  eq('a dir with no status file is not counted', countRunningSiblings(root, join(root, 'zzz'), ALIVE_ONLY_4242), 2)
   eq('missing root → 0, no throw', countRunningSiblings(join(WORK, 'nope'), 'x'), 0)
+  // The promise "expect further wake messages" must not survive the restart that killed
+  // the runner making it. Same predicate as --list, so the two can never disagree.
+  mkdirSync(join(root, 'stranded'), { recursive: true })
+  writeFileSync(join(root, 'stranded', 'status'), DEAD_RUNNER)
+  eq('a task stranded by a poller restart is not counted as running',
+    countRunningSiblings(root, join(root, 'b'), ALIVE_ONLY_4242), 1)
 }
 
 console.log('parseRunnerArgs')

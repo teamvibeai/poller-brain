@@ -126,6 +126,13 @@ Artifacts live in `$PERSISTENT_STORAGE_PATH/bg-tasks/<channel id>/<task id>/`: `
 the enqueue response. The wake message tells you the path — read `output.log` there when
 the tail isn't enough.
 
+Nothing here is ever deleted or capped, on purpose: `output.log` is the full record of a
+task you may not have been told about, and a wrapper that silently truncated or swept it
+would lose exactly the evidence you came looking for. The cost is that this grows without
+bound on storage shared by every brain on the poller. So: don't point a chatty long-running
+command at it without a reason, and if you need space back, look at `--list` first and
+delete specific finished task dirs yourself — deliberately, not on a timer.
+
 ## Finding tasks you weren't told about
 
 ```
@@ -148,7 +155,23 @@ Two reasons to reach for this:
   | `FAILED` | We have an answer and it is bad: non-2xx, or a 2xx row that will never fire. |
   | `UNKNOWN` | The request never got an answer (timeout, refused). The schedule may or may not exist — deliberately not the same as `FAILED`. |
   | `pending` | Terminal state reached, no enqueue attempt recorded. |
+  | `NONE` | The runner is gone and never recorded a verdict — no wake is coming. Not "not yet". |
   | `dry-run` | `--dry-run`; nothing was sent. |
+
+  The `STATE` column answers a different question — whether the task is still alive:
+
+  | `STATE` | Meaning |
+  |---|---|
+  | `running` | No terminal line yet **and** the runner's pid is alive, within its TTL. |
+  | `finished` / `timed-out` | The runner said so itself. |
+  | `crashed` | The runner failed after the command ran; no wake was sent. |
+  | `abandoned` | No terminal line and no runner behind it — usually a poller restart, which takes in-flight tasks with it. Whatever the command wrote before the kill is still on disk. |
+  | `unknown` | No status file at all: either a task milliseconds old, or one orphaned before it wrote a line. |
+
+  `abandoned` exists because the absence of a terminal line does **not** mean "still
+  running". A restarted poller leaves dirs no runner will ever finish; reading those as
+  running would make them running forever, and the number would grow with every restart —
+  including in the "N other background tasks" line of every wake message.
 
   "The task finished" and "you were told" are different facts, and only the second one
   fails silently.
