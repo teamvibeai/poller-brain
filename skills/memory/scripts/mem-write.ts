@@ -16,6 +16,7 @@
 
 import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
+import { getNextKeyFromContents } from "./lib/mem-write-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
 const ARCHIVE_PATH = brainPath("memory/MEM_REGISTRY_ARCHIVE.md");
@@ -27,29 +28,19 @@ const REGISTRY_HEADER = `# MEM Registry
 |-----|--------|---------|-----------|-------------|
 `;
 
-function scanMaxKey(filePath: string, pattern: RegExp): number {
-  if (!fs.existsSync(filePath)) return 0;
-  const content = fs.readFileSync(filePath, "utf-8");
-  const matches = content.matchAll(pattern);
-  let max = 0;
-  for (const m of matches) {
-    const n = parseInt(m[1], 10);
-    if (n > max) max = n;
-  }
-  return max;
+function readOrEmpty(filePath: string): string {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
 }
 
+// Scan/precedence rules live in lib/mem-write-core.ts (fixture-tested — see
+// mem-write.test.ts) so a future refactor of this CLI can't silently regress
+// the prose-vs-canonical-row distinction (poller-brain#184, incident 2026-06-08).
 function getNextKey(): number {
-  // REGISTRY rows are pipe-tabled (`| MEM-N | ACTIVE | ...`) and have no prose drift risk — full scan is safe and acts as defense-in-depth.
-  const fromRegistry = scanMaxKey(REGISTRY_PATH, /MEM-(\d+)/g);
-  // MEM_REGISTRY_ARCHIVE.md holds REMOVED rows relocated out of the live registry
-  // (see mem-registry-archive.ts). If the highest-numbered key was REMOVED and
-  // archived, it no longer appears as a table row in the live registry — scan the
-  // archive too so the counter never reuses an archived number.
-  const fromArchive = scanMaxKey(ARCHIVE_PATH, /MEM-(\d+)/g);
-  // TODAY.md mixes canonical write rows with prose mentions (e.g. review summaries). Restrict to anchored canonical rows: `- [MEM-N] ...`. Permit whitespace or colon after `]` for forward-compat with format drift.
-  const fromToday = scanMaxKey(TODAY_PATH, /^- \[MEM-(\d+)\][\s:\]]/gm);
-  return Math.max(fromRegistry, fromArchive, fromToday) + 1;
+  return getNextKeyFromContents(
+    readOrEmpty(REGISTRY_PATH),
+    readOrEmpty(ARCHIVE_PATH),
+    readOrEmpty(TODAY_PATH)
+  );
 }
 
 function ensureRegistry(): void {

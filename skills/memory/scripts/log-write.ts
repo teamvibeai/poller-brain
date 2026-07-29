@@ -15,23 +15,24 @@
 
 import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
+import { computeRollover } from "./lib/log-write-core.js";
 
 const TODAY_PATH = brainPath("memory/TODAY.md");
 
+// Rollover decision lives in lib/log-write-core.ts (fixture-tested — see
+// log-write.test.ts) so the day-boundary branch can't silently regress
+// (poller-brain#184).
 function ensureToday(): void {
   const today = new Date().toISOString().slice(0, 10);
-  if (!fs.existsSync(TODAY_PATH)) {
-    fs.writeFileSync(TODAY_PATH, `# ${today}\n\n`);
-    return;
-  }
-  // If the LAST date header is older than today, start a fresh section
-  // so entries are logged under the correct date (prevents misfiled-entry pattern).
-  // Must check LAST header (not first) to avoid duplicate sections on same-day calls.
-  const content = fs.readFileSync(TODAY_PATH, "utf-8");
-  const headers = [...content.matchAll(/^# (\d{4}-\d{2}-\d{2})/gm)];
-  const lastHeader = headers[headers.length - 1];
-  if (!lastHeader || lastHeader[1] !== today) {
-    fs.appendFileSync(TODAY_PATH, `\n# ${today}\n\n`);
+  const existingContent = fs.existsSync(TODAY_PATH)
+    ? fs.readFileSync(TODAY_PATH, "utf-8")
+    : null;
+  const action = computeRollover(existingContent, today);
+
+  if (action.kind === "create") {
+    fs.writeFileSync(TODAY_PATH, action.textToWrite);
+  } else if (action.kind === "append-header") {
+    fs.appendFileSync(TODAY_PATH, action.textToWrite);
   }
 }
 
