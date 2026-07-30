@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bg-task.mjs — launch a long-running command detached from the current agent session
-// and get woken up in this channel when it ends.
+// and get woken up in this thread when it ends (plus interim checkpoints while it runs).
 //
 //   node bg-task.mjs --name build --ttl 1800 -- npm run build
 //
@@ -20,13 +20,10 @@ const RUNNER = join(HERE, 'bg-task-runner.mjs')
 
 const TTL_MIN = 30
 const TTL_MAX = 21600
-// Wake is scheduled this many seconds after the command ends, overridable via
-// BG_TASK_WAKE_DELAY. Not zero on purpose — see buildBody in bg-task-runner.mjs.
-const DEFAULT_WAKE_DELAY = 30
 
 const USAGE =
-  'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--channel SLACK_CHANNEL] ' +
-  '[--thread THREAD_TS] [--note TEXT] [--dry-run] -- <command...>\n' +
+  'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--note TEXT] [--notify-on REGEX] ' +
+  '[--dry-run] -- <command...>\n' +
   '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
@@ -40,10 +37,14 @@ export function parseArgs(argv, env = {}) {
   const opts = {
     name: 'task',
     ttl: 900,
-    channel: env.SLACK_CHANNEL || '',
-    thread: env.SLACK_THREAD_TS || '',
+    // The full `<botId>:<channel>:<threadTs>` the poller stamps as INBOX_THREAD_ID for
+    // every session (claude-spawner.ts) — the one value the inbox watcher's
+    // parseSlackThreadId accepts. There is no override flag: unlike the old scheduled-
+    // message path, a drop always lands in the thread that launched it. That closes the
+    // lateral-channel-override gap the old --channel flag had (teamvibe.ai#244).
+    threadId: env.INBOX_THREAD_ID || '',
     dryRun: env.BG_TASK_DRY === '1',
-    wakeDelay: env.BG_TASK_WAKE_DELAY ?? String(DEFAULT_WAKE_DELAY),
+    notifyOn: '',
     note: '',
     cmd: [],
   }
@@ -52,14 +53,13 @@ export function parseArgs(argv, env = {}) {
     const a = argv[i]
     if (a === '--') { i++; break }
     if (a === '--list') return { list: true }
-    const needsValue = ['--name', '--ttl', '--channel', '--thread', '--note'].includes(a)
+    const needsValue = ['--name', '--ttl', '--note', '--notify-on'].includes(a)
     if (needsValue && i + 1 >= argv.length) return { error: `${a} needs a value` }
     switch (a) {
       case '--name': opts.name = argv[++i]; break
       case '--ttl': opts.ttl = argv[++i]; break
-      case '--channel': opts.channel = argv[++i]; break
-      case '--thread': opts.thread = argv[++i]; break
       case '--note': opts.note = argv[++i]; break
+      case '--notify-on': opts.notifyOn = argv[++i]; break
       case '--dry-run': opts.dryRun = true; break
       case '-h': case '--help': return { help: true }
       default: return { error: `unknown argument: ${a}` }
@@ -70,27 +70,22 @@ export function parseArgs(argv, env = {}) {
   if (!opts.cmd.length) return { error: 'no command given (everything after -- is the command)' }
   if (!/^\d+$/.test(String(opts.ttl))) return { error: '--ttl must be an integer number of seconds' }
   opts.ttl = Number(opts.ttl)
-  // Floor keeps the wake path meaningful (the scheduler ticks about once a minute);
-  // ceiling is 6 h so a forgotten task cannot hold a slot indefinitely.
+  // Floor keeps a checkpoint interval meaningful (flushIntervalSec would otherwise clamp
+  // to a floor bigger than the task itself); ceiling is 6 h so a forgotten task cannot
+  // hold a slot indefinitely.
   if (opts.ttl < TTL_MIN || opts.ttl > TTL_MAX) {
     return { error: `--ttl must be between ${TTL_MIN} and ${TTL_MAX} seconds` }
   }
-  if (!opts.channel) {
-    return { error: 'no target channel — pass --channel or run where SLACK_CHANNEL is set' }
+  if (!opts.threadId) {
+    return { error: 'no thread to report back to — INBOX_THREAD_ID is not set in this session\'s environment' }
   }
-  if (!/^\d+$/.test(String(opts.wakeDelay))) {
-    return { error: 'BG_TASK_WAKE_DELAY must be an integer number of seconds' }
+  if (opts.notifyOn) {
+    try { new RegExp(opts.notifyOn) } catch (e) {
+      return { error: `--notify-on is not a valid regex: ${e.message}` }
+    }
   }
-  opts.wakeDelay = Number(opts.wakeDelay)
   return { opts }
 }
-
-export const REQUIRED_ENV = [
-  'TEAMVIBE_API_URL',
-  'TEAMVIBE_POLLER_TOKEN',
-  'TEAMVIBE_WORKSPACE_ID',
-  'TEAMVIBE_CHANNEL_ID',
-]
 
 // Namespaced per channel: a poller can host several brains and they share
 // $PERSISTENT_STORAGE_PATH. Without the namespace, two brains starting a same-named task
@@ -109,7 +104,7 @@ export function taskId(name, pid, now) {
 }
 
 // --- listing ----------------------------------------------------------------------
-// A task whose wake notification never arrived is invisible otherwise: the state is on
+// A task whose terminal drop never arrived is invisible otherwise: the state is on
 // disk, but you have to know to go looking. --list makes that recoverable, and also
 // answers "what else is running right now", which is otherwise only visible via ps.
 
@@ -156,50 +151,36 @@ export function lifecycleOf(kv, { now = Date.now(), alive = pidAlive } = {}) {
   return 'running'
 }
 
-// Wake delivery is its own column because "the task finished" and "you were told" are
+// Delivery is its own column because "the task finished" and "you were told" are
 // different facts, and only the second one can silently fail.
 //
-// Every value asserts exactly what the status file proves and no more:
-//   enqueued  the API accepted the row AND it is ACTIVE with a nextRunAt — it will fire.
-//             Still NOT "delivered": that is the strongest claim available here.
-//   FAILED    we have an answer and it is bad (non-2xx, or a row that will never fire).
-//   UNKNOWN   the transport died; the row may or may not exist. Not the same as FAILED,
-//             and flattening the two would claim knowledge we do not have.
-//   pending   the command ended and the enqueue is plausibly still in flight.
-//   NONE      nobody is left to send one. Two routes reach it: the runner vanished
+//   dropped   the terminal write into .inbox/ succeeded — either a running session will
+//             pick it up on its own next check, or the inbox watcher will start one.
+//   FAILED    the write itself threw (permissions, disk full, missing .inbox/ parent) —
+//             we have an answer and it is bad.
+//   pending   the command ended and the drop is plausibly still being written — the write
+//             is synchronous, so this window is just process-scheduling slack, not a
+//             network round trip the way the old HTTP path's `UNKNOWN` was.
+//   NONE      nobody is left to drop it. Two routes reach it: the runner vanished
 //             mid-command (`state=abandoned`), or it recorded the end and then died
-//             before writing any verdict — a poller restart, the documented
-//             non-durability edge. `runner_crashed` does not cover the second: that is
-//             an exception the process lived to handle. Both are "never", not "not
-//             yet", and `pending` would read as "still coming". ONE value on purpose:
-//             this column answers one question — will I be told — and HOW the runner
-//             died is already in STATE. A second synonym would be a second label for
-//             the same claim.
-// When the inbox-drop + cancel-on-pickup path lands it must add its OWN values
-// (`cancelled`, `delivered-inbox`) rather than reuse these.
+//             before writing a verdict — a poller restart, the documented non-durability
+//             edge. Both are "never", not "not yet".
+//   dry-run   --dry-run: nothing was written to the real inbox.
 //
-// The runner gives up on the HTTP call after this many seconds, so an end older than
-// that plus a margin for process scheduling can no longer have a request in flight.
-// Derived from the same env var the runner uses, never a second constant: a shorter
-// deadline in a test or a longer one in production must move both together.
-const HTTP_DEADLINE_SEC = Number(process.env.BG_TASK_HTTP_TIMEOUT || 30)
-const WAKE_IN_FLIGHT_MS = (HTTP_DEADLINE_SEC + 30) * 1000
+// A synchronous fs write collapses the old FAILED/UNKNOWN split from the HTTP-based
+// design (teamvibe.ai#250 removed the network hop entirely): there is no transport that
+// can die without an answer, only a write that throws or doesn't.
+const DROP_IN_FLIGHT_MS = 5000
 
 function wakeStateOf(kv, state, now) {
   if (kv.dry_run) return 'dry-run'
   if (kv.runner_crashed) return 'FAILED'
-  const verdict = kv.enqueue
-  // A recorded verdict always beats the clock — ageing only decides between "still
-  // coming" and "never went out", never between success and failure.
-  if (verdict) {
-    if (verdict === 'ok') return 'enqueued'
-    if (verdict.startsWith('unknown:')) return 'UNKNOWN'
-    return 'FAILED'
-  }
+  const verdict = kv.terminal_drop
+  if (verdict) return verdict === 'ok' ? 'dropped' : 'FAILED'
   if (state === 'running') return '-'
   if (state === 'abandoned') return 'NONE'
   const ended = Date.parse(kv.ended || '')
-  if (Number.isFinite(ended) && now - ended > WAKE_IN_FLIGHT_MS) return 'NONE'
+  if (Number.isFinite(ended) && now - ended > DROP_IN_FLIGHT_MS) return 'NONE'
   return 'pending'
 }
 
@@ -272,7 +253,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (parsed.help) { console.log(USAGE); process.exit(0) }
 
   // --list is read-only: it needs the channel namespace and nothing else, so it must not
-  // be gated behind the launch-path validation (a command, an API token).
+  // be gated behind the launch-path validation (a command, a thread to report back to).
   if (parsed.list) {
     if (!process.env.TEAMVIBE_CHANNEL_ID) die('missing environment variable TEAMVIBE_CHANNEL_ID', 2)
     console.log(formatTaskList(listTasks(taskRoot(process.env))))
@@ -282,8 +263,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (parsed.error) die(parsed.error)
   const { opts } = parsed
 
-  for (const v of REQUIRED_ENV) {
-    if (!process.env[v]) die(`missing environment variable ${v} — cannot deliver the finish signal`, 2)
+  if (!process.env.TEAMVIBE_CHANNEL_ID) {
+    die('missing environment variable TEAMVIBE_CHANNEL_ID — cannot namespace task storage', 2)
   }
 
   const root = taskRoot(process.env)
@@ -311,13 +292,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // the whole trick — verified empirically in pb#231 (survived a full teardown).
   const child = spawn(
     process.execPath,
-    [RUNNER, dir, String(opts.ttl), opts.name, opts.channel, opts.thread, opts.dryRun ? '1' : '0',
-      String(opts.wakeDelay), '--', ...opts.cmd],
+    [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
+      opts.notifyOn, '--', ...opts.cmd],
     { detached: true, stdio: ['ignore', out, out] },
   )
   child.unref()
 
   console.log(`bg-task launched: name=${opts.name} id=${id} ttl=${opts.ttl}s`)
   console.log(`dir=${dir} (status, output.log, cmd)`)
-  console.log('You will be woken in this channel ~1 min after it ends. Do not poll — end your turn.')
+  console.log('You will get interim checkpoints and a final result in this thread. Do not poll — end your turn.')
 }
