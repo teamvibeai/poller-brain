@@ -319,10 +319,5 @@ feedback DB; consolidated by the eval pipeline into a weekly digest and
 triaged into individual GitHub issues. This is the only supported route —
 most agents don't have GitHub repo access to create issues directly.
 
-**Migrating from `PENDING_ISSUES.md`:** that file/route is deprecated (agents
-generally lack the GitHub access it implicitly assumed). If your brain still
-has a `PENDING_ISSUES.md` with `status: pending` entries, submit each one via
-`submit_feedback` — infer `type`/`priority` from the entry's content (the old
-format didn't have them), and include the original `repo` in `context` so
-the target isn't lost — then delete the file. See MAINTENANCE.md for the
-one-time migration note.
+`PENDING_ISSUES.md` is deprecated. If your brain still has one, see
+MAINTENANCE.md's "Pending Issues" / "One-Time" sections for the migration.
