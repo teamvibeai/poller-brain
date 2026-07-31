@@ -310,4 +310,14 @@ When `HEARTBEAT.md` becomes empty, delete the file.
 **Heartbeat reliability:** intervals are variable / best-effort. Never depend on heartbeat for time-critical work — always use scheduled messages.
 
 ### Reporting Issues
-When a user explicitly asks to report an issue about the platform or base brain (e.g., "zapiš jako issue", "report this", "pošli jako issue"), write it to `PENDING_ISSUES.md`. The issue will be included in your next maintenance report and processed into a GitHub issue. See MAINTENANCE.md for the full convention.
+
+When a user explicitly asks to report an issue about the platform or base
+brain (e.g., "zapiš jako issue", "report this", "pošli jako issue"), or when
+you observe a platform problem worth tracking yourself, use
+`mcp__teamvibe-api__submit_feedback`. It writes directly to the central
+feedback DB; consolidated by the eval pipeline into a weekly digest and
+triaged into individual GitHub issues. This is the only supported route —
+most agents don't have GitHub repo access to create issues directly.
+
+`PENDING_ISSUES.md` is deprecated. If your brain still has one, see
+MAINTENANCE.md's "Pending Issues" / "One-Time" sections for the migration.

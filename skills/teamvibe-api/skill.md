@@ -198,6 +198,11 @@ Submit feedback about the platform. Stored in a central database and consolidate
 - You observe a platform problem worth tracking (repeated MCP failures, missing features)
 - You want to suggest an improvement based on your experience
 
+This is the platform's only supported feedback/issue-reporting route — most
+agents don't have GitHub repo access to create issues directly.
+`PENDING_ISSUES.md` is deprecated; see CLAUDE.md's Reporting Issues section
+for the one-time migration note.
+
 ### Example
 
 ```json
