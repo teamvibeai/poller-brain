@@ -121,8 +121,6 @@ Your session's current thread is encoded in the inbox path: `.inbox/SESSION:CHAN
 
 `send_message` now checks this for you: an explicit `thread_ts` that differs from the session thread **and** is not referenced in the message that woke you comes back with a `thread_ts_override_unjustified` warning (after the post — delete with `chat.delete(ts)` and re-send if it was a mistake). If the message that woke you couldn't be read at all, you get `thread_ts_override_unverified` instead — same recovery, the target just couldn't be confirmed either way. Case 3 above is not detected yet, so a deliberate handoff back into a recently-woken thread will warn; ignore it there.
 
-> Tool-layer guardrail history: [teamvibeai/teamvibe.ai#108](https://github.com/teamvibeai/teamvibe.ai/issues/108) (CLOSED 2026-05-28, `missing_recipient_tag` warning shipped via poller-brain#136); thread-continuity wake: [teamvibeai/teamvibe.ai#109](https://github.com/teamvibeai/teamvibe.ai/issues/109); `thread_ts` override guardrail: [teamvibeai/teamvibe.ai#184](https://github.com/teamvibeai/teamvibe.ai/issues/184) (phase 1 = signals A+C, shipped here; recent-wake signal deferred).
-
 ## Persistent Storage
 
 If `$PERSISTENT_STORAGE_PATH` is set, you can use it for files that should persist across sessions (e.g., caches, downloaded tools). The `$PERSISTENT_STORAGE_PATH/bin` directory is in your PATH.
