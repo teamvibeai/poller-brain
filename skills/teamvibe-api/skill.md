@@ -194,16 +194,14 @@ Submit feedback about the platform. Stored in a central database and consolidate
 
 ### When to use
 
-- Default route for platform feedback: general bug/improvement/observation
-  signals, including "report this" / "zapiš jako issue" when the user hasn't
-  asked for a dedicated numbered issue right away
-- You observe a platform problem worth tracking (repeated MCP failures,
-  missing features)
+- User explicitly reports an issue ("report this", "zapiš jako issue", "tohle nefunguje")
+- You observe a platform problem worth tracking (repeated MCP failures, missing features)
 - You want to suggest an improvement based on your experience
 
-Note: if the user explicitly wants a dedicated numbered GitHub issue tracked
-immediately (not batched into a weekly digest), use `PENDING_ISSUES.md`
-instead — see CLAUDE.md's Reporting Issues section.
+This is the platform's only supported feedback/issue-reporting route — most
+agents don't have GitHub repo access to create issues directly.
+`PENDING_ISSUES.md` is deprecated; see CLAUDE.md's Reporting Issues section
+for the one-time migration note.
 
 ### Example
 

@@ -311,21 +311,18 @@ When `HEARTBEAT.md` becomes empty, delete the file.
 
 ### Reporting Issues
 
-Two routes exist for surfacing platform/base-brain problems — pick by what the
-user actually wants, not just by trigger phrase:
+When a user explicitly asks to report an issue about the platform or base
+brain (e.g., "zapiš jako issue", "report this", "pošli jako issue"), or when
+you observe a platform problem worth tracking yourself, use
+`mcp__teamvibe-api__submit_feedback`. It writes directly to the central
+feedback DB; consolidated by the eval pipeline into a weekly digest and
+triaged into individual GitHub issues. This is the only supported route —
+most agents don't have GitHub repo access to create issues directly.
 
-**Default: `mcp__teamvibe-api__submit_feedback`** — use for general bug/
-improvement/observation signals ("tohle nefunguje", "warto by bylo...", or
-you noticing a repeated platform problem yourself). Writes directly to the
-central feedback DB; consolidated by the eval pipeline into a weekly digest,
-then triaged into individual GitHub issues later.
-
-**`PENDING_ISSUES.md`: only when the user explicitly wants a dedicated,
-numbered GitHub issue tracked immediately** (not batched into a weekly
-digest) — e.g. "zapiš tohle jako issue na poller-brain, chci to sledovat".
-Valid target repos: `teamvibeai/teamvibe.ai`, `teamvibeai/poller-brain`,
-`teamvibeai/poller-brain-eval`. Included in your next maintenance report and
-turned into a GitHub issue within one cycle. See MAINTENANCE.md for the full
-convention.
-
-If genuinely unsure which the user wants, ask — don't guess from phrasing alone.
+**Migrating from `PENDING_ISSUES.md`:** that file/route is deprecated (agents
+generally lack the GitHub access it implicitly assumed). If your brain still
+has a `PENDING_ISSUES.md` with `status: pending` entries, submit each one via
+`submit_feedback` — infer `type`/`priority` from the entry's content (the old
+format didn't have them), and include the original `repo` in `context` so
+the target isn't lost — then delete the file. See MAINTENANCE.md for the
+one-time migration note.
