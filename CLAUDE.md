@@ -310,4 +310,22 @@ When `HEARTBEAT.md` becomes empty, delete the file.
 **Heartbeat reliability:** intervals are variable / best-effort. Never depend on heartbeat for time-critical work — always use scheduled messages.
 
 ### Reporting Issues
-When a user explicitly asks to report an issue about the platform or base brain (e.g., "zapiš jako issue", "report this", "pošli jako issue"), write it to `PENDING_ISSUES.md`. The issue will be included in your next maintenance report and processed into a GitHub issue. See MAINTENANCE.md for the full convention.
+
+Two routes exist for surfacing platform/base-brain problems — pick by what the
+user actually wants, not just by trigger phrase:
+
+**Default: `mcp__teamvibe-api__submit_feedback`** — use for general bug/
+improvement/observation signals ("tohle nefunguje", "warto by bylo...", or
+you noticing a repeated platform problem yourself). Writes directly to the
+central feedback DB; consolidated by the eval pipeline into a weekly digest,
+then triaged into individual GitHub issues later.
+
+**`PENDING_ISSUES.md`: only when the user explicitly wants a dedicated,
+numbered GitHub issue tracked immediately** (not batched into a weekly
+digest) — e.g. "zapiš tohle jako issue na poller-brain, chci to sledovat".
+Valid target repos: `teamvibeai/teamvibe.ai`, `teamvibeai/poller-brain`,
+`teamvibeai/poller-brain-eval`. Included in your next maintenance report and
+turned into a GitHub issue within one cycle. See MAINTENANCE.md for the full
+convention.
+
+If genuinely unsure which the user wants, ask — don't guess from phrasing alone.

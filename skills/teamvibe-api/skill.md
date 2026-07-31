@@ -194,9 +194,16 @@ Submit feedback about the platform. Stored in a central database and consolidate
 
 ### When to use
 
-- User explicitly reports an issue ("report this", "zapiš jako issue", "tohle nefunguje")
-- You observe a platform problem worth tracking (repeated MCP failures, missing features)
+- Default route for platform feedback: general bug/improvement/observation
+  signals, including "report this" / "zapiš jako issue" when the user hasn't
+  asked for a dedicated numbered issue right away
+- You observe a platform problem worth tracking (repeated MCP failures,
+  missing features)
 - You want to suggest an improvement based on your experience
+
+Note: if the user explicitly wants a dedicated numbered GitHub issue tracked
+immediately (not batched into a weekly digest), use `PENDING_ISSUES.md`
+instead — see CLAUDE.md's Reporting Issues section.
 
 ### Example
 
