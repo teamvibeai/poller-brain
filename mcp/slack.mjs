@@ -708,6 +708,17 @@ const TOOLS = [
       required: ['text'],
     },
   },
+  {
+    name: 'set_expected_duration',
+    description: 'Tell the platform roughly how long the work you are about to do will take, so the user gets proactive progress updates if it runs long (0-5 min: no update needed, 5-10 min: one update, 10-15 min: two updates, 15+ min: three updates). Call this once, early, when you can already tell a task will take a while (e.g. a large multi-file refactor or deep research) — not required for normal quick replies. This does not affect timeouts or safety limits, only how often the user hears from you.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        minutes: { type: 'number', description: 'Your best-guess estimate of total time this task will take, in minutes' },
+      },
+      required: ['minutes'],
+    },
+  },
 ]
 
 // --- Tool handlers ---
@@ -1112,6 +1123,19 @@ async function handleTool(name, args) {
         status: args.text,
       })
       return { ok: true }
+    }
+
+    case 'set_expected_duration': {
+      // No Slack API call — this tool exists purely as a signal. The poller
+      // reads this tool_use event directly off the Claude Code stdout stream
+      // (packages/poller/src/claude-spawner.ts) and drives the tiered
+      // progress-notification schedule from it. Nothing to do here but
+      // validate and acknowledge.
+      const minutes = Number(args.minutes)
+      if (!Number.isFinite(minutes) || minutes <= 0) {
+        throw new Error('minutes must be a positive number')
+      }
+      return { ok: true, minutes }
     }
 
     default:
