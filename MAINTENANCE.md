@@ -223,6 +223,8 @@ assumed. Do not write new entries to `PENDING_ISSUES.md`.
 
     The evaluator reads the compliance block directly and ignores a `true` selfAssessment when the block shows < 0.8. **Omitting the `[self-critique]` entry causes an automatic failure for this criterion — it is not optional.**
 
+    **`daily-log-exists-today` self-assessment rule:** Set `daily-log-exists-today: true` only if `memory/daily/YYYY-MM-DD.md` for today is non-empty — an archive created from an empty TODAY.md fails this criterion. **Pre-archive check:** Before archiving TODAY.md, verify it contains at least one substantive entry. If TODAY.md is empty or contains only reset-template content, write one entry first: `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "maintenance: consolidation session"`. This ensures the archive is never empty — the consolidation report itself counts as session activity, so the criterion is always applicable when consolidation runs.
+
 ## Twice Weekly
 
 - **Memory reflection**: Check `memory/episodic/reflection-*.md` for the last reflection date. If 3+ days old (or none exist), run the memory-reflect skill to assess memory quality. **Produce a report.**
