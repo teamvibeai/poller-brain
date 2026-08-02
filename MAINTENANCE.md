@@ -190,7 +190,7 @@ assumed. Do not write new entries to `PENDING_ISSUES.md`.
 
 ## Daily
 
-- **Memory consolidation**: Run `bash scripts/maintenance-guard.sh` first. If it exits non-zero, skip consolidation entirely (no report needed). If it exits 0, run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
+- **Memory consolidation**: Run `bash scripts/maintenance-guard.sh` first. If it exits non-zero, skip consolidation entirely (no report needed). If it exits 0, run `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "maintenance: consolidation session"` **before** invoking the memory-consolidate skill — this stamps today's date section into TODAY.md so that the consolidate skill's Step 0 archive creates `memory/daily/<today>.md` (required for `daily-log-exists-today`). Then run the memory-consolidate skill to process daily logs into long-term memory. **Produce a report.**
   - **Tier coverage check**: Before completing consolidation, verify that each memory tier was explicitly considered: `memory/semantic/` (facts/knowledge), `memory/episodic/` (significant events), `memory/procedural/` (workflows), `memory/core/` (corrections, preferences, lessons). If any daily log contains information relevant to a tier, that tier MUST be updated. Do not stop after updating one tier — check all four. Every consolidation report MUST include a `## Tier Coverage` section documenting each tier's status — either what was updated or an explicit "no new content" confirmation:
     ```markdown
     ## Tier Coverage
