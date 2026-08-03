@@ -444,6 +444,23 @@ function buildSendResponse({ ts, transformed, warnings }) {
   return response
 }
 
+// Repairs a bare URL wrapped in single-asterisk bold where the ENTIRE bold
+// span is just the URL (poller-brain#225). Root cause (empirically confirmed
+// against live Slack rendering): Slack's autolinker finds the `http(s)://`
+// start fine, so the leading `*` is stranded as literal text, but it scans
+// forward for the URL's end until whitespace — `*` isn't a stop character, so
+// the trailing `*` gets swallowed into the href and corrupts it. A bare URL
+// (no adjacent markers) already renders correctly, so stripping both
+// asterisks is sufficient — no need to re-wrap as an explicit `<url>` link.
+// Deliberately narrow: only the `*...*` marker (not `_..._`/`~...~`), and only
+// when the bold span contains NOTHING but the URL — a bold sentence that
+// merely mentions a URL (`*see https://x for details*`) is untouched, since
+// there's no evidence that pattern hits the same adjacency bug and it's a far
+// more common, riskier span to alter.
+function stripBoldWrappedUrl(text) {
+  return text.replace(/(^|\s)\*(https?:\/\/[^\s*]+)\*(?=\s|$)/g, '$1$2')
+}
+
 // Pure payload builder for send_message: decides final blocks / effective text /
 // transform echo BEFORE any network I/O, so the three-way branch (auto-convert
 // vs section-prepend vs verbatim passthrough) is unit-testable without Slack.
@@ -453,24 +470,39 @@ function buildSendResponse({ ts, transformed, warnings }) {
 // table, opt-out/passthrough keeps the #224 warning). No behavior change vs the
 // prior inline logic — this is an extraction to lock the branches regressibly.
 function buildSendPayload(args, { hasModals = false } = {}) {
+  // #225 fix runs first and unconditionally on `text` (not gated behind the
+  // agentSuppliedBlocks opt-out like the table converter): even when the agent
+  // supplies its own blocks, `text` is still sent — either prepended as a
+  // section or as the notification fallback — so the same rendering bug would
+  // reach Slack either way.
+  const rawText = args.text
+  const text = typeof rawText === 'string' ? stripBoldWrappedUrl(rawText) : rawText
+  const boldUrlFixed = text !== rawText
+
   const agentBlocks = args.blocks ? [...args.blocks] : []
   const agentSuppliedBlocks = agentBlocks.length > 0
-  const tableWarning = computePipeTableWarning(args.text)
+  const tableWarning = computePipeTableWarning(text)
 
   let blocks = agentBlocks
-  let effectiveText = args.text
+  let effectiveText = text
   let transformed = null
 
   const converted =
-    args.text?.trim() && tableWarning && !agentSuppliedBlocks
-      ? convertPipeTablesToBlocks(args.text)
+    text?.trim() && tableWarning && !agentSuppliedBlocks
+      ? convertPipeTablesToBlocks(text)
       : null
   if (converted) {
     blocks = converted.blocks
     effectiveText = converted.fallbackText
     transformed = converted.transformed
-  } else if (args.text?.trim() && (agentSuppliedBlocks || hasModals)) {
-    blocks = [...textToSections(args.text), ...agentBlocks]
+  } else if (text?.trim() && (agentSuppliedBlocks || hasModals)) {
+    blocks = [...textToSections(text), ...agentBlocks]
+  }
+
+  if (boldUrlFixed) {
+    transformed = transformed
+      ? { ...transformed, bold_url_stripped: true }
+      : { reason: 'bold_wrapped_url_in_text', bold_url_stripped: true }
   }
 
   return { blocks, effectiveText, transformed, tableWarning, agentSuppliedBlocks }
@@ -507,7 +539,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback.' },
+        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback. AUTO-REPAIR: a bare URL wrapped in bold as its own span (`*https://...*`) is auto-stripped to a plain URL — Slack mangles that pattern\'s link (see `transformed.bold_url_stripped`). Prefer a bare URL or `<url|label>` yourself rather than relying on this.' },
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions, or a `markdown` block for tables/GFM). See https://api.slack.com/block-kit. Providing blocks OPTS OUT of table auto-convert — your blocks are sent as-is and `text` is prepended as a visible section block. Omit blocks to let a GFM table in `text` auto-convert.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread). Pass null to send a top-level channel message even when in a thread session.' },

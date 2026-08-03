@@ -83,6 +83,33 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
   ok('e agent blocks+table text → passthrough (no double render path)', r.transformed === null)
 }
 
+// (g) poller-brain#225: bold-wrapped bare URL in text -> stripped + echoed,
+// applies even when no table is present (the plain-passthrough case the bug
+// actually reproduces in)
+{
+  const r = buildSendPayload({ text: 'Report: *https://x.io/a* hotovo' })
+  ok('g effectiveText has asterisks stripped', r.effectiveText === 'Report: https://x.io/a hotovo')
+  ok('g no blocks synthesized (still plain passthrough)', r.blocks.length === 0)
+  ok('g transformed echoes the fix', r.transformed?.reason === 'bold_wrapped_url_in_text' && r.transformed.bold_url_stripped === true)
+}
+
+// (h) #225 fix still applies even when the agent supplies its own blocks —
+// `text` still reaches Slack (section-prepended), so the same bug would hit it
+{
+  const own = [{ type: 'divider' }]
+  const r = buildSendPayload({ text: '*https://x.io/a*', blocks: own })
+  ok('h text field fixed even with agent blocks', r.blocks[0].type === 'section' && r.blocks[0].text.text === 'https://x.io/a')
+  ok('h transform still echoed', r.transformed?.bold_url_stripped === true)
+}
+
+// (i) #225 + table combo: both fixes apply, table transform stays primary reason
+{
+  const r = buildSendPayload({ text: `*https://x.io/a*\n\n${TABLE}` })
+  ok('i table transform reason preserved', r.transformed?.reason === 'pipe_table_in_text')
+  ok('i bold_url_stripped flag also present', r.transformed?.bold_url_stripped === true)
+  ok('i prose section carries the stripped URL, no asterisks', r.blocks.find(b => b.type === 'section').text.text.includes('https://x.io/a') && !r.blocks.find(b => b.type === 'section').text.text.includes('*https'))
+}
+
 // (f) buildSendResponse key order — the poller truncates a logged tool_result at
 // 200 chars, so a code that lands after unbounded prose is invisible to whoever
 // counts warnings in the session log (#108 counting, #184 phase 3).

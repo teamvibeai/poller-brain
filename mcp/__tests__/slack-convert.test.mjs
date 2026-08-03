@@ -9,9 +9,9 @@ import { dirname, join } from 'node:path'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
-const exports = '\nexport { isTableLine, computePipeTableWarning, gfmInlineToMrkdwn, convertPipeTablesToBlocks, textToSections }\n'
+const exports = '\nexport { isTableLine, computePipeTableWarning, gfmInlineToMrkdwn, convertPipeTablesToBlocks, textToSections, stripBoldWrappedUrl }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
-const { computePipeTableWarning, convertPipeTablesToBlocks } = mod
+const { computePipeTableWarning, convertPipeTablesToBlocks, stripBoldWrappedUrl } = mod
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
@@ -69,6 +69,32 @@ const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++;
 // 9) single isolated pipe line (not 2+ rows) → not a table
 {
   ok('9 lone pipe line not a table', computePipeTableWarning('cena | 100 Kč jeden řádek') === null)
+}
+
+// 10) poller-brain#225: bare URL wrapped as its own bold span -> stripped
+{
+  ok('10 whole-span bold URL stripped', stripBoldWrappedUrl('*https://x.io/a*') === 'https://x.io/a')
+  ok('10 mid-sentence, surrounded by other text', stripBoldWrappedUrl('Hotovo: *https://x.io/a* diky') === 'Hotovo: https://x.io/a diky')
+  ok('10 start of string, trailing text', stripBoldWrappedUrl('*https://x.io/a* diky') === 'https://x.io/a diky')
+  ok('10 end of string, leading text', stripBoldWrappedUrl('Viz *https://x.io/a*') === 'Viz https://x.io/a')
+  ok('10 multiple occurrences', stripBoldWrappedUrl('*https://a.io*\n*https://b.io*') === 'https://a.io\nhttps://b.io')
+}
+// 11) poller-brain#225: NOT touched — bold sentence merely containing a URL as substring
+{
+  const t = '*Viz report: https://x.io/a pro detaily*'
+  ok('11 bold sentence with URL substring untouched', stripBoldWrappedUrl(t) === t)
+}
+// 12) poller-brain#225: NOT touched — other markers (narrow scope: only `*...*`)
+{
+  ok('12 underscore-italic untouched', stripBoldWrappedUrl('_https://x.io/a_') === '_https://x.io/a_')
+  ok('12 tilde-strike untouched', stripBoldWrappedUrl('~https://x.io/a~') === '~https://x.io/a~')
+  ok('12 double-star GFM bold untouched (different pattern)', stripBoldWrappedUrl('**https://x.io/a**') === '**https://x.io/a**')
+}
+// 13) poller-brain#225: plain text / no markers -> byte-identical passthrough
+{
+  const t = 'Jen normální text s https://x.io/a bez formátování.'
+  ok('13 unwrapped URL untouched', stripBoldWrappedUrl(t) === t)
+  ok('13 no URL at all untouched', stripBoldWrappedUrl('*tučně* bez URL') === '*tučně* bez URL')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
