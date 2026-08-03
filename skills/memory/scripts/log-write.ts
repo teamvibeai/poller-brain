@@ -15,13 +15,13 @@
 
 import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
-import { computeRollover } from "./lib/log-write-core.js";
+import { computeRollover } from "./lib/today-md-core.js";
 
 const TODAY_PATH = brainPath("memory/TODAY.md");
 
-// Rollover decision lives in lib/log-write-core.ts (fixture-tested — see
+// Rollover decision lives in lib/today-md-core.ts (fixture-tested — see
 // log-write.test.ts) so the day-boundary branch can't silently regress
-// (poller-brain#184).
+// (poller-brain#184). Shared with mem-write.ts (poller-brain#267).
 function ensureToday(): void {
   const today = new Date().toISOString().slice(0, 10);
   const existingContent = fs.existsSync(TODAY_PATH)

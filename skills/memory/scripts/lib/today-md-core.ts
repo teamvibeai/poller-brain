@@ -1,12 +1,16 @@
 /**
- * Pure date-rollover decision logic for log-write.ts.
+ * Pure date-rollover decision logic for memory/TODAY.md, shared by
+ * log-write.ts and mem-write.ts (both write to TODAY.md and must agree on
+ * when a UTC day boundary requires a fresh "# YYYY-MM-DD" section).
  *
- * Extracted so the day-boundary branch (new day -> fresh "# YYYY-MM-DD"
- * section) can be fixture-tested without touching a real brain's TODAY.md.
- * Must check the LAST date header, not the first, so a same-day call after
- * an earlier rollover does not append a duplicate section.
+ * Extracted so the day-boundary branch can be fixture-tested without
+ * touching a real brain's TODAY.md. Must check the LAST date header, not the
+ * first, so a same-day call after an earlier rollover does not append a
+ * duplicate section.
  *
- * Reference: poller-brain#184 (DevGuru review of PR#183).
+ * Reference: poller-brain#184 (DevGuru review of PR#183); poller-brain#267
+ * (mem-write.ts never got this fix — module renamed from log-write-core.ts
+ * so its shared nature is obvious from the name).
  */
 
 export type RolloverAction =
