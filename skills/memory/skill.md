@@ -228,9 +228,13 @@ For events, triage, status updates, session notes:
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "heartbeat: klidný den, žádné pending issues"
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "triage: 3 nové emaily, žádný urgentní"
 # Output: Logged to memory/TODAY.md
+
+# If this session was triggered by a real Slack message from a human
+# (not Scheduled/heartbeat), tag it:
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" --source=user-session "triage: 3 nové emaily, žádný urgentní"
 ```
 
-The script appends a timestamped line: `- [HH:MM] content`
+The script appends a timestamped, source-tagged line: `- [HH:MM] [maint|user] content`. `--source=` defaults to `maintenance` when omitted (fail-safe — see CLAUDE.md's "Tag the trigger source" note); same flag works on `mem-write.ts` below.
 
 #### `mem-write.ts` — tracked memory
 

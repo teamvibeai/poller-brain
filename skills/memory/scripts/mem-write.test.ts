@@ -90,4 +90,22 @@ function assert(cond: boolean, msg: string): void {
   assert(key === 1, `fresh brain must start at key 1, got ${key}`);
 }
 
+// --- mixed pre-/post-poller-brain#169 rows in the same TODAY.md ------------
+// Realistic post-merge state: old rows written before the brain picked up
+// the --source= flag sit alongside new [maint]/[user]-tagged rows from
+// after. The tag must not confuse the canonical-row anchor regex.
+{
+  const today = `# 2026-08-04
+
+- [MEM-3] untagged mem entry from before this brain pulled the update
+- [MEM-4] [user] tagged entry after update, same day
+- [MEM-5] [maint] another tagged entry
+`;
+  const key = getNextKeyFromContents("", "", today);
+  assert(
+    key === 6,
+    `mixed tagged/untagged rows must still resolve the true max — expected next key 6, got ${key}`
+  );
+}
+
 console.log(`✅ all ${passed} assertions passed`);

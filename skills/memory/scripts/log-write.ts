@@ -9,6 +9,13 @@
  *   npx tsx log-write.ts "heartbeat: klidný den, žádné pending issues"
  *   npx tsx log-write.ts "triage: 3 nové emaily, žádný urgentní"
  *
+ * --source=maintenance|user-session (optional, default: maintenance):
+ *   Pass --source=user-session when this session was triggered by a real
+ *   Slack message from a human (not Scheduled/heartbeat) — see CLAUDE.md's
+ *   Message Types section. Feeds an observe-only coverage metric
+ *   (poller-brain#169); the default is fail-safe (undercounts rather than
+ *   masks idle brains behind cron activity).
+ *
  * Output:
  *   Logged to memory/TODAY.md
  */
@@ -16,6 +23,7 @@
 import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
 import { computeRollover } from "./lib/log-write-core.js";
+import { parseSourceFlag, sourceTag } from "./lib/source-flag.js";
 
 const TODAY_PATH = brainPath("memory/TODAY.md");
 
@@ -37,21 +45,29 @@ function ensureToday(): void {
 }
 
 function main(): void {
-  const content = process.argv.slice(2).join(" ").trim();
+  let parsed;
+  try {
+    parsed = parseSourceFlag(process.argv.slice(2));
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
+  const { source, content } = parsed;
 
   if (!content) {
-    console.error('Usage: npx tsx log-write.ts "category: detail"');
+    console.error('Usage: npx tsx log-write.ts "category: detail" [--source=maintenance|user-session]');
     console.error("");
     console.error("Examples:");
     console.error('  npx tsx log-write.ts "heartbeat: klidný den"');
     console.error('  npx tsx log-write.ts "triage: 3 nové emaily, žádný urgentní"');
+    console.error('  npx tsx log-write.ts --source=user-session "triage: reagoval jsem na Slack zprávu"');
     process.exit(1);
   }
 
   ensureToday();
 
   const timestamp = new Date().toTimeString().slice(0, 5);
-  fs.appendFileSync(TODAY_PATH, `- [${timestamp}] ${content}\n`);
+  fs.appendFileSync(TODAY_PATH, `- [${timestamp}] ${sourceTag(source)} ${content}\n`);
 
   console.log(`Logged to ${TODAY_PATH}`);
 }

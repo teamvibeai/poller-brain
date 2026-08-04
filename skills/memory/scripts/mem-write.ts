@@ -10,6 +10,10 @@
  *   npx tsx mem-write.ts "deploy: staging vyžaduje SSO login"
  *   npx tsx mem-write.ts "komunikace: mužský rod, vždy česky"
  *
+ * --source=maintenance|user-session (optional, default: maintenance):
+ *   Same convention as log-write.ts — see that file's header for details
+ *   (poller-brain#169 observe-only coverage metric).
+ *
  * Output:
  *   Written [MEM-4] to memory/TODAY.md and memory/MEM_REGISTRY.md
  */
@@ -17,6 +21,7 @@
 import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
 import { getNextKeyFromContents } from "./lib/mem-write-core.js";
+import { parseSourceFlag, sourceTag } from "./lib/source-flag.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
 const ARCHIVE_PATH = brainPath("memory/MEM_REGISTRY_ARCHIVE.md");
@@ -61,10 +66,17 @@ function getToday(): string {
 }
 
 function main(): void {
-  const content = process.argv.slice(2).join(" ").trim();
+  let parsed;
+  try {
+    parsed = parseSourceFlag(process.argv.slice(2));
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
+  const { source, content } = parsed;
 
   if (!content) {
-    console.error("Usage: npx tsx mem-write.ts \"category: detail\"");
+    console.error("Usage: npx tsx mem-write.ts \"category: detail\" [--source=maintenance|user-session]");
     console.error("");
     console.error("Examples:");
     console.error('  npx tsx mem-write.ts "deploy: staging vyžaduje SSO login"');
@@ -82,7 +94,7 @@ function main(): void {
   const desc = content.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
   // Append to TODAY.md
-  fs.appendFileSync(TODAY_PATH, `- [MEM-${key}] ${content}\n`);
+  fs.appendFileSync(TODAY_PATH, `- [MEM-${key}] ${sourceTag(source)} ${content}\n`);
 
   // Append to MEM_REGISTRY.md — detect 4 vs 5 column format
   const registry = fs.readFileSync(REGISTRY_PATH, "utf-8");
