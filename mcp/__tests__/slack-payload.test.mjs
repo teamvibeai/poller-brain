@@ -135,5 +135,49 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
   ok('f both codes survive truncation together', truncate(JSON.stringify(two)).includes('thread_ts_override_unjustified'))
 }
 
+// (j) HTML-entity normalization (poller-brain#243): escaped mention/link
+// syntax is unescaped before any table/block processing sees it, in every
+// branch (verbatim passthrough, section-prepend, and inside a synthesized
+// table's surrounding prose).
+{
+  const r = buildSendPayload({ text: 'ping &lt;@U02C5FJFD6E&gt; re: A &amp; B' })
+  ok('j verbatim passthrough unescaped', r.effectiveText === 'ping <@U02C5FJFD6E> re: A & B')
+}
+{
+  const own = [{ type: 'divider' }]
+  const r = buildSendPayload({ text: 'hi &lt;@U1&gt;', blocks: own })
+  ok('j section-prepend branch unescaped', r.blocks[0].text.text === 'hi <@U1>')
+}
+{
+  // &amp;lt; must decode to literal "&lt;", not cascade into "<"
+  const r = buildSendPayload({ text: 'literal &amp;lt; stays escaped-once' })
+  ok('j &amp; decoded last (no cascade)', r.effectiveText === 'literal &lt; stays escaped-once')
+}
+{
+  // table-auto-convert branch: prose surrounding the table carries the
+  // escaped mention — must be unescaped in the actual `blocks` sent to
+  // Slack (not just effectiveText/fallbackText), since blocks is what
+  // renders once present (DevGuru review, poller-brain#243).
+  const r = buildSendPayload({ text: `ping &lt;@U1&gt; hotovo:\n\n${TABLE}` })
+  const proseBlock = r.blocks.find(b => b.type === 'section')
+  ok('j table-branch prose block unescaped', proseBlock?.text?.text === 'ping <@U1> hotovo:')
+  ok('j table-branch fallbackText unescaped', r.effectiveText.includes('ping <@U1> hotovo:'))
+}
+{
+  // a QUOTED escaped mention inside a fenced code block (a bug report citing
+  // the raw syntax, exactly like this review thread) must stay literal —
+  // decoding it would turn a code example into a real ping (DevGuru review,
+  // poller-brain#243).
+  const r = buildSendPayload({ text: 'see example:\n```\nping &lt;@U1&gt;\n```\nreal ping: &lt;@U2&gt;' })
+  ok('j fenced code block left escaped', r.effectiveText.includes('```\nping &lt;@U1&gt;\n```'))
+  ok('j prose outside fence still unescaped', r.effectiveText.includes('real ping: <@U2>'))
+}
+{
+  // same for a single-backtick inline code span
+  const r = buildSendPayload({ text: 'the literal `&lt;@U1&gt;` syntax vs a real ping &lt;@U2&gt;' })
+  ok('j inline code span left escaped', r.effectiveText.includes('`&lt;@U1&gt;`'))
+  ok('j prose outside inline code still unescaped', r.effectiveText.includes('a real ping <@U2>'))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)

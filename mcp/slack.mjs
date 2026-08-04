@@ -359,6 +359,25 @@ function gfmInlineToMrkdwn(text) {
     .replace(/~~([^~]+?)~~/g, '~$1~')
 }
 
+// Undo HTML-entity escaping (&lt;@U..&gt; etc.) agents sometimes produce after
+// reading HTML-escaped context (e.g. thread history), which otherwise renders
+// as literal text instead of a mention/link and silently drops the ping.
+// Safe in one direction only: Slack's `text` field has its own (different)
+// escaping rules and never relies on these HTML sequences meaning anything.
+// Fenced code blocks and inline code spans are left untouched (same fence
+// convention as computePipeTableWarning) — an escaped mention QUOTED as a
+// code example (e.g. a bug report citing `&lt;@U..&gt;`, like this file's own
+// review thread) must not silently become a live ping. A single alternation
+// pass — rather than three sequential .replace() calls — naturally decodes
+// each occurrence once (leftmost match wins), so "&amp;lt;" resolves to the
+// literal "&lt;" instead of cascading into "<". See teamvibeai/poller-brain#243.
+function normalizeHtmlEntities(text) {
+  return text.replace(/(```[\s\S]*?```|`[^`\n]*`)|(&lt;|&gt;|&amp;)/g, (m, code, entity) => {
+    if (code) return code
+    return entity === '&lt;' ? '<' : entity === '&gt;' ? '>' : '&'
+  })
+}
+
 // Auto-convert (teamvibeai/teamvibe.ai#228, Variant B): split `text` into
 // prose + pipe-table segments IN ORDER, render prose as section(mrkdwn) blocks
 // and each table as a raw `markdown` block. Returns { blocks, fallbackText,
@@ -474,10 +493,14 @@ function buildSendPayload(args, { hasModals = false } = {}) {
   // agentSuppliedBlocks opt-out like the table converter): even when the agent
   // supplies its own blocks, `text` is still sent — either prepended as a
   // section or as the notification fallback — so the same rendering bug would
-  // reach Slack either way.
+  // reach Slack either way. HTML-entity normalization (#243) runs before it —
+  // order doesn't matter functionally (disjoint patterns) but boldUrlFixed
+  // below is measured against the entity-normalized text, not raw, so it only
+  // flags actual bold-url stripping.
   const rawText = args.text
-  const text = typeof rawText === 'string' ? stripBoldWrappedUrl(rawText) : rawText
-  const boldUrlFixed = text !== rawText
+  const htmlNormalized = typeof rawText === 'string' ? normalizeHtmlEntities(rawText) : rawText
+  const text = typeof htmlNormalized === 'string' ? stripBoldWrappedUrl(htmlNormalized) : htmlNormalized
+  const boldUrlFixed = text !== htmlNormalized
 
   const agentBlocks = args.blocks ? [...args.blocks] : []
   const agentSuppliedBlocks = agentBlocks.length > 0
