@@ -399,7 +399,7 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 - `CLAUDE.md` > 10000 — risk: instruction overload
 - `SUMMARY.md` > 8000 — risk: context bloat
 - `LEARNINGS.md` > 5000 — risk: too many rules to follow
-- `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries)
+- `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries, trim promoted ACTIVE rows)
 
 #### 9c. CLAUDE.md Gradual Reduction
 
@@ -449,6 +449,28 @@ The script is **idempotent** (a second consecutive run is a byte-identical no-op
 5. If `MEM_REGISTRY.md` is under 5000 bytes, or the script reports a no-op, skip logging this step.
 
 The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries archived to [MEM_REGISTRY_ARCHIVE.md](...) — Keys: ...` — so the audit trail stays navigable from the live registry. The key list in the stub also keeps the `mem-write.ts` next-key counter correct (it additionally scans the archive as defense-in-depth).
+
+#### 9e. MEM_REGISTRY.md Promoted-Row Trim
+
+`MEM_REGISTRY.md` keeps the full-length narrative for every row forever, even after that same content has been condensed into prose and merged into `memory/core/LEARNINGS.md` (or a semantic/episodic/procedural file) — the same fact then lives twice, once in each file, in full length. This is the actual current growth driver for registries whose bulk is live (non-REMOVED) rows. This step rewrites a row to a short pointer once its content has demonstrably been promoted, leaving Key/Status/Created untouched.
+
+> **Detection is content-based, not status-based.** A row is a trim candidate only if a `core/`, `semantic/`, `episodic/`, or `procedural/` file literally cites its `MEM-N` key (compact multi-key citations like `MEM-93/94/122` are parsed into individual keys, not substring-matched). This works regardless of a brain's own lifecycle-status convention for "promoted" — the check never reads Status.
+
+If the Memory Metrics table (Step 9b) shows `MEM_REGISTRY.md` exceeding 5000 bytes, run the deterministic trim script:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts"
+```
+
+The script is **idempotent** (a second consecutive run is a byte-identical no-op) and performs its own **count-verify** before writing — it aborts (exit 1) without writing if the registry would grow or if its row/citation counts don't add up. Do not hand-edit `MEM_REGISTRY.md` to shorten a promoted row; always use the script.
+
+1. **Run it** and read the printed summary (trimmed keys, `alreadyPointer`, `candidateRows`, size delta, verify checks).
+2. **On non-zero exit**, treat it as an integrity alarm: do NOT commit a partial state, and record the failure in the report. Investigate before retrying.
+3. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: trimmed keys, size delta, and the verify checks.
+4. **Report tracking:** add `memory/MEM_REGISTRY.md` to `filesChanged` when the script trimmed any rows (skip when it was a no-op).
+5. If `MEM_REGISTRY.md` is under 5000 bytes, or the script reports a no-op, skip logging this step.
+
+A row the script cannot find cited anywhere is left with its full narrative — that's expected for genuinely not-yet-promoted entries, not a failure.
 
 ### 10. Assess Daily Log Compliance
 
