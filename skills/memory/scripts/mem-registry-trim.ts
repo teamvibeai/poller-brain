@@ -29,16 +29,17 @@ import {
 } from "./lib/mem-registry-trim-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
-// episodic/ is deliberately excluded: dated journals/reflections routinely
-// mention a MEM-N key in bookkeeping context (day-N countdown, "merge this
-// later" TODOs, status tallies) rather than as condensed promoted prose.
-// DevGuru caught this against a real 24-key sample (poller-brain#244 review):
-// 14/41 candidate trims relied solely on an episodic citation, and auditing
-// them found the "citation" was a passing mention of an unrelated fact, not
-// the row's actual promoted content — a false positive here means
-// irreversibly overwriting real narrative with an unrelated pointer, so we
-// accept lower recall (false-negative) over any false-positive risk here.
-const DEST_DIRS = ["core", "semantic", "procedural"];
+// All four tiers are scanned. episodic/ was briefly excluded outright, but
+// DevGuru proved (poller-brain#244 review, against real data) the same
+// "family/sibling cross-reference" false positive occurs in core/ and
+// semantic/ too — the actual hazard is a line citing 2+ MEM-N keys together
+// (ambiguous: condensed prose for one of them, or just a group listing?),
+// not the directory it lives in. That ambiguity is rejected at the source in
+// mem-registry-trim-core.ts's firstCitations() (single-distinct-key-per-line
+// gate), so directory-level exclusion is no longer needed as a safety net —
+// and excluding episodic/ wholesale was throwing away genuine single-key
+// citations that live there (real postmortem prose, not bookkeeping).
+const DEST_DIRS = ["core", "semantic", "episodic", "procedural"];
 
 function walk(absDir: string, relDir: string, out: DestinationFile[]): void {
   if (!fs.existsSync(absDir)) return;

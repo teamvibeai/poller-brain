@@ -3,17 +3,25 @@
  * Fixture-based self-test for the MEM_REGISTRY promoted-row trim logic.
  *
  * Runs the count-verify conditions against string fixtures (no fs):
- *   - promotion gate: a row is trimmed only if its key is cited in a
- *     destination file
- *   - cluster-citation parsing: non-first keys in a compact multi-key
- *     citation (`MEM-93/94/122`, `MEM-116/117`) are found, not just the
- *     first — regression test for the naive-substring miss DevGuru caught
- *     against a real 24-key sample (poller-brain#244)
+ *   - promotion gate: a row is trimmed only if its key has a genuine
+ *     single-key citation in a destination file
+ *   - multi-key-line rejection: a line citing 2+ distinct MEM-N keys is
+ *     never trusted as evidence for ANY of them, whether the keys arrive
+ *     via one compact cluster (`MEM-93/94/122`) or via separate bracket
+ *     tags on the same line (`[MEM-172] ... ([MEM-166])`) — regression
+ *     test for the "family/sibling cross-reference" false positive
+ *     DevGuru caught against real data (poller-brain#244 review): such
+ *     lines look identical to genuine condensed prose without reading for
+ *     meaning, so both shapes are rejected rather than guessed at
+ *   - scan-past-rejection: if a key also has a genuine single-key citation
+ *     elsewhere, that citation is still found and used (the key isn't
+ *     penalized just because it *also* appears on an ambiguous line)
  *   - idempotence gate: a row already rewritten to a pointer is left alone,
  *     a second consecutive run is a byte-identical no-op
  *   - Key/Status/Created columns are never rewritten, only Obsoleted +
  *     Description
- *   - a row never cited anywhere stays untouched
+ *   - a row never cited anywhere (or only ever cited ambiguously) stays
+ *     untouched
  *   - size never grows
  *
  * Run: npx tsx skills/memory/scripts/mem-registry-trim.test.ts
@@ -35,18 +43,21 @@ function assert(cond: boolean, msg: string): void {
   passed++;
 }
 
-// A fixture mirroring the real registry shape: a data table with a mix of
-// already-promoted rows (some compactly cross-cited), and one row never
-// promoted anywhere.
+// A fixture mirroring the real registry shape: one clean single-key match,
+// one compact multi-key cluster (all 3 keys must be rejected), one pair
+// cited together via separate bracket tags on one line (must be rejected
+// for both, unless a key also has a genuine single-key citation
+// elsewhere), and one row never cited anywhere.
 const REGISTRY = `# MEM Registry
 
 | Key | Status | Created | Obsoleted | Description |
 |-----|--------|---------|-----------|-------------|
 | MEM-99 | ACTIVE | 2026-07-28 | — | full narrative about the data-loss-step rule, already promoted verbatim into LEARNINGS.md |
-| MEM-93 | ACTIVE | 2026-07-28 | — | full narrative about the bounded-field rule, cited compactly as MEM-93/94/122 |
-| MEM-94 | ACTIVE | 2026-07-28 | — | second half of the same compact citation — never cited alone anywhere |
-| MEM-116 | ACTIVE | 2026-07-28 | — | full narrative about inbox pickup, compact-cited alongside MEM-117 |
-| MEM-117 | ACTIVE | 2026-07-28 | — | narrative only ever cited as the non-first key of the compact MEM-116/117 pair |
+| MEM-93 | ACTIVE | 2026-07-28 | — | full narrative about the bounded-field rule — only ever cited as part of a 3-key family cluster |
+| MEM-94 | ACTIVE | 2026-07-28 | — | second half of the same 3-key family cluster — never cited alone anywhere |
+| MEM-122 | ACTIVE | 2026-07-28 | — | third of the same 3-key family cluster — never cited alone anywhere |
+| MEM-166 | ACTIVE | 2026-07-30 | — | live investigation narrative — only ever mentioned in passing on a line whose real subject is MEM-172 |
+| MEM-172 | ACTIVE | 2026-07-30 | — | correction narrative that ALSO has its own dedicated single-key recap line elsewhere |
 | MEM-200 | ACTIVE | 2026-07-28 | — | full narrative that has never been promoted anywhere — must stay untouched |
 `;
 
@@ -56,7 +67,8 @@ const DESTINATIONS: DestinationFile[] = [
     text: [
       "- **NIKDY žádný krok způsobující ztrátu dat** — data-loss-step rule text. [MEM-99]",
       "- **bounded-field rule** — cap every new field you add. [MEM-93/94/122]",
-      "- **inbox pickup nuance** — pickup proves dequeue, not completion. [MEM-116/117]",
+      "- **[MEM-172] correction:** the suspicious thing was a false positive ([MEM-166]).",
+      "- **[MEM-172] dedicated recap:** the monitoring pipeline is confirmed working end-to-end.",
     ].join("\n"),
   },
 ];
@@ -65,24 +77,39 @@ const DESTINATIONS: DestinationFile[] = [
 const r1 = trimPromotedRows(REGISTRY, DESTINATIONS);
 const c1 = verifyTrimStats(r1.stats);
 
-assert(r1.stats.totalDataRows === 6, "should find 6 data rows");
+assert(r1.stats.totalDataRows === 7, "should find 7 data rows");
 assert(r1.stats.alreadyPointer === 0, "no rows are pointers yet on a fresh registry");
-assert(r1.stats.candidateRows === 6, "all 6 rows are candidates");
-assert(r1.stats.trimmedRows === 5, "5 of 6 rows are cited somewhere (all but MEM-200)");
+assert(r1.stats.candidateRows === 7, "all 7 rows are candidates");
 assert(
-  r1.stats.trimmedKeys.join(",") === "MEM-93,MEM-94,MEM-99,MEM-116,MEM-117",
-  "trimmed the correct keys, sorted numerically"
+  r1.stats.trimmedRows === 2,
+  "only MEM-99 (clean single-key) and MEM-172 (has its own dedicated single-key line) trim"
+);
+assert(
+  r1.stats.trimmedKeys.join(",") === "MEM-99,MEM-172",
+  "trimmed exactly the correct keys, sorted numerically"
 );
 assert(c1.length === 3, "all 3 verify checks passed");
 
-// The regression case: non-first keys in a compact cluster must be found.
+// Multi-key cluster line: none of the 3 family keys are trusted as evidence.
+for (const key of ["MEM-93", "MEM-94", "MEM-122"]) {
+  assert(
+    new RegExp(`\\| ${key} \\| ACTIVE \\| 2026-07-28 \\| — \\|`).test(r1.registry),
+    `${key} (only cited in the 3-key family cluster) stays untouched — multi-key-line rejection`
+  );
+}
+
+// Separate-bracket-tags-on-one-line case: MEM-166 has no OTHER citation, so it stays untouched.
 assert(
-  /\| MEM-94 \|.*\| see core\/LEARNINGS\.md — bounded-field rule \|/.test(r1.registry),
-  "MEM-94 (non-first key in MEM-93/94/122) was trimmed — cluster-parse regression guard"
+  /\| MEM-166 \| ACTIVE \| 2026-07-30 \| — \|/.test(r1.registry),
+  "MEM-166 (only ever co-cited with MEM-172 on one line) stays untouched"
 );
+
+// MEM-172 IS trimmed, but must point at its own dedicated line, not the shared ambiguous one.
 assert(
-  /\| MEM-117 \|.*\| see core\/LEARNINGS\.md — inbox pickup nuance \|/.test(r1.registry),
-  "MEM-117 (non-first key in MEM-116/117) was trimmed — cluster-parse regression guard"
+  /\| MEM-172 \| ACTIVE \| 2026-07-30 \| core\/LEARNINGS\.md:4 \| see core\/LEARNINGS\.md — \[MEM-172\] dedicated recap: \|/.test(
+    r1.registry
+  ),
+  "MEM-172 trimmed using its OWN single-key line (line 4), not the ambiguous shared line (line 3) — scan-past-rejection"
 );
 
 // Pointer rows carry file:line in Obsoleted, "see file — hook" in Description.
@@ -95,8 +122,12 @@ assert(
 
 // Key/Status/Created are byte-identical — only Obsoleted+Description change.
 assert(/\| MEM-99 \| ACTIVE \| 2026-07-28 \|/.test(r1.registry), "MEM-99 Key/Status/Created untouched");
-assert(/\| MEM-200 \| ACTIVE \| 2026-07-28 \| — \| full narrative that has never been promoted anywhere — must stay untouched \|/.test(r1.registry),
-  "MEM-200 (never cited) is left completely untouched");
+assert(
+  /\| MEM-200 \| ACTIVE \| 2026-07-28 \| — \| full narrative that has never been promoted anywhere — must stay untouched \|/.test(
+    r1.registry
+  ),
+  "MEM-200 (never cited) is left completely untouched"
+);
 
 assert(r1.stats.bytesAfter < r1.stats.bytesBefore, "registry shrank");
 
@@ -104,8 +135,8 @@ assert(r1.stats.bytesAfter < r1.stats.bytesBefore, "registry shrank");
 const r2 = trimPromotedRows(r1.registry, DESTINATIONS);
 verifyTrimStats(r2.stats);
 assert(r2.stats.trimmedRows === 0, "run 2 trims nothing new");
-assert(r2.stats.alreadyPointer === 5, "run 2 finds all 5 as already-pointers");
-assert(r2.stats.candidateRows === 1, "run 2 has only MEM-200 as a remaining candidate");
+assert(r2.stats.alreadyPointer === 2, "run 2 finds MEM-99 + MEM-172 as already-pointers");
+assert(r2.stats.candidateRows === 5, "run 2 has the remaining 5 rows as candidates");
 assert(r2.registry === r1.registry, "run 2 registry is byte-identical (idempotent)");
 
 // --- verifyTrimStats FAIL LOUD on a broken invariant -------------------------

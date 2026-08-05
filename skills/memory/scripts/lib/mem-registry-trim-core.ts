@@ -1,11 +1,10 @@
 /**
  * Pure trim logic for MEM_REGISTRY.md rows already promoted into consolidated
- * prose (core/semantic/procedural — deliberately excludes episodic/, see
- * below).
+ * prose (core/semantic/episodic/procedural).
  *
  * Why a step exists: `MEM_REGISTRY.md` keeps the full-length narrative for
  * every row forever, even after that same content has been condensed into
- * prose and merged into `memory/core/LEARNINGS.md` (or a semantic/
+ * prose and merged into `memory/core/LEARNINGS.md` (or a semantic/episodic/
  * procedural file) — the same fact then lives twice, once in each file, in
  * full length. This module rewrites a row to a short pointer once its
  * content has demonstrably been promoted, leaving the row's Key/Status/
@@ -22,23 +21,34 @@
  *   1. Idempotence gate — a row already rewritten to a pointer (Description
  *      matches `see <file>.md — <hook>`) is left alone. A second consecutive
  *      run is a byte-identical no-op.
- *   2. Promotion gate — a row is a trim candidate only if at least one
- *      destination file (core/semantic/procedural — the caller decides which
- *      dirs to pass in) literally cites its MEM-N key. Citations are parsed
- *      as clusters (`MEM-93/94/122`, `MEM-1/2/3`, `MEM-46,92`), not matched
- *      as a bare `MEM-N` substring — a naive substring test silently misses
- *      every non-first key in a compact multi-key citation (DevGuru verified
- *      against a real 24-key sample: 23/24 matched naively, the one miss was
- *      a non-first key in a `MEM-116/117` citation).
- *
- * `episodic/` is intentionally never passed in by the CLI: dated journals/
- * reflections routinely mention a MEM-N key in bookkeeping context (a day-N
- * countdown, a "merge this later" TODO, a status tally) rather than as the
- * row's actual condensed content. DevGuru caught this against real data
- * (poller-brain#244 review): citing a key is not the same as containing its
- * condensed prose, and a false positive here means irreversibly overwriting
- * real narrative with a pointer to unrelated content — an asymmetric risk,
- * so lower recall is accepted over any false-positive rate from that tier.
+ *   2. Promotion gate — a row is a trim candidate only if some destination
+ *      file has a line citing its MEM-N key AND ONLY its MEM-N key — no
+ *      other distinct key on that same line. Citations are parsed as
+ *      clusters (`MEM-93/94/122`, `MEM-1/2/3`, `MEM-46,92`) so a key hidden
+ *      inside a compact multi-key citation is still recognized (a naive
+ *      `\bMEM-N\b` substring test silently misses every non-first key —
+ *      DevGuru verified against a real 24-key sample: 23/24 matched
+ *      naively, the one miss was a non-first key in `MEM-116/117`) — BUT a
+ *      line citing 2+ distinct keys is rejected as evidence for ALL of
+ *      them, not accepted for any. This went through two review rounds:
+ *        - v1 treated any citation (single- or multi-key, any directory) as
+ *          proof of promotion. DevGuru caught a real false positive:
+ *          episodic/ journals routinely cite a key in bookkeeping context
+ *          (a day-N countdown, a "merge this later" TODO, a status tally),
+ *          not as the row's actual condensed content.
+ *        - v2 just excluded episodic/ entirely. DevGuru then proved the
+ *          SAME failure occurs in core/ and semantic/ — e.g. a line
+ *          enumerating a "sibling MEM family" for future cleanup. The real
+ *          hazard was never the directory; it's a line citing 2+ keys
+ *          together, which is visually indistinguishable between "these
+ *          keys were merged into one condensed bullet" (legitimate) and
+ *          "these keys are listed as a group for some other purpose"
+ *          (not this key's content) without reading for meaning. Rejecting
+ *          every multi-key line — regardless of directory — closes the
+ *          actual mechanism, at the cost of also declining legitimate
+ *          multi-key merged-duplicate promotions (accepted: false-negative
+ *          over false-positive, since a false positive here is irreversible
+ *          narrative loss).
  *
  * This module is intentionally fs-free so the invariants can be unit-tested
  * against string fixtures without touching a real brain's memory/.
@@ -65,21 +75,32 @@ const CLUSTER_CITE_RE = /\bMEM-(\d+(?:[/,]\d+)*)\b/g;
 /** Matches an already-trimmed pointer row's Description cell. */
 export const POINTER_DESC_RE = /^see .+\.md( —| -)/;
 
-/** Parse every MEM-N key cited in a line, expanding compact clusters. */
-function citedKeysInLine(line: string): string[] {
-  const keys: string[] = [];
+/** Parse every distinct MEM-N key cited in a line, expanding compact clusters. */
+function distinctCitedKeysInLine(line: string): string[] {
+  const keys = new Set<string>();
   CLUSTER_CITE_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = CLUSTER_CITE_RE.exec(line))) {
-    for (const n of m[1].split(/[/,]/)) keys.push(`MEM-${n}`);
+    for (const n of m[1].split(/[/,]/)) keys.add(`MEM-${n}`);
   }
-  return keys;
+  return [...keys];
 }
 
 /**
  * First citation location for every MEM-N key found across destination
  * files, scanned in file-path order then line order — deterministic so
  * repeated runs pick the same citation (idempotence).
+ *
+ * A line is only accepted as evidence if it cites EXACTLY ONE distinct
+ * MEM-N key. A line citing 2+ keys (whether via one compact cluster like
+ * `MEM-6/98/100/102` or via separate bracket tags on the same line like
+ * `[MEM-172] ... ([MEM-166])`) is skipped entirely for ALL keys it
+ * mentions — it's ambiguous whether it condenses any one of them
+ * specifically, or is a family/sibling cross-reference listing, and
+ * DevGuru proved (against real data, poller-brain#244 review) both shapes
+ * occur and are visually indistinguishable without reading for meaning.
+ * Scanning continues past a rejected line in case the same key has a
+ * genuine single-key citation elsewhere.
  */
 function firstCitations(destinations: DestinationFile[]): Map<string, Citation> {
   const found = new Map<string, Citation>();
@@ -87,10 +108,11 @@ function firstCitations(destinations: DestinationFile[]): Map<string, Citation> 
   for (const { file, text } of sorted) {
     const lines = text.split("\n");
     lines.forEach((lineText, idx) => {
-      for (const key of citedKeysInLine(lineText)) {
-        if (!found.has(key)) {
-          found.set(key, { file, line: idx + 1, lineText });
-        }
+      const keysOnLine = distinctCitedKeysInLine(lineText);
+      if (keysOnLine.length !== 1) return; // 0 or 2+ keys — no evidence, or ambiguous cross-reference
+      const key = keysOnLine[0];
+      if (!found.has(key)) {
+        found.set(key, { file, line: idx + 1, lineText });
       }
     });
   }
@@ -139,7 +161,7 @@ function sortKeys(keys: Iterable<string>): string[] {
  * (→ `see <file> — <hook>`) are rewritten.
  *
  * @param registry     current MEM_REGISTRY.md content
- * @param destinations current core/semantic/procedural file contents (caller decides which dirs)
+ * @param destinations current core/semantic/episodic/procedural file contents
  * @returns new registry content and machine-checkable stats
  */
 export function trimPromotedRows(
