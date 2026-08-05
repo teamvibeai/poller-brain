@@ -1,44 +1,53 @@
 #!/usr/bin/env npx tsx
 /**
- * Rewrite MEM_REGISTRY.md rows already promoted into consolidated prose
- * (core/semantic/episodic/procedural) to a short pointer, leaving
- * Key/Status/Created untouched and all not-yet-promoted rows as-is. Keeps
- * the live registry under threshold without deleting audit history or
- * requiring a particular status-lifecycle convention.
- * See lib/mem-registry-trim-core.ts for the invariants.
+ * Propose (or, given an explicit approved key list, apply) MEM_REGISTRY.md
+ * pointer rewrites for rows already promoted into consolidated prose
+ * (core/semantic/episodic/procedural). Leaves Key/Status/Created untouched
+ * and all not-yet-promoted rows as-is. See lib/mem-registry-trim-core.ts
+ * for the invariants and the false-positive history behind this design.
  *
- * Invoked by the consolidate skill (Step 9e) when MEM_REGISTRY.md exceeds
- * its threshold. Safe to run anytime: a no-op when no row is both
- * not-yet-a-pointer and cited in a destination file.
+ * DEFAULT MODE IS PROPOSE-ONLY — it never writes MEM_REGISTRY.md. Content-
+ * based citation detection went through three adversarial review rounds
+ * with DevGuru and still surfaced a new false-positive shape each time
+ * (poller-brain#244); "a destination file cites this key" is evidence
+ * worth a human's attention, not proof strong enough to auto-write for
+ * historical backfill. Each candidate prints its FULL citing line (not
+ * just the extracted hook) so a reviewer can judge it without opening the
+ * destination file.
  *
- * Idempotent: a second consecutive run is a byte-identical no-op.
- * Count-verified: aborts (exit 1) on any invariant break — no silent drop.
+ * Applying is a separate, explicit, opt-in step — pass the exact keys you
+ * (or DevGuru, or whoever reviewed the proposal) have approved:
+ *   npx tsx mem-registry-trim.ts --apply --only MEM-99,MEM-104
+ *
+ * There is no "--apply --all" / blind-trust-everything mode on purpose.
+ * The one case where immediate auto-write IS appropriate is a FRESH
+ * same-day promotion the consolidate skill just wrote and grep-verified
+ * itself (Step 1b/4) — in that case the caller already knows the exact
+ * key/file/line with certainty (no scanning/ambiguity involved), so it can
+ * pass `--apply --only <that key>` right after verifying, without needing
+ * a human review pass. See skill.md Step 9e for both usage patterns.
+ *
+ * Idempotent: re-running --apply with a key that's already a pointer is a
+ * no-op for that key. Count-verified: aborts (exit 1) on any invariant
+ * break — no silent drop.
  *
  * Usage:
- *   npx tsx mem-registry-trim.ts          # trim + verify + write
- *   npx tsx mem-registry-trim.ts --check  # dry-run: report + verify, no write
+ *   npx tsx mem-registry-trim.ts                          # propose: list candidates, write nothing
+ *   npx tsx mem-registry-trim.ts --apply --only MEM-1,MEM-5  # apply exactly these approved keys
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import { brainPath } from "./lib/brain-root.js";
 import {
-  trimPromotedRows,
+  findTrimCandidates,
+  applyTrimCandidates,
   verifyTrimStats,
   type DestinationFile,
+  type TrimCandidate,
 } from "./lib/mem-registry-trim-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
-// All four tiers are scanned. episodic/ was briefly excluded outright, but
-// DevGuru proved (poller-brain#244 review, against real data) the same
-// "family/sibling cross-reference" false positive occurs in core/ and
-// semantic/ too — the actual hazard is a line citing 2+ MEM-N keys together
-// (ambiguous: condensed prose for one of them, or just a group listing?),
-// not the directory it lives in. That ambiguity is rejected at the source in
-// mem-registry-trim-core.ts's firstCitations() (single-distinct-key-per-line
-// gate), so directory-level exclusion is no longer needed as a safety net —
-// and excluding episodic/ wholesale was throwing away genuine single-key
-// citations that live there (real postmortem prose, not bookkeeping).
 const DEST_DIRS = ["core", "semantic", "episodic", "procedural"];
 
 function walk(absDir: string, relDir: string, out: DestinationFile[]): void {
@@ -62,8 +71,40 @@ function collectDestinations(): DestinationFile[] {
   return destinations;
 }
 
+function parseOnlyFlag(): string[] | null {
+  const idx = process.argv.indexOf("--only");
+  if (idx === -1) return null;
+  const raw = process.argv[idx + 1];
+  if (!raw) {
+    console.error("--only requires a comma-separated key list, e.g. --only MEM-1,MEM-5");
+    process.exit(1);
+  }
+  return raw.split(",").map((k) => k.trim()).filter(Boolean);
+}
+
+function printProposals(candidates: TrimCandidate[]): void {
+  console.log(`${candidates.length} trim candidate(s) found. Nothing written — review, then apply with:`);
+  console.log(`  npx tsx mem-registry-trim.ts --apply --only ${candidates.map((c) => c.key).join(",") || "<keys>"}`);
+  console.log("(or a hand-picked subset of the keys below)\n");
+  for (const c of candidates) {
+    console.log(`${c.key} → ${c.file}:${c.line}`);
+    console.log(`  citing line:      ${c.lineText.trim()}`);
+    console.log(`  proposed pointer: see ${c.file} — ${c.hook}`);
+    console.log();
+  }
+}
+
 function main(): void {
-  const dryRun = process.argv.includes("--check");
+  const apply = process.argv.includes("--apply");
+  const onlyKeys = parseOnlyFlag();
+
+  if (apply && !onlyKeys) {
+    console.error(
+      "--apply requires --only <comma-separated keys> — there is no blind-trust-everything mode. " +
+        "See the file header for why."
+    );
+    process.exit(1);
+  }
 
   if (!fs.existsSync(REGISTRY_PATH)) {
     console.log(`No MEM_REGISTRY.md at ${REGISTRY_PATH} — nothing to trim.`);
@@ -72,33 +113,42 @@ function main(): void {
 
   const registryBefore = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const destinations = collectDestinations();
+  const { candidates, totalDataRows, alreadyPointer } = findTrimCandidates(registryBefore, destinations);
 
-  const { registry, stats } = trimPromotedRows(registryBefore, destinations);
+  if (!apply) {
+    if (candidates.length === 0) {
+      console.log(
+        `No promoted rows to propose (${alreadyPointer} already pointers out of ${totalDataRows} data rows, ` +
+          `checked against ${destinations.length} destination file(s)). No-op.`
+      );
+      return;
+    }
+    printProposals(candidates);
+    return;
+  }
+
+  const approved = new Set(onlyKeys!);
+  const unknown = [...approved].filter((k) => !candidates.some((c) => c.key === k));
+  if (unknown.length > 0) {
+    console.error(
+      `--only lists key(s) with no trim candidate (not found, or already a pointer): ${unknown.join(", ")}. ` +
+        `Aborting — no write performed.`
+    );
+    process.exit(1);
+  }
+
+  const toApply = candidates.filter((c) => approved.has(c.key));
+  const { registry, stats } = applyTrimCandidates(registryBefore, toApply);
 
   // Machine count-verify BEFORE writing — throws (→ exit 1) on any violation.
   const checks = verifyTrimStats(stats);
 
-  if (stats.trimmedRows === 0) {
-    console.log(
-      `No promoted rows to trim (${stats.alreadyPointer} already pointers, ` +
-        `${stats.candidateRows} candidate row(s) checked against ${destinations.length} destination file(s), ` +
-        `none cited). No-op.`
-    );
-    return;
-  }
-
-  if (dryRun) {
-    console.log("[--check] would trim; no files written.");
-  } else {
-    fs.writeFileSync(REGISTRY_PATH, registry);
-  }
+  fs.writeFileSync(REGISTRY_PATH, registry);
 
   console.log(
     [
-      `MEM_REGISTRY trim ${dryRun ? "(dry-run) " : ""}complete:`,
+      `MEM_REGISTRY trim applied:`,
       `  trimmed:        ${stats.trimmedKeys.join(", ") || "(none)"}`,
-      `  alreadyPointer: ${stats.alreadyPointer}`,
-      `  candidateRows:  ${stats.candidateRows}`,
       `  registry size:  ${stats.bytesBefore} → ${stats.bytesAfter} bytes`,
       ...checks.map((c) => `  verify: ${c}`),
     ].join("\n")

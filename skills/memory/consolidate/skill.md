@@ -454,23 +454,27 @@ The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries arch
 
 `MEM_REGISTRY.md` keeps the full-length narrative for every row forever, even after that same content has been condensed into prose and merged into `memory/core/LEARNINGS.md` (or a semantic/episodic/procedural file) — the same fact then lives twice, once in each file, in full length. This is the actual current growth driver for registries whose bulk is live (non-REMOVED) rows. This step rewrites a row to a short pointer once its content has demonstrably been promoted, leaving Key/Status/Created untouched.
 
-> **Detection is content-based, not status-based.** A row is a trim candidate only if some destination file literally cites its `MEM-N` key **as the sole key on that line** — this works regardless of a brain's own lifecycle-status convention for "promoted" — the check never reads Status. A line citing 2+ distinct keys together (a compact cluster like `MEM-93/94/122`, or separate bracket tags sharing a line) is rejected as evidence for *any* of them: DevGuru proved against real data (poller-brain#244 review) that such lines are frequently a "family/sibling cross-reference" listing rather than any one key's condensed content, and this shape occurs in `core/`/`semantic/` as often as in `episodic/` — so the fix is at the citation level, not a directory exclusion. This trades some recall (legitimate multi-key merged-duplicate promotions won't auto-trim) for the guarantee that a trim never overwrites real narrative with an unrelated pointer.
+> **Detection is content-based, not status-based, and it only PROPOSES — it never auto-writes from a blind scan.** A row is a trim candidate only if some destination file literally cites its `MEM-N` key as the sole key on that line (works regardless of a brain's own lifecycle-status convention for "promoted" — never reads Status). Three adversarial review rounds with DevGuru (poller-brain#244) each surfaced a *new* false-positive shape for "a file cites this key, therefore it's safe to trim" — bookkeeping mentions in `episodic/`, "sibling family" listings in `core/`/`semantic/`, and citations that are a single key but an incidental "per this rule" justification inside an unrelated sentence. Citing a key is not proof of being that key's condensed content, and getting it wrong means irreversibly overwriting real narrative with an unrelated pointer — so this script never trusts a blind scan enough to write on its own. It has two modes:
+>
+> - **Propose (default, for the existing backlog):** lists every candidate with its full citing line (not just the extracted hook) so you can judge it without opening the destination file. Writes nothing.
+> - **Apply (explicit, for either a reviewed backlog subset or a fresh same-day promotion):** `--apply --only <comma-separated keys>` rewrites exactly those keys. There is no "apply everything found" mode — you always name the keys.
 
-If the Memory Metrics table (Step 9b) shows `MEM_REGISTRY.md` exceeding 5000 bytes, run the deterministic trim script:
+**Backfill path (existing bloat, Step 9b over threshold):**
 
 ```bash
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts"
 ```
 
-The script is **idempotent** (a second consecutive run is a byte-identical no-op) and performs its own **count-verify** before writing — it aborts (exit 1) without writing if the registry would grow or if its row/citation counts don't add up. Do not hand-edit `MEM_REGISTRY.md` to shorten a promoted row; always use the script.
+1. **Run it** and read the printed candidate list (key, `file:line`, full citing line, proposed pointer).
+2. **Review each candidate** — does the citing line actually restate/condense this key's content, or does it just mention the key in passing (a bookkeeping tally, a "per this rule" justification for something else)? Reject anything that isn't clearly the former.
+3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts" --apply --only MEM-1,MEM-5,...`. The script performs its own **count-verify** before writing — it aborts (exit 1) without writing if the registry would grow or if its row/citation counts don't add up.
+4. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), size delta, and the verify checks.
+5. **Report tracking:** add `memory/MEM_REGISTRY.md` to `filesChanged` when anything was applied (skip when nothing was proposed, or nothing was approved).
+6. If `MEM_REGISTRY.md` is under 5000 bytes, or nothing is proposed, skip logging this step.
 
-1. **Run it** and read the printed summary (trimmed keys, `alreadyPointer`, `candidateRows`, size delta, verify checks).
-2. **On non-zero exit**, treat it as an integrity alarm: do NOT commit a partial state, and record the failure in the report. Investigate before retrying.
-3. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: trimmed keys, size delta, and the verify checks.
-4. **Report tracking:** add `memory/MEM_REGISTRY.md` to `filesChanged` when the script trimmed any rows (skip when it was a no-op).
-5. If `MEM_REGISTRY.md` is under 5000 bytes, or the script reports a no-op, skip logging this step.
+**Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** no scanning is involved — you already know the exact key, destination file, and line with certainty, because you just wrote and verified it yourself moments earlier. Apply it immediately: `--apply --only <that key>`. This is safe without a human review pass precisely because there's no ambiguity to review — unlike the backfill path, nothing was *found*, it was *authored*.
 
-A row the script cannot find cited anywhere is left with its full narrative — that's expected for genuinely not-yet-promoted entries, not a failure.
+A row the script cannot find cited anywhere (or only ever cited ambiguously) is left with its full narrative — that's expected, not a failure, whether that's because it's genuinely not yet promoted or because a candidate was reviewed and rejected.
 
 ### 10. Assess Daily Log Compliance
 
