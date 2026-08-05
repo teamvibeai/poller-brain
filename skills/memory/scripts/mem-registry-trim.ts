@@ -29,7 +29,16 @@ import {
 } from "./lib/mem-registry-trim-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
-const DEST_DIRS = ["core", "semantic", "episodic", "procedural"];
+// episodic/ is deliberately excluded: dated journals/reflections routinely
+// mention a MEM-N key in bookkeeping context (day-N countdown, "merge this
+// later" TODOs, status tallies) rather than as condensed promoted prose.
+// DevGuru caught this against a real 24-key sample (poller-brain#244 review):
+// 14/41 candidate trims relied solely on an episodic citation, and auditing
+// them found the "citation" was a passing mention of an unrelated fact, not
+// the row's actual promoted content — a false positive here means
+// irreversibly overwriting real narrative with an unrelated pointer, so we
+// accept lower recall (false-negative) over any false-positive risk here.
+const DEST_DIRS = ["core", "semantic", "procedural"];
 
 function walk(absDir: string, relDir: string, out: DestinationFile[]): void {
   if (!fs.existsSync(absDir)) return;

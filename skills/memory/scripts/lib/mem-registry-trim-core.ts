@@ -1,10 +1,11 @@
 /**
  * Pure trim logic for MEM_REGISTRY.md rows already promoted into consolidated
- * prose (core/semantic/episodic/procedural).
+ * prose (core/semantic/procedural — deliberately excludes episodic/, see
+ * below).
  *
  * Why a step exists: `MEM_REGISTRY.md` keeps the full-length narrative for
  * every row forever, even after that same content has been condensed into
- * prose and merged into `memory/core/LEARNINGS.md` (or a semantic/episodic/
+ * prose and merged into `memory/core/LEARNINGS.md` (or a semantic/
  * procedural file) — the same fact then lives twice, once in each file, in
  * full length. This module rewrites a row to a short pointer once its
  * content has demonstrably been promoted, leaving the row's Key/Status/
@@ -22,13 +23,22 @@
  *      matches `see <file>.md — <hook>`) is left alone. A second consecutive
  *      run is a byte-identical no-op.
  *   2. Promotion gate — a row is a trim candidate only if at least one
- *      destination file (core/semantic/episodic/procedural) literally cites
- *      its MEM-N key. Citations are parsed as clusters (`MEM-93/94/122`,
- *      `MEM-1/2/3`, `MEM-46,92`), not matched as a bare `MEM-N` substring —
- *      a naive substring test silently misses every non-first key in a
- *      compact multi-key citation (DevGuru verified against a real 24-key
- *      sample: 23/24 matched naively, the one miss was a non-first key in a
- *      `MEM-116/117` citation).
+ *      destination file (core/semantic/procedural — the caller decides which
+ *      dirs to pass in) literally cites its MEM-N key. Citations are parsed
+ *      as clusters (`MEM-93/94/122`, `MEM-1/2/3`, `MEM-46,92`), not matched
+ *      as a bare `MEM-N` substring — a naive substring test silently misses
+ *      every non-first key in a compact multi-key citation (DevGuru verified
+ *      against a real 24-key sample: 23/24 matched naively, the one miss was
+ *      a non-first key in a `MEM-116/117` citation).
+ *
+ * `episodic/` is intentionally never passed in by the CLI: dated journals/
+ * reflections routinely mention a MEM-N key in bookkeeping context (a day-N
+ * countdown, a "merge this later" TODO, a status tally) rather than as the
+ * row's actual condensed content. DevGuru caught this against real data
+ * (poller-brain#244 review): citing a key is not the same as containing its
+ * condensed prose, and a false positive here means irreversibly overwriting
+ * real narrative with a pointer to unrelated content — an asymmetric risk,
+ * so lower recall is accepted over any false-positive rate from that tier.
  *
  * This module is intentionally fs-free so the invariants can be unit-tested
  * against string fixtures without touching a real brain's memory/.
@@ -129,7 +139,7 @@ function sortKeys(keys: Iterable<string>): string[] {
  * (→ `see <file> — <hook>`) are rewritten.
  *
  * @param registry     current MEM_REGISTRY.md content
- * @param destinations current core/semantic/episodic/procedural file contents
+ * @param destinations current core/semantic/procedural file contents (caller decides which dirs)
  * @returns new registry content and machine-checkable stats
  */
 export function trimPromotedRows(
