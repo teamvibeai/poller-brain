@@ -286,7 +286,11 @@ export function writeInboxMessage(threadId, text, dir, dry) {
   try {
     // Filename matches inbox-manager's own scheme (nanosecond hrtime), so a checkpoint
     // immediately followed by the terminal drop cannot collide on one filename.
-    const inboxDir = join(process.cwd(), '.inbox', threadId, 'new')
+    // POLLER_BRAIN_PATH is the stable main-brain dir (claude-spawner.ts), distinct from
+    // cwd when POLLER_USE_WORKTREES puts the session in an ephemeral .worktrees/ dir that
+    // gets removed right after the session ends — see teamvibe.ai#265.
+    const brainPath = process.env.POLLER_BRAIN_PATH || process.cwd()
+    const inboxDir = join(brainPath, '.inbox', threadId, 'new')
     mkdirSync(inboxDir, { recursive: true })
     writeFileSync(join(inboxDir, `${process.hrtime.bigint()}.txt`), payload, 'utf8')
     return { ok: true, dryRun: false }
