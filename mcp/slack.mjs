@@ -578,6 +578,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_permalink',
+    description: 'Get a clickable Slack permalink URL for a specific message. Use this instead of guessing the workspace subdomain or hand-building an archives/deep-link URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        message_ts: { type: 'string', description: 'Timestamp of the message to link to (default: current thread timestamp, or original message timestamp if not in a thread)' },
+      },
+    },
+  },
+  {
     name: 'list_thread_participants',
     description: 'List participants in the current thread: user IDs, display names, bot/human flags, and self marker. Use to know "who is in the room" before deciding tags, handoffs, or escalations. Returns deduplicated participants in first-spoke order.',
     inputSchema: {
@@ -877,6 +888,15 @@ async function handleTool(name, args) {
         }),
       }))
       return { ok: true, messages }
+    }
+
+    case 'get_permalink': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      const message_ts = args.message_ts || DEFAULT_THREAD_TS || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!message_ts) throw new Error('message_ts required')
+      const result = await slackApi('chat.getPermalink', { channel, message_ts })
+      return { ok: true, permalink: result.permalink }
     }
 
     case 'list_thread_participants': {
