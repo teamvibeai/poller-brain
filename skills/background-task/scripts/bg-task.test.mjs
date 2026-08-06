@@ -436,6 +436,34 @@ console.log('writeInboxMessage — dry-run diverts, live writes the real inbox e
   rmSync(liveCwd, { recursive: true, force: true })
 }
 
+console.log('writeInboxMessage — POLLER_BRAIN_PATH overrides cwd for the live write (teamvibe.ai#265)')
+{
+  const dir = mkdtempSync(join(tmpdir(), 'bgt-inbox-'))
+  const brainDir = mkdtempSync(join(tmpdir(), 'bgt-brainpath-'))
+  const worktreeCwd = mkdtempSync(join(tmpdir(), 'bgt-worktree-'))
+  const origCwd = process.cwd()
+  const origBrainPath = process.env.POLLER_BRAIN_PATH
+  process.chdir(worktreeCwd)
+  process.env.POLLER_BRAIN_PATH = brainDir
+  try {
+    const result = writeInboxMessage(THREAD_ID, 'hello worktree', dir, '0')
+    eq('live write reports ok, not dryRun', JSON.stringify(result), JSON.stringify({ ok: true, dryRun: false }))
+    ok('drop lands under POLLER_BRAIN_PATH, not cwd', existsSync(join(brainDir, '.inbox', THREAD_ID, 'new')))
+    ok('nothing written under the ephemeral cwd', !existsSync(join(worktreeCwd, '.inbox')))
+    const files = readdirSync(join(brainDir, '.inbox', THREAD_ID, 'new'))
+    eq('exactly one file dropped', files.length, 1)
+    const live = JSON.parse(readFileSync(join(brainDir, '.inbox', THREAD_ID, 'new', files[0]), 'utf8'))
+    eq('the drop carries the text', live.text, 'hello worktree')
+  } finally {
+    process.chdir(origCwd)
+    if (origBrainPath === undefined) delete process.env.POLLER_BRAIN_PATH
+    else process.env.POLLER_BRAIN_PATH = origBrainPath
+  }
+  rmSync(dir, { recursive: true, force: true })
+  rmSync(brainDir, { recursive: true, force: true })
+  rmSync(worktreeCwd, { recursive: true, force: true })
+}
+
 // --- end-to-end (detached runner) ---------------------------------------------------
 console.log('launch validation')
 {
