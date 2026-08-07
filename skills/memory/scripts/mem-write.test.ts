@@ -11,6 +11,7 @@
  */
 
 import { getNextKeyFromContents } from "./lib/mem-write-core.js";
+import { computeRollover } from "./lib/today-md-core.js";
 
 let passed = 0;
 function assert(cond: boolean, msg: string): void {
@@ -88,6 +89,29 @@ function assert(cond: boolean, msg: string): void {
 {
   const key = getNextKeyFromContents("", "", "");
   assert(key === 1, `fresh brain must start at key 1, got ${key}`);
+}
+
+// --- mem-write.ts must roll over a stale TODAY.md header too (poller-brain#267:
+// mem-write.ts historically only handled the file-missing case, never the
+// stale-header case that log-write.ts already covers via the same function) --
+{
+  const content = "# 2026-07-28\n\n- [MEM-3] deploy: staging vyžaduje SSO login\n";
+  const action = computeRollover(content, "2026-07-29");
+  assert(
+    action.kind === "append-header",
+    "mem-write.ts's ensureToday must roll a stale header on a new UTC day"
+  );
+  assert(
+    action.textToWrite === "\n# 2026-07-29\n\n",
+    "rollover must append a fresh dated section, not rewrite history"
+  );
+}
+
+// --- same-day mem-write.ts call must not duplicate the header --------------
+{
+  const content = "# 2026-07-29\n\n- [MEM-3] deploy: staging vyžaduje SSO login\n";
+  const action = computeRollover(content, "2026-07-29");
+  assert(action.kind === "none", "same-day mem-write.ts call must be a no-op");
 }
 
 console.log(`✅ all ${passed} assertions passed`);

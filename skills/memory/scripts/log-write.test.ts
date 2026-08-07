@@ -11,7 +11,7 @@
  * Exits non-zero on the first failed assertion.
  */
 
-import { computeRollover } from "./lib/log-write-core.js";
+import { computeRollover } from "./lib/today-md-core.js";
 
 let passed = 0;
 function assert(cond: boolean, msg: string): void {

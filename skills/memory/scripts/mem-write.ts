@@ -17,6 +17,7 @@
 import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
 import { getNextKeyFromContents } from "./lib/mem-write-core.js";
+import { computeRollover } from "./lib/today-md-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
 const ARCHIVE_PATH = brainPath("memory/MEM_REGISTRY_ARCHIVE.md");
@@ -49,10 +50,21 @@ function ensureRegistry(): void {
   }
 }
 
+// Rollover decision lives in lib/today-md-core.ts (fixture-tested — see
+// mem-write.test.ts) so a stale TODAY.md header isn't left in place when
+// mem-write.ts is the first write of a new UTC day (poller-brain#267 —
+// log-write.ts got this fix in cffb04c/e2f5420, mem-write.ts never did).
 function ensureToday(): void {
-  if (!fs.existsSync(TODAY_PATH)) {
-    const today = new Date().toISOString().slice(0, 10);
-    fs.writeFileSync(TODAY_PATH, `# ${today}\n\n`);
+  const today = new Date().toISOString().slice(0, 10);
+  const existingContent = fs.existsSync(TODAY_PATH)
+    ? fs.readFileSync(TODAY_PATH, "utf-8")
+    : null;
+  const action = computeRollover(existingContent, today);
+
+  if (action.kind === "create") {
+    fs.writeFileSync(TODAY_PATH, action.textToWrite);
+  } else if (action.kind === "append-header") {
+    fs.appendFileSync(TODAY_PATH, action.textToWrite);
   }
 }
 
