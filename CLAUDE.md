@@ -162,6 +162,14 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "category: detai
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detail"
 ```
 
+**Tag the trigger source with `--source=`:** Both scripts accept `--source=maintenance|user-session` (default `maintenance`). If this session was triggered by a real Slack message from a human — not a `Scheduled` message or heartbeat, see Message Types below — pass `--source=user-session` on every `log-write.ts`/`mem-write.ts` call you make in that session:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" --source=user-session "category: detail"
+```
+
+This feeds an observe-only fleet health metric (poller-brain#169) that distinguishes real human engagement from cron-driven activity. Omitting the flag is safe (defaults to `maintenance`), just less informative — never guess `user-session` when unsure.
+
 **Where to write (regular sessions):**
 - Routine logs → `log-write.ts` (appends to TODAY.md with timestamp)
 - Important items (corrections, preferences, lessons) → `mem-write.ts` (tracked `[MEM-NNN]` key in TODAY.md + MEM_REGISTRY.md)
