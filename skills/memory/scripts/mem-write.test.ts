@@ -10,7 +10,7 @@
  * Exits non-zero on the first failed assertion.
  */
 
-import { getNextKeyFromContents } from "./lib/mem-write-core.js";
+import { getNextKeyFromContents, truncateRegistryDescription, MAX_REGISTRY_DESC_LENGTH } from "./lib/mem-write-core.js";
 
 let passed = 0;
 function assert(cond: boolean, msg: string): void {
@@ -88,6 +88,69 @@ function assert(cond: boolean, msg: string): void {
 {
   const key = getNextKeyFromContents("", "", "");
   assert(key === 1, `fresh brain must start at key 1, got ${key}`);
+}
+
+// --- registry description truncation (pb#283) -------------------------------
+
+// short content passes through unchanged, no pointer added
+{
+  const desc = truncateRegistryDescription("deploy: staging vyžaduje SSO login", "memory/daily/2026-08-07.md");
+  assert(
+    desc === "deploy: staging vyžaduje SSO login",
+    `short desc must be unchanged, got: ${desc}`
+  );
+}
+
+// content over the cap is truncated and gains a pointer, staying within budget
+{
+  const long = "x".repeat(500);
+  const desc = truncateRegistryDescription(long, "memory/daily/2026-08-07.md");
+  assert(
+    desc.length <= MAX_REGISTRY_DESC_LENGTH,
+    `truncated desc must respect the ${MAX_REGISTRY_DESC_LENGTH}B cap, got ${desc.length}B`
+  );
+  assert(
+    desc.includes("[full: memory/daily/2026-08-07.md]"),
+    `truncated desc must carry a pointer to the daily log, got: ${desc}`
+  );
+  assert(desc.startsWith("x"), `truncated desc must retain a content prefix, got: ${desc}`);
+}
+
+// content exactly at the cap is unchanged (boundary, no off-by-one)
+{
+  const exact = "y".repeat(MAX_REGISTRY_DESC_LENGTH);
+  const desc = truncateRegistryDescription(exact, "memory/daily/2026-08-07.md");
+  assert(desc === exact, `desc exactly at cap must be unchanged, got length ${desc.length}`);
+}
+
+// byte-aware cap: Czech diacritics are 2B each in UTF-8, so a string whose
+// JS .length is under the cap can still exceed it in bytes (DevGuru review,
+// pb#283) -- the truncated output must respect the BYTE budget, not code units
+{
+  const czech = "č".repeat(280); // 280 code units, but 560B in UTF-8
+  const desc = truncateRegistryDescription(czech, "memory/daily/2026-08-07.md");
+  const byteLen = Buffer.byteLength(desc, "utf8");
+  assert(
+    byteLen <= MAX_REGISTRY_DESC_LENGTH,
+    `truncated desc must respect the ${MAX_REGISTRY_DESC_LENGTH}B cap in BYTES, got ${byteLen}B (desc.length=${desc.length})`
+  );
+  assert(
+    desc.includes("[full: memory/daily/2026-08-07.md]"),
+    `truncated desc must carry a pointer to the daily log, got: ${desc}`
+  );
+}
+
+// a diacritic-heavy description just under the cap in .length but over it in
+// bytes must still be truncated (this is the exact false-negative DevGuru flagged)
+{
+  const czech300 = "ř".repeat(MAX_REGISTRY_DESC_LENGTH); // .length === 300, but 600B
+  const desc = truncateRegistryDescription(czech300, "memory/daily/2026-08-07.md");
+  assert(
+    desc !== czech300,
+    `a 300-char all-diacritic desc is 600B and must be truncated, not passed through unchanged`
+  );
+  const byteLen = Buffer.byteLength(desc, "utf8");
+  assert(byteLen <= MAX_REGISTRY_DESC_LENGTH, `truncated output must fit the ${MAX_REGISTRY_DESC_LENGTH}B cap, got ${byteLen}B`);
 }
 
 console.log(`✅ all ${passed} assertions passed`);

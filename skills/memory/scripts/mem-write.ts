@@ -16,7 +16,7 @@
 
 import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
-import { getNextKeyFromContents } from "./lib/mem-write-core.js";
+import { getNextKeyFromContents, truncateRegistryDescription } from "./lib/mem-write-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
 const ARCHIVE_PATH = brainPath("memory/MEM_REGISTRY_ARCHIVE.md");
@@ -79,10 +79,15 @@ function main(): void {
   const today = getToday();
 
   // Escape pipes (markdown table separator) and collapse newlines; keep full content per #150
-  const desc = content.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  const escaped = content.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
-  // Append to TODAY.md
+  // Append to TODAY.md — full, untruncated content is the durable source of
+  // truth (archived verbatim to memory/daily/ by consolidation).
   fs.appendFileSync(TODAY_PATH, `- [MEM-${key}] ${content}\n`);
+
+  // Registry row is capped (#283) — TODAY.md's archived form is the pointer target.
+  const dailyLogPath = `memory/daily/${today}.md`;
+  const desc = truncateRegistryDescription(escaped, dailyLogPath);
 
   // Append to MEM_REGISTRY.md — detect 4 vs 5 column format
   const registry = fs.readFileSync(REGISTRY_PATH, "utf-8");
