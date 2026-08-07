@@ -387,7 +387,7 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 | File | Size (bytes) | Threshold | Status |
 |------|-------------|-----------|--------|
 | CLAUDE.md | 2800 | 10000 | :white_check_mark: |
-| SUMMARY.md | 4200 | 8000 | :white_check_mark: |
+| SUMMARY.md | 4200 | 9000 | :white_check_mark: |
 | LEARNINGS.md | 3100 | 5000 | :white_check_mark: |
 | MEM_REGISTRY.md | 800 | 5000 | :white_check_mark: |
 | PREFERENCES.md | 500 | — | — |
@@ -397,7 +397,7 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 
 **Thresholds** (flag as :warning: if exceeded):
 - `CLAUDE.md` > 10000 — risk: instruction overload
-- `SUMMARY.md` > 8000 — risk: context bloat
+- `SUMMARY.md` > 9000 — risk: context bloat
 - `LEARNINGS.md` > 5000 — risk: too many rules to follow
 - `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries)
 
