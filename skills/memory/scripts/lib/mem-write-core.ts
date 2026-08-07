@@ -40,3 +40,45 @@ export function getNextKeyFromContents(
   const fromToday = scanMaxKey(todayContent, TODAY_CANONICAL_KEY_PATTERN);
   return Math.max(fromRegistry, fromArchive, fromToday) + 1;
 }
+
+/**
+ * MEM_REGISTRY.md's Description column is meant to be an always-relevant
+ * index, not a second copy of the full narrative — TODAY.md (and later its
+ * archived form under memory/daily/) already holds the verbatim content, so
+ * nothing is lost by capping the registry row itself.
+ *
+ * Reference: poller-brain#283 (feedback: unbounded registry rows, ~1000-1400B
+ * each, drove MEM_REGISTRY.md to 8x the size threshold — same root cause
+ * pb#244/PR#277 trims retroactively; this caps growth at write time instead).
+ */
+export const MAX_REGISTRY_DESC_LENGTH = 300;
+
+/**
+ * Byte-aware (not JS string.length): MEM_REGISTRY.md descriptions are
+ * frequently Czech prose, where diacritics (č/ř/š/ž/é...) are 2B each in
+ * UTF-8. A code-unit-length cap silently lets those rows land 300-450B on
+ * disk, missing the "<=300B" acceptance criterion for a non-hypothetical
+ * share of real descriptions (DevGuru review, poller-brain#283).
+ */
+export function truncateRegistryDescription(
+  desc: string,
+  dailyLogPath: string,
+  maxLength: number = MAX_REGISTRY_DESC_LENGTH
+): string {
+  if (Buffer.byteLength(desc, "utf8") <= maxLength) return desc;
+  const pointer = ` [full: ${dailyLogPath}]`;
+  const ellipsis = "…";
+  const budget =
+    maxLength - Buffer.byteLength(pointer, "utf8") - Buffer.byteLength(ellipsis, "utf8");
+
+  let truncated = "";
+  let bytes = 0;
+  for (const ch of desc) {
+    const chBytes = Buffer.byteLength(ch, "utf8");
+    if (bytes + chBytes > Math.max(0, budget)) break;
+    truncated += ch;
+    bytes += chBytes;
+  }
+  truncated = truncated.trimEnd();
+  return `${truncated}${ellipsis}${pointer}`;
+}
