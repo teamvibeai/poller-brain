@@ -399,7 +399,7 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 - `CLAUDE.md` > 10000 — risk: instruction overload
 - `SUMMARY.md` > 8000 — risk: context bloat
 - `LEARNINGS.md` > 5000 — risk: too many rules to follow
-- `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries)
+- `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries, trim promoted ACTIVE rows)
 
 #### 9c. CLAUDE.md Gradual Reduction
 
@@ -449,6 +449,32 @@ The script is **idempotent** (a second consecutive run is a byte-identical no-op
 5. If `MEM_REGISTRY.md` is under 5000 bytes, or the script reports a no-op, skip logging this step.
 
 The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries archived to [MEM_REGISTRY_ARCHIVE.md](...) — Keys: ...` — so the audit trail stays navigable from the live registry. The key list in the stub also keeps the `mem-write.ts` next-key counter correct (it additionally scans the archive as defense-in-depth).
+
+#### 9e. MEM_REGISTRY.md Promoted-Row Trim
+
+`MEM_REGISTRY.md` keeps the full-length narrative for every row forever, even after that same content has been condensed into prose and merged into `memory/core/LEARNINGS.md` (or a semantic/episodic/procedural file) — the same fact then lives twice, once in each file, in full length. This is the actual current growth driver for registries whose bulk is live (non-REMOVED) rows. This step rewrites a row to a short pointer once its content has demonstrably been promoted, leaving Key/Status/Created untouched.
+
+> **Detection is content-based, not status-based, and it only PROPOSES — it never auto-writes from a blind scan.** A row is a trim candidate only if some destination file literally cites its `MEM-N` key as the sole key on that line (works regardless of a brain's own lifecycle-status convention for "promoted" — never reads Status). Three adversarial review rounds with DevGuru (poller-brain#244) each surfaced a *new* false-positive shape for "a file cites this key, therefore it's safe to trim" — bookkeeping mentions in `episodic/`, "sibling family" listings in `core/`/`semantic/`, and citations that are a single key but an incidental "per this rule" justification inside an unrelated sentence. Citing a key is not proof of being that key's condensed content, and getting it wrong means irreversibly overwriting real narrative with an unrelated pointer — so this script never trusts a blind scan enough to write on its own. It has two modes:
+>
+> - **Propose (default, for the existing backlog):** lists every candidate with its full citing line (not just the extracted hook) so you can judge it without opening the destination file. Writes nothing.
+> - **Apply (explicit, for either a reviewed backlog subset or a fresh same-day promotion):** `--apply --only <comma-separated keys>` rewrites exactly those keys. There is no "apply everything found" mode — you always name the keys.
+
+**Backfill path (existing bloat, Step 9b over threshold):**
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts"
+```
+
+1. **Run it** and read the printed candidate list (key, `file:line`, full citing line, proposed pointer).
+2. **Review each candidate** — does the citing line actually restate/condense this key's content, or does it just mention the key in passing (a bookkeeping tally, a "per this rule" justification for something else)? Reject anything that isn't clearly the former.
+3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts" --apply --only MEM-1,MEM-5,...`. The script performs its own **count-verify** before writing — it aborts (exit 1) without writing if the registry would grow or if its row/citation counts don't add up.
+4. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), size delta, and the verify checks.
+5. **Report tracking:** add `memory/MEM_REGISTRY.md` to `filesChanged` when anything was applied (skip when nothing was proposed, or nothing was approved).
+6. If `MEM_REGISTRY.md` is under 5000 bytes, or nothing is proposed, skip logging this step.
+
+**Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** no scanning is involved — you already know the exact key, destination file, and line with certainty, because you just wrote and verified it yourself moments earlier. Apply it immediately: `--apply --only <that key>`. This is safe without a human review pass precisely because there's no ambiguity to review — unlike the backfill path, nothing was *found*, it was *authored*.
+
+A row the script cannot find cited anywhere (or only ever cited ambiguously) is left with its full narrative — that's expected, not a failure, whether that's because it's genuinely not yet promoted or because a candidate was reviewed and rejected.
 
 ### 10. Assess Daily Log Compliance
 
