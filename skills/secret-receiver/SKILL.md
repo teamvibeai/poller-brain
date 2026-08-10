@@ -1,11 +1,11 @@
 # Secret Receiver Skill
 
-Receive secrets (API tokens, credentials) from users securely via a temporary HTTP form tunneled through localtunnel. Submitted values are written to a 0600-mode file the spawning agent can read — **OS-agnostic**, no dependency on macOS Keychain, Linux `secret-tool`, or any other platform-specific store.
+Receive secrets (API tokens, credentials) from users securely via a temporary HTTP form tunneled through `cloudflared`. Submitted values are written to a 0600-mode file the spawning agent can read — **OS-agnostic**, no dependency on macOS Keychain, Linux `secret-tool`, or any other platform-specific store.
 
 ## How It Works
 
 1. Agent starts a local Node.js HTTP server with a simple form
-2. Agent runs `npx localtunnel --port PORT` to create a temporary public HTTPS URL
+2. Agent runs `npx --yes cloudflared tunnel --url http://localhost:PORT` to create a temporary public HTTPS URL
 3. Agent sends the URL to the user (e.g. via Slack)
 4. User opens the URL, enters the secret, and submits
 5. Server writes the secret to a 0600-mode file (path is announced on stdout), prints a `TOKEN_RECEIVED <path>` line, returns the success page, and shuts down 2s later
@@ -37,9 +37,14 @@ node $CLAUDE_CONFIG_DIR/skills/secret-receiver/server.mjs \
 ### Starting the tunnel
 
 ```bash
-npx --yes localtunnel --port 3456
-# Output: your url is: https://xyz-random.loca.lt
+npx --yes cloudflared tunnel --url http://localhost:3456
+# The public URL is logged to stderr (not stdout), inside a bordered box:
+# ...INF |  https://xyz-random-words.trycloudflare.com                |
 ```
+
+No account or login is required — this is a Cloudflare "Quick Tunnel". Note the URL goes to **stderr**, unlike localtunnel's stdout — redirect `2>&1` when capturing it to a log file for grepping.
+
+If `cloudflared`/`npx` fails to resolve (offline npm registry, corporate proxy blocking the binary download), fall back to `npx --yes localtunnel --port 3456` (`your url is: https://xyz-random.loca.lt` on stdout) — same server, same downstream flow, just a less reliable relay and a "Friendly Reminder" interstitial page on first visit.
 
 ### Discovering the output path
 
@@ -108,7 +113,7 @@ In all cases the platform value is **write-only after save** — no list endpoin
 
 ## Notes
 
-- **Localtunnel interstitial:** The first visit shows a "Friendly Reminder" page. The user must click "Click to Continue" or enter their IP address to proceed.
+- **No interstitial:** Unlike localtunnel, a `trycloudflare.com` Quick Tunnel has no "Friendly Reminder" / IP-gate page — the form loads on first visit.
 - **Cross-platform:** Works on macOS, Linux, and Windows (Node's `fs` works everywhere; `chmod` is a no-op on Windows but the file still inherits the owner's user ACL).
 - **One-shot:** The server automatically shuts down 2s after receiving a value. The output file persists until the agent deletes it — clean up as soon as the value is consumed.
 - **Concurrent runs:** Default `--out-file` is randomly named, so multiple receiver instances on the same host don't collide on the same path.
@@ -122,10 +127,10 @@ node $CLAUDE_CONFIG_DIR/skills/secret-receiver/server.mjs \
   --service "gitlab.com" --title "GitLab Token" > /tmp/sr.log 2>&1 &
 SR_PID=$!
 
-# 2. Start tunnel
-npx --yes localtunnel --port 3456 > /tmp/lt.log 2>&1 &
+# 2. Start tunnel (cloudflared logs to stderr, hence 2>&1)
+npx --yes cloudflared tunnel --url http://localhost:3456 > /tmp/lt.log 2>&1 &
 LT_PID=$!
-URL=$(timeout 10 grep -o 'https://[^ ]*' <(tail -F /tmp/lt.log) | head -1)
+URL=$(timeout 15 grep -o 'https://[^ ]*trycloudflare.com' <(tail -F /tmp/lt.log) | head -1)
 
 # 3. Send URL to user via Slack (via the slack MCP tool)
 
