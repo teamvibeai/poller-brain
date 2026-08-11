@@ -552,6 +552,15 @@ Example entries:
 - `memory/daily/YYYY-MM-DD.md` — the archived daily log (Step 0); add it now if missing (omit only when TODAY.md did not exist prior to this run)
 - `memory/MEM_REGISTRY.md` — if any `[MEM-NNN]` entries were processed or lifecycle changes made in steps 1b/1c; add it now if missing
 
+**Evidence-backed decisions (required):** The JSON report's `decisions` array MUST contain at least 2 entries that name specific evidence — a concrete file path, an observed entry count, or a content pattern found during this run. Generic descriptions like "ran consolidation" or "processed logs" do NOT count. Use the natural evidence each step already produces:
+- Step 0: `"Archived memory/TODAY.md to memory/daily/2026-08-10.md — 5 entries from 2 sessions"`
+- Step 5b: `"Kept memory/semantic/project-alpha.md — reviewed, still accurate at 43 lines"`
+- Step 5c: `"No LEARNINGS.md archival candidate — all 6 MEM keys ACTIVE, file at 6024 B"`
+- Step 7: `"No daily logs older than 7 days — memory/daily/ contains 4 files, newest 2026-08-08.md"`
+- Step 9a: `"MEM integrity clean — 12 ACTIVE keys all verified present in content files"`
+
+Write every decision with its actual filename and count so the evidence is inline, not implied.
+
 Create both a markdown and JSON report:
 
 - **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, and `## Memory Metrics` from Step 9b)
