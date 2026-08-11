@@ -162,3 +162,47 @@ rm "$OUT"
 kill $LT_PID 2>/dev/null
 rm /tmp/sr.log /tmp/lt.log
 ```
+
+## Running in the Slack-poller runtime (session/turn boundaries)
+
+The workflow above assumes your session stays alive to `wait $SR_PID`. A foreground
+Slack session can be torn down between turns — that `wait` dies with it, and SIGTERM
+on teardown reaches the detached server/tunnel children too, so they die silently with
+nothing delivered to the user. Reported live during the Sitebrew PoC
+([poller-brain#301](https://github.com/teamvibeai/poller-brain/issues/301)).
+
+Launch the server+tunnel pair via the `background-task` skill instead — it survives
+session teardown and delivers output back into this thread as checkpoints:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/skills/background-task/scripts/bg-task.mjs" \
+  --name secret-receiver --ttl 900 \
+  --notify-on 'trycloudflare\.com|TOKEN_RECEIVED' \
+  --note "secret-receiver for <service> -- first checkpoint has the tunnel URL, send it \
+to the user; a later checkpoint or the terminal drop means TOKEN_RECEIVED, read the \
+OUT_FILE path from it and consume (see 'Consuming the captured value' above)" \
+  -- bash -c '
+    trap "kill \$(jobs -p) 2>/dev/null" EXIT
+    node "$CLAUDE_CONFIG_DIR/skills/secret-receiver/server.mjs" \
+      --service "gitlab.com" --title "GitLab Token" &
+    SR_PID=$!
+    npx --yes cloudflared tunnel --url http://localhost:3456 2>&1 &
+    wait $SR_PID
+  '
+```
+
+Then end your turn — do not `sleep` or poll waiting for the checkpoint; see the
+background-task skill for how drops land.
+
+1. **First checkpoint** carries the tunnel URL (`--notify-on` flushes it the instant
+   `trycloudflare.com` appears in the combined server+tunnel output). Whichever session
+   picks this up sends the URL to the user via Slack, then ends its turn again.
+2. **Second checkpoint or the terminal drop** carries `TOKEN_RECEIVED <path>` once the
+   user submits the form (the server shuts down ~2s later, which ends the backgrounded
+   command and triggers the terminal drop too). Read the path out of the drop's fenced
+   output — or `output.log` in the task dir if a chunk isn't enough — then follow
+   "Consuming the captured value" above and `rm` the file.
+
+A checkpoint can land in a brand-new session with no memory of this one — that's what
+the `--note` is for: it's the only thing telling that session what to do with the URL or
+the path. See the background-task skill's "Write a `--note`" section.
