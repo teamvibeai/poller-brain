@@ -103,6 +103,12 @@ The JSON file is written at the same time as the markdown report, in the same co
     "nonEmpty": false,
     "itemCount": 0
   },
+  "reflectionStatus": {
+    "lastReflectionDate": "2026-05-25",
+    "daysSinceReflection": 11,
+    "overdueThresholdDays": 3,
+    "isOverdue": true
+  },
   "brainCommitSha": "abc123def456789..."
 }
 ```
@@ -120,6 +126,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
 | `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. **One sentence per item after the prefix. Cap at 5 items.** |
 | `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
+| `reflectionStatus` | `object` | Self-reported reflection cadence, computed by `scripts/reflection-guard.sh` (poller-brain#157). `lastReflectionDate` (string \| null): date parsed from the newest `memory/episodic/reflection-*.md` filename, or `null` if none exists yet. `daysSinceReflection` (int \| null): days elapsed since that date. `overdueThresholdDays` (int): the threshold used, from `REFLECTION_OVERDUE_THRESHOLD_DAYS` (default 3). `isOverdue` (bool): `daysSinceReflection >= overdueThresholdDays`, or `true` when no reflection has ever run. Used by the eval pipeline to track fleet-wide reflection lag. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
@@ -153,6 +160,7 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `session-capture-logged` | Were session capture writes to semantic/ logged in TODAY.md? | For every regular-session commit that created or modified a file in memory/semantic/, a corresponding log entry exists in memory/TODAY.md (or the archived daily log) mentioning the file or 'session capture'. If no semantic/ files were modified during regular sessions, pass automatically. |
 | `semantic-naming-convention` | Do new semantic/ files follow kebab-case naming convention? | All files created in memory/semantic/ since the last consolidation use kebab-case naming (lowercase, hyphens, no underscores or spaces, .md extension). Examples: stepforge.md, vest-liquidation.md. If no new semantic/ files were created, pass automatically. |
 | `session-capture-has-context` | Do new semantic/ files from session capture include a Context section? | Every file created in memory/semantic/ during regular sessions (not maintenance) contains a heading '## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
+| `reflection-overdue` | Is reflection cadence within the mechanical threshold? | Pass: `reflectionStatus.daysSinceReflection <= reflectionStatus.overdueThresholdDays`, OR reflection was performed in this same maintenance pass (`filesChanged` includes a `memory/episodic/reflection-*.md` entry). Fail: otherwise. Sourced from `scripts/reflection-guard.sh` output (poller-brain#157). |
 
 ### Reflection Criteria
 
@@ -215,7 +223,8 @@ assumed. Do not write new entries to `PENDING_ISSUES.md`.
 
 ## Twice Weekly
 
-- **Memory reflection**: Check `memory/episodic/reflection-*.md` for the last reflection date. If 3+ days old (or none exist), run the memory-reflect skill to assess memory quality. **Produce a report.**
+- **Memory reflection**: Run `bash scripts/reflection-guard.sh` first. If it exits non-zero, reflection is not yet due — skip it (no report needed) unless a consolidation report is being produced anyway, in which case still populate `reflectionStatus` from its output (see below). If it exits 0, run the memory-reflect skill to assess memory quality. **Produce a report.**
+  - **`reflectionStatus` field**: `scripts/reflection-guard.sh` prints a `REFLECTION_STATUS_JSON: {...}` line with `lastReflectionDate`, `daysSinceReflection`, `overdueThresholdDays`, `isOverdue`. Copy those fields into every consolidation report's `reflectionStatus` (poller-brain#157) — run the guard again *after* reflection completes (if it ran this pass) so the reported values reflect the just-written `reflection-*.md` file, not the stale pre-run state.
 
 ## Heartbeat → Scheduled Messages Migration
 
