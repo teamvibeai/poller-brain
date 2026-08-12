@@ -34,6 +34,7 @@ import {
   type IndexRejection,
   firstCitations,
   extractHook,
+  isReliableHook,
   sortKeys,
 } from "./citation-detect.js";
 
@@ -51,6 +52,22 @@ export interface TrimCandidate {
   hook: string;
 }
 
+/**
+ * A key had a genuine single-key citation, but the extracted hook was too
+ * short or fragment-shaped to trust as a description — excluded from
+ * `candidates` rather than proposed with garbage content (DevGuru catch,
+ * poller-brain#300 review round 3: live data produced hooks that were
+ * literally the paragraph label "How to apply:", or a mid-sentence
+ * fragment starting `> `).
+ */
+export interface UnreliableHook {
+  key: string;
+  file: string;
+  line: number;
+  lineText: string;
+  hook: string;
+}
+
 const DATA_ROW_RE = /^\|\s*(MEM-\d+)\s*\|/;
 
 /** Matches an already-trimmed pointer row's Description cell. */
@@ -64,6 +81,8 @@ export interface FindCandidatesResult {
   alreadyPointer: number;
   /** Destination lines skipped as index/pointer-shaped, not narrative evidence — surfaced so coverage loss is never silent. */
   indexRejections: IndexRejection[];
+  /** Keys with a genuine citation but an unreliable extracted hook — excluded from `candidates`, surfaced so coverage loss is never silent. */
+  unreliableHooks: UnreliableHook[];
 }
 
 /**
@@ -80,6 +99,7 @@ export function findTrimCandidates(
 ): FindCandidatesResult {
   const { citations, indexRejections } = firstCitations(destinations);
   const candidates: TrimCandidate[] = [];
+  const unreliableHooks: UnreliableHook[] = [];
   let alreadyPointer = 0;
   let totalDataRows = 0;
 
@@ -99,16 +119,22 @@ export function findTrimCandidates(
     const citation = citations.get(key);
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
 
+    const hook = extractHook(citation);
+    if (!isReliableHook(hook)) {
+      unreliableHooks.push({ key, file: citation.file, line: citation.line, lineText: citation.lineText, hook });
+      continue;
+    }
+
     candidates.push({
       key,
       file: citation.file,
       line: citation.line,
       lineText: citation.lineText,
-      hook: extractHook(citation.lineText),
+      hook,
     });
   }
 
-  return { candidates: sortCandidates(candidates), totalDataRows, alreadyPointer, indexRejections };
+  return { candidates: sortCandidates(candidates), totalDataRows, alreadyPointer, indexRejections, unreliableHooks };
 }
 
 function sortCandidates(candidates: TrimCandidate[]): TrimCandidate[] {

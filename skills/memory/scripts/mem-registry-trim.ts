@@ -46,6 +46,7 @@ import {
   type DestinationFile,
   type TrimCandidate,
   type IndexRejection,
+  type UnreliableHook,
 } from "./lib/mem-registry-trim-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
@@ -115,6 +116,28 @@ function printIndexRejections(indexRejections: IndexRejection[]): void {
   console.log();
 }
 
+/**
+ * Always printed, even when 0 — a key with a real citation but an
+ * untrustworthy hook must never silently vanish from the output (DevGuru
+ * catch, poller-brain#300 review round 3: live data produced a hook that
+ * was literally the paragraph label "How to apply:", and a wrapped-line
+ * fragment starting `> `).
+ */
+function printUnreliableHooks(unreliableHooks: UnreliableHook[]): void {
+  if (unreliableHooks.length === 0) {
+    console.log("keys excluded for an unreliable extracted hook: 0\n");
+    return;
+  }
+  console.log(
+    `keys excluded for an unreliable extracted hook: ${unreliableHooks.length} ` +
+      `(cited, but the hook was too short or fragment-shaped to trust — not proposed):`
+  );
+  for (const u of unreliableHooks) {
+    console.log(`  ${u.key} @ ${u.file}:${u.line}  hook="${u.hook}"  line: ${u.lineText.trim()}`);
+  }
+  console.log();
+}
+
 function main(): void {
   const apply = process.argv.includes("--apply");
   const onlyKeys = parseOnlyFlag();
@@ -134,13 +157,14 @@ function main(): void {
 
   const registryBefore = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, totalDataRows, alreadyPointer, indexRejections } = findTrimCandidates(
+  const { candidates, totalDataRows, alreadyPointer, indexRejections, unreliableHooks } = findTrimCandidates(
     registryBefore,
     destinations
   );
 
   if (!apply) {
     printIndexRejections(indexRejections);
+    printUnreliableHooks(unreliableHooks);
     if (candidates.length === 0) {
       console.log(
         `No promoted rows to propose (${alreadyPointer} already pointers out of ${totalDataRows} data rows, ` +

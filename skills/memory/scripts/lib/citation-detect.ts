@@ -30,6 +30,18 @@ export interface Citation {
   file: string;
   line: number;
   lineText: string;
+  /**
+   * Nearest markdown heading (`#` through `######`) at or above `line`
+   * within the same destination file, text with the `#` markers stripped —
+   * null if the file has no heading before this line. Preferred hook
+   * source over the citing line itself: a citing line is very often a
+   * `**How to apply:**`/`**Why:**`-style labeled paragraph fragment, not a
+   * standalone description (DevGuru catch, poller-brain#300 review round
+   * 3, live data: `extractHook` on real entries returned the literal label
+   * text "How to apply:", and on a wrapped line a mid-sentence fragment
+   * starting with `> ` or `|`).
+   */
+  heading: string | null;
 }
 
 /** A single-key destination line skipped because it looks like an index/pointer row, not narrative. */
@@ -95,6 +107,28 @@ export function distinctCitedKeysInLine(line: string): string[] {
   return [...keys];
 }
 
+const HEADING_LINE_RE = /^#{1,6}\s+(.+?)\s*$/;
+
+/**
+ * Nearest heading text governing `lineIdx` (0-indexed) in `lines`, `#`
+ * markers stripped — null if none precedes it. Stops at the first blank
+ * line reached without finding a heading: a heading's entry ends at the
+ * paragraph break, so unrelated content further down the file (separated
+ * by a blank line) is NOT considered part of it, even if it's the nearest
+ * heading textually above (DevGuru catch, poller-brain#300 review round 3
+ * follow-up: without this boundary, a single early heading in a
+ * destination file "leaked" onto every later paragraph, including ones
+ * with no real connection to it).
+ */
+function nearestHeading(lines: string[], lineIdx: number): string | null {
+  for (let i = lineIdx; i >= 0; i--) {
+    const m = HEADING_LINE_RE.exec(lines[i]);
+    if (m) return m[1].trim();
+    if (lines[i].trim() === "" && i !== lineIdx) return null;
+  }
+  return null;
+}
+
 /**
  * First citation location for every MEM-N key found across `destinations`,
  * scanned in file-path order then line order — deterministic so repeated
@@ -117,20 +151,66 @@ export function firstCitations(destinations: DestinationFile[]): CitationScan {
         return;
       }
       if (!found.has(key)) {
-        found.set(key, { file, line: idx + 1, lineText });
+        found.set(key, { file, line: idx + 1, lineText, heading: nearestHeading(lines, idx) });
       }
     });
   }
   return { citations: found, indexRejections };
 }
 
-/** Deterministic short hook extracted from a destination line, for a proposed pointer. */
-export function extractHook(lineText: string): string {
-  let s = lineText.replace(/^\s*[-*]\s+/, "").trim();
-  const bold = s.match(/\*\*(.+?)\*\*/);
-  if (bold) return bold[1].trim();
-  s = s.replace(/`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+/** A bold span whose text is a paragraph LABEL (`**Rule:**`, `**Why:**`, `**How to apply:**`), not content. */
+const LABEL_BOLD_RE = /^[A-Za-z][\w /-]*:$/;
+
+/**
+ * Words/fragments extracted from a raw destination line — last-resort
+ * fallback, no heading and no usable bold. Deliberately strips ONLY a
+ * plain bullet marker (`-`/`*`), NOT a blockquote (`>`) or table (`|`)
+ * marker — those are left in place so `isReliableHook` can see and reject
+ * a line that is structurally a blockquote/table continuation, rather than
+ * laundering the marker away and proposing the fragment anyway.
+ */
+function plainTextFallback(lineText: string): string {
+  const s = lineText
+    .replace(/^\s*[-*]\s+/, "")
+    .replace(/`/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .trim();
   return s.split(/\s+/).filter(Boolean).slice(0, 8).join(" ");
+}
+
+/**
+ * A hook this short, or one starting mid-structure (blockquote/table
+ * continuation), is a garbage fragment rather than a description — the
+ * caller must treat it as unreliable rather than propose it (DevGuru catch,
+ * poller-brain#300 review round 3: on real entries this caught the literal
+ * label text "How to apply:" and a wrapped-line fragment starting `> `).
+ */
+export function isReliableHook(hook: string): boolean {
+  return hook.length >= 15 && !/^[>|]/.test(hook);
+}
+
+/**
+ * Deterministic short hook for a proposed pointer, from a destination
+ * citation. Prefers the citation's nearest heading (the entry's own title)
+ * over the citing line itself — a citing line is very often a labeled
+ * paragraph fragment (`**How to apply:** ...`) rather than a standalone
+ * description. Falls back to the first NON-LABEL bold span on the line
+ * (skipping `**Rule:**`-shaped labels), then to a plain-text word slice.
+ * Does not itself validate the result — callers check `isReliableHook` and
+ * exclude/report anything that still comes out too short or fragment-like.
+ */
+export function extractHook(citation: Citation): string {
+  if (citation.heading && isReliableHook(citation.heading)) return citation.heading;
+
+  const s = citation.lineText.replace(/^\s*[-*]\s+/, "").trim();
+  const boldRe = /\*\*(.+?)\*\*/g;
+  let m: RegExpExecArray | null;
+  while ((m = boldRe.exec(s))) {
+    const text = m[1].trim();
+    if (!LABEL_BOLD_RE.test(text)) return text;
+  }
+
+  return plainTextFallback(citation.lineText);
 }
 
 export function sortKeys(keys: Iterable<string>): string[] {

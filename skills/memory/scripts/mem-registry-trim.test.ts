@@ -249,4 +249,49 @@ assert(
   "a table row is index-shaped by two cheap combined signals (table row + path to another .md file), not a hardcoded column layout"
 );
 
+// --- extractHook: prefer the destination entry's heading over the citing
+// line, and reject a garbage extraction outright (DevGuru catch,
+// poller-brain#300 review round 3, live data): a citing line is very often
+// a `**How to apply:**`-labeled paragraph fragment, not a standalone
+// description — the OLD extractHook took the first `**bold**` on the line
+// unconditionally, so it returned the literal label text "How to apply:"
+// for entries structured this way.
+const HOOK_REGISTRY = `# MEM Registry
+
+| Key | Status | Created | Obsoleted | Description |
+|-----|--------|---------|-----------|-------------|
+| MEM-501 | ACTIVE | 2026-08-12 | — | should get its hook from the destination heading, not the "How to apply:" label |
+| MEM-502 | ACTIVE | 2026-08-12 | — | citing line is a wrapped blockquote continuation with no heading nearby — must be excluded, not proposed with a garbage hook |
+`;
+const HOOK_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/hook-shapes.md",
+    text: [
+      "### Tag PR author at review end",
+      "**Rule:** always tag the PR author when review concludes.",
+      "**Why:** review comments otherwise go unseen.",
+      "**How to apply:** mention them explicitly in the closing comment. [MEM-501]",
+      "",
+      "Some unrelated intro paragraph with no heading above it.",
+      '> MEM-502). This supersedes the older "no upstream tracking" behavior from before the fix.',
+    ].join("\n"),
+  },
+];
+const hookFound = findTrimCandidates(HOOK_REGISTRY, HOOK_DESTINATIONS);
+const mem501 = hookFound.candidates.find((c) => c.key === "MEM-501");
+assert(
+  mem501?.hook === "Tag PR author at review end",
+  `MEM-501 hook comes from the destination entry's heading ("Tag PR author at review end"), not the first bold on the citing line ("How to apply:") — got "${mem501?.hook}"`
+);
+assert(
+  !hookFound.candidates.some((c) => c.key === "MEM-502"),
+  "MEM-502 (wrapped blockquote continuation, no heading, no usable bold) is NOT proposed — its only extractable hook is a garbage fragment"
+);
+assert(
+  hookFound.unreliableHooks.length === 1 &&
+    hookFound.unreliableHooks[0].key === "MEM-502" &&
+    /^[>|]/.test(hookFound.unreliableHooks[0].hook),
+  "MEM-502's exclusion is reported via unreliableHooks (not silently dropped), and its hook is visibly the raw blockquote-marker fragment that made it untrustworthy"
+);
+
 console.log(`✅ all ${passed} assertions passed`);

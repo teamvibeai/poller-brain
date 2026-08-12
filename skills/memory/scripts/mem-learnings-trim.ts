@@ -38,6 +38,7 @@ import {
   verifyLearningsTrimStats,
   type DestinationFile,
   type LearningsTrimCandidate,
+  type UnreliableHook,
 } from "./lib/mem-learnings-trim-core.js";
 import type { IndexRejection } from "./lib/citation-detect.js";
 
@@ -133,6 +134,28 @@ function printIndexRejections(indexRejections: IndexRejection[]): void {
   console.log();
 }
 
+/**
+ * Always printed, even when 0. Here the hook is the ONLY content that
+ * survives a rewrite — an untrustworthy hook must never silently vanish
+ * from the output (DevGuru catch, poller-brain#300 review round 3: live
+ * data produced a hook that was literally the paragraph label
+ * "How to apply:", and a wrapped-line fragment starting `> `).
+ */
+function printUnreliableHooks(unreliableHooks: UnreliableHook[]): void {
+  if (unreliableHooks.length === 0) {
+    console.log("keys excluded for an unreliable extracted hook: 0\n");
+    return;
+  }
+  console.log(
+    `keys excluded for an unreliable extracted hook: ${unreliableHooks.length} ` +
+      `(cited, but the hook was too short or fragment-shaped to trust — not proposed):`
+  );
+  for (const u of unreliableHooks) {
+    console.log(`  ${u.key} @ ${u.file}:${u.line}  hook="${u.hook}"  line: ${u.lineText.trim()}`);
+  }
+  console.log();
+}
+
 function main(): void {
   const apply = process.argv.includes("--apply");
   const onlyKeys = parseOnlyFlag();
@@ -152,12 +175,13 @@ function main(): void {
 
   const learningsBefore = fs.readFileSync(LEARNINGS_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections } =
+  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, unreliableHooks } =
     findLearningsTrimCandidates(learningsBefore, destinations);
 
   if (!apply) {
     printParseSummary({ totalEntries, multiKeyEntries, alreadyPointer, candidates });
     printIndexRejections(indexRejections);
+    printUnreliableHooks(unreliableHooks);
 
     // Stronger fail-safe than a bare "0 entries" check (DevGuru catch,
     // poller-brain#300 review round 2): 0 entries is only ALARMING when the

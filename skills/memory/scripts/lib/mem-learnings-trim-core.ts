@@ -78,11 +78,27 @@ import {
   type DestinationFile,
   firstCitations,
   extractHook,
+  isReliableHook,
   distinctCitedKeysInLine,
   sortKeys,
 } from "./citation-detect.js";
 
 export type { DestinationFile };
+
+/**
+ * A key had a genuine single-key citation, but the extracted hook was too
+ * short or fragment-shaped to trust as a description — excluded from
+ * `candidates` rather than proposed with garbage content, since here the
+ * hook is the ONLY content that survives a rewrite (DevGuru catch,
+ * poller-brain#300 review round 3).
+ */
+export interface UnreliableHook {
+  key: string;
+  file: string;
+  line: number;
+  lineText: string;
+  hook: string;
+}
 
 type EntryFormat = "bullet" | "heading";
 
@@ -179,6 +195,8 @@ export interface FindLearningsCandidatesResult {
   alreadyPointer: number;
   /** Destination lines skipped as index/pointer-shaped, not narrative evidence — surfaced so coverage loss is never silent. */
   indexRejections: import("./citation-detect.js").IndexRejection[];
+  /** Keys with a genuine citation but an unreliable extracted hook — excluded from `candidates`, surfaced so coverage loss is never silent. */
+  unreliableHooks: UnreliableHook[];
 }
 
 /**
@@ -204,6 +222,7 @@ export function findLearningsTrimCandidates(
   const { citations, indexRejections } = firstCitations(destinations);
   const { entries, lines } = parseEntries(learnings);
   const candidates: LearningsTrimCandidate[] = [];
+  const unreliableHooks: UnreliableHook[] = [];
   let alreadyPointer = 0;
   let multiKeyEntries = 0;
 
@@ -225,6 +244,12 @@ export function findLearningsTrimCandidates(
     const citation = citations.get(key);
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
 
+    const hook = extractHook(citation);
+    if (!isReliableHook(hook)) {
+      unreliableHooks.push({ key, file: citation.file, line: citation.line, lineText: citation.lineText, hook });
+      continue;
+    }
+
     candidates.push({
       key,
       format: entry.format,
@@ -233,7 +258,7 @@ export function findLearningsTrimCandidates(
       file: citation.file,
       line: citation.line,
       lineText: citation.lineText,
-      hook: extractHook(citation.lineText),
+      hook,
     });
   }
 
@@ -243,6 +268,7 @@ export function findLearningsTrimCandidates(
     multiKeyEntries,
     alreadyPointer,
     indexRejections,
+    unreliableHooks,
   };
 }
 
