@@ -40,6 +40,7 @@ import {
   verifyTrimStats,
   type DestinationFile,
 } from "./lib/mem-registry-trim-core.js";
+import { isReliableHook } from "./lib/citation-detect.js";
 
 let passed = 0;
 function assert(cond: boolean, msg: string): void {
@@ -72,8 +73,16 @@ const DESTINATIONS: DestinationFile[] = [
   {
     file: "core/LEARNINGS.md",
     text: [
+      "### NIKDY žádný krok způsobující ztrátu dat",
+      "",
       "- **NIKDY žádný krok způsobující ztrátu dat** — data-loss-step rule text. [MEM-99]",
+      "",
+      "### Bounded-field rule",
+      "",
       "- **bounded-field rule** — cap every new field you add. [MEM-93/94/122]",
+      "",
+      "### Correction lesson",
+      "",
       "- **[MEM-172] correction:** the suspicious thing was a false positive ([MEM-166]).",
       "- **[MEM-172] dedicated recap:** the monitoring pipeline is confirmed working end-to-end.",
     ].join("\n"),
@@ -95,18 +104,22 @@ assert(
 );
 
 const mem99 = found.candidates.find((c) => c.key === "MEM-99")!;
-assert(mem99.file === "core/LEARNINGS.md" && mem99.line === 1, "MEM-99 candidate points at the right file:line");
+assert(mem99.file === "core/LEARNINGS.md" && mem99.line === 3, "MEM-99 candidate points at the right file:line");
 assert(
   mem99.lineText.includes("NIKDY žádný krok způsobující ztrátu dat"),
   "MEM-99 candidate carries the FULL citing line, not just the hook — reviewer shouldn't need to open the destination file"
 );
-assert(mem99.hook === "NIKDY žádný krok způsobující ztrátu dat", "MEM-99 hook extracted correctly");
+assert(
+  mem99.hook === "NIKDY žádný krok způsobující ztrátu dat",
+  "MEM-99 hook extracted from its governing heading, not the citing line's bold span"
+);
 
 const mem172 = found.candidates.find((c) => c.key === "MEM-172")!;
 assert(
-  mem172.line === 4 && mem172.lineText.includes("dedicated recap"),
-  "MEM-172 candidate uses its OWN single-key line (line 4), not the ambiguous shared line (line 3) — scan-past-rejection"
+  mem172.line === 12 && mem172.lineText.includes("dedicated recap"),
+  "MEM-172 candidate uses its OWN single-key line (line 12), not the ambiguous shared line (line 11) — scan-past-rejection"
 );
+assert(mem172.hook === "Correction lesson", "MEM-172 hook extracted from its governing heading");
 
 // --- applyTrimCandidates: only rewrites rows explicitly passed in --------
 // Approve ONLY MEM-99 — MEM-172, despite being a valid candidate, must stay untouched.
@@ -138,16 +151,16 @@ assert(
 );
 // Pointer rows carry file:line in Obsoleted, "see file — hook" in Description.
 assert(
-  /\| MEM-99 \| ACTIVE \| 2026-07-28 \| core\/LEARNINGS\.md:1 \| see core\/LEARNINGS\.md — NIKDY žádný krok způsobující ztrátu dat \|/.test(
+  /\| MEM-99 \| ACTIVE \| 2026-07-28 \| core\/LEARNINGS\.md:3 \| see core\/LEARNINGS\.md — NIKDY žádný krok způsobující ztrátu dat \|/.test(
     r1.registry
   ),
   "MEM-99 rewritten to a pointer with correct file:line and hook"
 );
 assert(
-  /\| MEM-172 \| ACTIVE \| 2026-07-30 \| core\/LEARNINGS\.md:4 \| see core\/LEARNINGS\.md — \[MEM-172\] dedicated recap: \|/.test(
+  /\| MEM-172 \| ACTIVE \| 2026-07-30 \| core\/LEARNINGS\.md:12 \| see core\/LEARNINGS\.md — Correction lesson \|/.test(
     r1.registry
   ),
-  "MEM-172 trimmed using its OWN single-key line (line 4)"
+  "MEM-172 trimmed using its OWN single-key line (line 12)"
 );
 // Key/Status/Created are byte-identical — only Obsoleted+Description change.
 assert(/\| MEM-99 \| ACTIVE \| 2026-07-28 \|/.test(r1.registry), "MEM-99 Key/Status/Created untouched");
@@ -187,5 +200,150 @@ try {
   threw = true;
 }
 assert(threw, "verifyTrimStats throws when registry size grows");
+
+// --- index/pointer-shaped destination lines are rejected as evidence -----
+// Live production catch (2026-08-12, DevGuru): today's consolidation run
+// proposed 10 candidates off semantic/kb-promotion-provenance.md, an
+// MEM-key → destination lookup table (one single-key line per row) — all
+// 10 rejected on review. An index row isn't condensed narrative, it's a
+// pointer elsewhere; citation-detect.ts now rejects lines shaped like a
+// lookup/index row (`→ see`, `see …md`, or a `| MEM-N | ... |` table row),
+// shared with mem-learnings-trim-core.ts (poller-brain#300).
+const INDEX_REGISTRY = `# MEM Registry
+
+| Key | Status | Created | Obsoleted | Description |
+|-----|--------|---------|-----------|-------------|
+| MEM-201 | ACTIVE | 2026-08-12 | — | should NOT be trimmed off an index row |
+`;
+const INDEX_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/kb-index.md",
+    text: [
+      "| Key | Destination |",
+      "|-----|-------------|",
+      "| MEM-201 | see semantic/other.md — some hook |",
+    ].join("\n"),
+  },
+];
+const indexFound = findTrimCandidates(INDEX_REGISTRY, INDEX_DESTINATIONS);
+assert(
+  indexFound.candidates.length === 0,
+  "an index/lookup-table row citing exactly one key is NOT treated as narrative evidence — it's a pointer, not condensed content"
+);
+assert(
+  indexFound.indexRejections.length === 1 &&
+    indexFound.indexRejections[0].key === "MEM-201" &&
+    indexFound.indexRejections[0].file === "semantic/kb-index.md",
+  "the index row rejection is reported (not silently dropped) — DevGuru review round 2: coverage loss must never be silent"
+);
+
+// --- generalized index-shape detection (round 2): not just literal `kb/`
+// paths or a `| MEM-N |` first cell — any markdown table row containing a
+// path to another .md file is index-shaped, regardless of column layout.
+const GENERALIZED_INDEX_REGISTRY = `# MEM Registry
+
+| Key | Status | Created | Obsoleted | Description |
+|-----|--------|---------|-----------|-------------|
+| MEM-301 | ACTIVE | 2026-08-12 | — | should NOT be trimmed off a differently-shaped index row |
+`;
+const GENERALIZED_INDEX_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/other-index.md",
+    text: [
+      "| Destination | Key |",
+      "|-------------|-----|",
+      "| semantic/other.md | MEM-301 |",
+    ].join("\n"),
+  },
+];
+const generalizedIndexFound = findTrimCandidates(GENERALIZED_INDEX_REGISTRY, GENERALIZED_INDEX_DESTINATIONS);
+assert(
+  generalizedIndexFound.candidates.length === 0 && generalizedIndexFound.indexRejections.length === 1,
+  "a table row is index-shaped by two cheap combined signals (table row + path to another .md file), not a hardcoded column layout"
+);
+
+// --- extractHook: the destination citation's governing heading is the
+// ONLY hook source — no fallback to the citing line's bold spans or plain
+// text (DevGuru catch, poller-brain#300 review round 4, live data on his
+// own brain): round 3's "heading, else bold-scan, else plain text" design
+// kept reproducing garbage in a new shape every round it was tested
+// against real data — label bolds (`**How to apply:**`), then orphaned
+// `**` markers, mid-sentence fragments, and bare citation parentheses. A
+// heading is trustworthy by construction (it's the entry's own title) or
+// it's absent, in which case the key is excluded via `unreliableHooks`
+// rather than guessed at from prose.
+const HOOK_REGISTRY = `# MEM Registry
+
+| Key | Status | Created | Obsoleted | Description |
+|-----|--------|---------|-----------|-------------|
+| MEM-501 | ACTIVE | 2026-08-12 | — | Rule/Why/How-to-apply block, blank-line-separated from its heading — must still resolve to the heading, not "How to apply:" |
+| MEM-502 | ACTIVE | 2026-08-12 | — | no heading anywhere above it in its destination file — must be excluded, not proposed with a garbage hook |
+| MEM-503 | ACTIVE | 2026-08-12 | — | unrelated paragraph inside MEM-501's heading section, no heading of its own — inherits that heading (accepted trade-off: imprecise, never garbage) |
+`;
+const HOOK_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/hook-shapes.md",
+    text: [
+      "### Tag PR author at review end",
+      "",
+      "**Rule:** always tag the PR author when review concludes.",
+      "",
+      "**Why:** review comments otherwise go unseen.",
+      "",
+      "**How to apply:** mention them explicitly in the closing comment. [MEM-501]",
+      "",
+      "Some unrelated intro paragraph, no heading of its own, still under the same section. [MEM-503]",
+    ].join("\n"),
+  },
+  {
+    file: "semantic/no-heading.md",
+    text: [
+      "Plain narrative with no heading anywhere in this file.",
+      '> MEM-502). This supersedes the older "no upstream tracking" behavior from before the fix.',
+    ].join("\n"),
+  },
+];
+const hookFound = findTrimCandidates(HOOK_REGISTRY, HOOK_DESTINATIONS);
+
+const mem501 = hookFound.candidates.find((c) => c.key === "MEM-501");
+assert(
+  mem501?.hook === "Tag PR author at review end",
+  `MEM-501 hook comes from its governing heading across blank lines, not the citing line's "**How to apply:**" bold — got "${mem501?.hook}"`
+);
+
+const mem503 = hookFound.candidates.find((c) => c.key === "MEM-503");
+assert(
+  mem503?.hook === "Tag PR author at review end",
+  "MEM-503 (unrelated paragraph, no heading of its own) inherits the nearest heading above it — accepted trade-off, never garbage"
+);
+
+assert(
+  !hookFound.candidates.some((c) => c.key === "MEM-502"),
+  "MEM-502 (no heading anywhere in its file) is NOT proposed — no fallback to prose"
+);
+assert(
+  hookFound.unreliableHooks.length === 1 &&
+    hookFound.unreliableHooks[0].key === "MEM-502" &&
+    hookFound.unreliableHooks[0].hook === "(no governing heading)",
+  "MEM-502's exclusion is reported via unreliableHooks (not silently dropped)"
+);
+
+// isReliableHook: each check below traces to a real garbage hook DevGuru
+// found live on his own brain in review round 4 — all four would have
+// passed round 3's length + `>`/`|`-start-only guard.
+assert(!isReliableHook("(MEM-95, 2026-07-24.)"), "bare citation parenthesis rejected — zero description content");
+assert(
+  !isReliableHook("2026-08-02 (MEM-115):** caught under-applying this — a low-risk,"),
+  "orphaned ** marker rejected — a leaked bold delimiter, not real content"
+);
+assert(
+  !isReliableHook("around. (MEM-124, 2026-08-07; same detection-risk family as the"),
+  "lowercase mid-sentence start rejected — not a title"
+);
+assert(
+  !isReliableHook("transparently in-thread and loop the owner in rather"),
+  "lowercase mid-sentence start rejected — not a title"
+);
+assert(isReliableHook("Tag PR author at review end"), "a real heading passes the guard");
 
 console.log(`✅ all ${passed} assertions passed`);

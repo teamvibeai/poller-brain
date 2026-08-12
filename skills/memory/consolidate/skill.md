@@ -265,6 +265,33 @@ Add `memory/core/LEARNINGS.md` and the archive file to `filesChanged` when archi
 
 This ensures steady progress toward the threshold while requiring lifecycle-provenance (MEM_REGISTRY or episodic) rather than unstructured age-based deletion.
 
+### 5d. LEARNINGS.md Promoted-Entry Trim
+
+`teamvibeai/poller-brain#300`: Step 5c above only fires when an entry's `[MEM-NNN]` key is `OBSOLETE`/`REMOVED`, or when a resolved episodic follow-up exists. On a mature brain, load-bearing lessons stay `ACTIVE` forever, so Step 5c's gate can go many consecutive cycles with "no safe candidate" while `LEARNINGS.md` keeps growing regardless (measured: a brain with 9 consecutive no-candidate Step 5c cycles at 8.6x the byte cap). This step targets a narrower, complementary case Step 5c cannot reach: an entry that started as a short lesson but later got a full incident writeup in `semantic/`, `episodic/`, or `procedural/` — the short and full versions now say the same thing twice, and the short one can shrink to a pointer without losing anything.
+
+Different brains write `LEARNINGS.md` in different conventions — a top-level `- ` bullet per lesson, or a `### Heading` + `**Rule:**/**Why:**/**How to apply:**` paragraph block spanning multiple lines. The script parses an **entry** as either shape (`###` heading through the line before the next entry start, or `- ` bullet through the line before the next entry start) and always operates on the whole span, never a single line — a multi-line entry whose key citation lands on a different line than its first line is still recognized and rewritten as one unit.
+
+> **Scope — single-key entries only, and never touches Step 5c's job.** Detection is content-based (same heuristic as Step 9e, `lib/citation-detect.ts`): an entry is a candidate only if it cites EXACTLY ONE `MEM-NNN` key ACROSS ITS WHOLE SPAN AND some `semantic/`/`episodic/`/`procedural/` file has a genuine single-key citation of that key (index/lookup-table destination lines are excluded from evidence and reported separately, never silently dropped). Most `LEARNINGS.md` entries already bundle multiple keys from manual consolidation (`(konsoliduje [MEM-1][MEM-4]...)`) — those are permanently out of scope for this step, since a multi-key entry's prose isn't attributable to any single key. This step never deletes a whole entry (that stays Step 5c's job for OBSOLETE/REMOVED/resolved-episodic cases) — it only shrinks a still-`ACTIVE` entry to a pointer once its content is demonstrably duplicated elsewhere.
+
+> **Expected yield on a mature brain: likely zero.** Live-verified on the one brain where this was measurable (`teamvibeai/poller-brain#300` review, 2026-08-12): a real citing line very often mentions a key only as an incidental comparison ("...same bar as tag-author/MEM-2; single-source caveat") rather than condensing its lesson — content-based detection can surface the citation but cannot distinguish that shape (#244's shape #4) from a genuine restatement by regex. On that brain the step found exactly 1 candidate, and review rejected it as this false-positive shape — 0 valid trims. Treat "the reduction path exists and ran" as a different claim from "the reduction path found something usable": on a mature, well-cited brain, the reviewer's job in step 2 below is expected to be rejecting every candidate, not applying most of them.
+
+If the Memory Metrics table (Step 9b) shows `LEARNINGS.md` exceeding 5000 bytes, run the deterministic trim script:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts"
+```
+
+1. **Run it** and read the always-printed parse summary (`entries=N, multi-key=M, pointers=P, candidates=C`) plus the index-rejection list, then the candidate list itself (key, `LEARNINGS.md` entry span, destination `file:line`, full citing line, proposed pointer). If the parse summary shows 0 entries on an over-cap file that contains `MEM-` keys, the script warns and skips instead of silently reporting "no-op" — treat that as an entry-format mismatch to investigate, not a clean result.
+2. **Review each candidate** — does the citing line actually restate/condense this entry's lesson, or does it just mention the key in passing? Reject anything that isn't clearly the former (same judgment call as Step 9e).
+
+   > **Generic hooks are a navigation aid, not evidence of content match.** The proposed pointer's hook text comes from the citation's nearest governing heading (`extractHook`), which is often a section title shared by many unrelated entries in the same file (e.g. `Consolidation/Reflection History Archive — 2026 H2` — DevGuru measured 9 of 25 real hooks on one brain sharing just 3 such headings). A matching hook string across two candidates means "open this destination to check," never "these two entries say the same thing" — judge the actual citing line's content in step 2, not hook-string equality.
+3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts" --apply --only MEM-1,MEM-5,...`. The script count-verifies before writing — it aborts (exit 1) without writing if `LEARNINGS.md` would grow or if the set of distinct `MEM-N` keys cited in the file would change.
+4. **Log it** in the markdown report under `## LEARNINGS.md Promoted-Entry Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), size delta, and the verify checks.
+5. **Report tracking:** add `memory/core/LEARNINGS.md` to `filesChanged` when anything was applied (skip when nothing was proposed, or nothing was approved).
+6. If `LEARNINGS.md` is under 5000 bytes, or nothing is proposed, skip logging this step.
+
+An entry the script cannot find cited anywhere (or only ever cited ambiguously, or bundles multiple keys) is left with its full narrative — that's expected, not a failure.
+
 ### 6. Regenerate SUMMARY.md
 
 **Always regenerate `memory/SUMMARY.md` on every consolidation run — this step is non-negotiable, even if no facts were promoted in steps 2–4.** A lightweight consolidation with zero promotions must still regenerate SUMMARY.md to ensure it reflects the current state of all memory tiers.
@@ -390,7 +417,7 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 | SUMMARY.md | 4200 | 9000 | :white_check_mark: |
 | LEARNINGS.md | 3100 | 5000 | :white_check_mark: |
 | MEM_REGISTRY.md | 800 | 5000 | :white_check_mark: |
-| PREFERENCES.md | 500 | — | — |
+| PREFERENCES.md | 2100 | 5000 | :white_check_mark: |
 | MISTAKES.md | 0 | — | — |
 | TODAY.md | 1100 | — | — |
 ```
@@ -398,8 +425,9 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 **Thresholds** (flag as :warning: if exceeded):
 - `CLAUDE.md` > 10000 — risk: instruction overload
 - `SUMMARY.md` > 9000 — risk: context bloat
-- `LEARNINGS.md` > 5000 — risk: too many rules to follow
+- `LEARNINGS.md` > 5000 — risk: too many rules to follow (reduction paths: Step 5c archival, Step 5d promoted-bullet trim)
 - `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries, trim promoted ACTIVE rows)
+- `PREFERENCES.md` > 5000 — risk: preference set too large to track reliably. Same 5000B convention as LEARNINGS.md/MEM_REGISTRY.md, added `teamvibeai/poller-brain#300` — previously untracked, meaning a brain could accumulate an unbounded PREFERENCES.md with no signal in this report. **Tracking only for now**: flag :warning: when exceeded, but there is no dedicated reduction step yet (no Step 9f) — a brain that trips this threshold should be flagged in `processImprovements` (Step 11) rather than silently reported. A reduction mechanism can reuse the same citation-based trim pattern as Step 5d/9e once real over-threshold data justifies building it.
 
 #### 9c. CLAUDE.md Gradual Reduction
 
