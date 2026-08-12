@@ -45,6 +45,7 @@ import {
   verifyTrimStats,
   type DestinationFile,
   type TrimCandidate,
+  type IndexRejection,
 } from "./lib/mem-registry-trim-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
@@ -94,6 +95,26 @@ function printProposals(candidates: TrimCandidate[]): void {
   }
 }
 
+/**
+ * Always printed, even when 0 — a silently narrowed scan (destinations
+ * skipped as index-shaped) must never read as "nothing was there" (DevGuru
+ * catch, poller-brain#300 review round 2).
+ */
+function printIndexRejections(indexRejections: IndexRejection[]): void {
+  if (indexRejections.length === 0) {
+    console.log("index-shaped destination lines rejected as evidence: 0\n");
+    return;
+  }
+  console.log(
+    `index-shaped destination lines rejected as evidence: ${indexRejections.length} ` +
+      `(pointer/lookup rows, not condensed narrative — excluded from citation search):`
+  );
+  for (const r of indexRejections) {
+    console.log(`  ${r.key} @ ${r.file}:${r.line}  ${r.lineText.trim()}`);
+  }
+  console.log();
+}
+
 function main(): void {
   const apply = process.argv.includes("--apply");
   const onlyKeys = parseOnlyFlag();
@@ -113,9 +134,13 @@ function main(): void {
 
   const registryBefore = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, totalDataRows, alreadyPointer } = findTrimCandidates(registryBefore, destinations);
+  const { candidates, totalDataRows, alreadyPointer, indexRejections } = findTrimCandidates(
+    registryBefore,
+    destinations
+  );
 
   if (!apply) {
+    printIndexRejections(indexRejections);
     if (candidates.length === 0) {
       console.log(
         `No promoted rows to propose (${alreadyPointer} already pointers out of ${totalDataRows} data rows, ` +

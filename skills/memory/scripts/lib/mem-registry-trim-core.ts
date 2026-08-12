@@ -17,46 +17,27 @@
  * (REMOVED-row relocation) — this instead targets ACTIVE-row bloat, the
  * actual current registry growth driver.
  *
- * Detection/apply is split into two functions on purpose — this is the
- * result of three adversarial review rounds with DevGuru, which surfaced
- * FOUR distinct false-positive shapes for "a destination file cites this
- * key, therefore it's safe to trim":
- *   1. episodic/ journals citing a key in bookkeeping context (a day-N
- *      countdown, a "merge this later" TODO, a status tally).
- *   2. core/semantic lines enumerating a "sibling MEM family" for future
- *      cleanup — the same failure as (1), proving the hazard is a line
- *      citing 2+ keys together, not the directory.
- *   3. (mitigated by the single-distinct-key-per-line gate below, which
- *      rejects any line citing 2+ keys as evidence for ALL of them.)
- *   4. a line citing exactly ONE key, but as an incidental "per this rule"
- *      justification inside an unrelated sentence/action-item — e.g. an
- *      episodic reflection recommendation citing a communication-style key
- *      to justify its own unrelated task, not restating that key's content.
- *      Real example (poller-brain#244 review): MEM-67 registry row is
- *      about "always send clickable GH links," but the single-key line
- *      that "cites" it is an unrelated reflection action item about a
- *      different batch-escalation task that merely says "...per [MEM-67]."
- * Every fix for one shape (directory exclusion, cluster-line rejection)
- * left the next shape unguarded — the class of failure ("cites the key" ≠
- * "is the key's condensed content") isn't fully closeable by a citation
- * heuristic without reading for meaning. So this module never auto-writes
- * from a blind scan. It only *proposes* candidates (`findTrimCandidates`);
- * writing is a separate step (`applyTrimCandidates`) given an explicit,
- * caller-approved candidate list — trusted either because a human reviewed
- * the full citing line before approving it (existing bloat backfill), or
- * because the caller just wrote and grep-verified that exact citation
- * itself moments earlier in the same run (fresh same-day promotion, no
- * scanning/ambiguity possible since the caller already knows the answer).
+ * The citation-detection heuristic (single-key-line evidence, multi-key-line
+ * rejection, propose-only) lives in ./citation-detect.ts — shared with
+ * mem-learnings-trim-core.ts (poller-brain#300), which applies the identical
+ * heuristic to memory/core/LEARNINGS.md. See that module's doc comment for
+ * the full false-positive-shape history. This module only owns the
+ * MEM_REGISTRY.md-specific row format (pipe-table parsing/rewriting).
  *
  * This module is intentionally fs-free so the invariants can be unit-tested
  * against string fixtures without touching a real brain's memory/.
  */
 
-/** A destination file's content, path relative to `memory/` (e.g. "core/LEARNINGS.md"). */
-export interface DestinationFile {
-  file: string;
-  text: string;
-}
+import {
+  type DestinationFile,
+  type Citation,
+  type IndexRejection,
+  firstCitations,
+  extractHook,
+  sortKeys,
+} from "./citation-detect.js";
+
+export type { DestinationFile, IndexRejection };
 
 /** A row whose key has a genuine single-key citation, proposed (not yet applied) as a trim. */
 export interface TrimCandidate {
@@ -72,75 +53,8 @@ export interface TrimCandidate {
 
 const DATA_ROW_RE = /^\|\s*(MEM-\d+)\s*\|/;
 
-/** Matches a compact citation cluster: `MEM-93`, `MEM-93/94/122`, `MEM-1,2,3`. */
-const CLUSTER_CITE_RE = /\bMEM-(\d+(?:[/,]\d+)*)\b/g;
-
 /** Matches an already-trimmed pointer row's Description cell. */
 export const POINTER_DESC_RE = /^see .+\.md( —| -)/;
-
-/** Parse every distinct MEM-N key cited in a line, expanding compact clusters. */
-function distinctCitedKeysInLine(line: string): string[] {
-  const keys = new Set<string>();
-  CLUSTER_CITE_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = CLUSTER_CITE_RE.exec(line))) {
-    for (const n of m[1].split(/[/,]/)) keys.add(`MEM-${n}`);
-  }
-  return [...keys];
-}
-
-interface Citation {
-  file: string;
-  line: number;
-  lineText: string;
-}
-
-/**
- * First citation location for every MEM-N key found across destination
- * files, scanned in file-path order then line order — deterministic so
- * repeated runs pick the same citation (idempotence).
- *
- * A line is only accepted as evidence if it cites EXACTLY ONE distinct
- * MEM-N key. A line citing 2+ keys (whether via one compact cluster like
- * `MEM-6/98/100/102` or via separate bracket tags on the same line like
- * `[MEM-172] ... ([MEM-166])`) is skipped entirely for ALL keys it
- * mentions — ambiguous whether it condenses any one of them specifically,
- * or is a family/sibling cross-reference listing. Scanning continues past
- * a rejected line in case the same key has a genuine single-key citation
- * elsewhere. Note this does NOT catch shape 4 above (single key, wrong
- * context) — that's why this is a candidate-finder, not an auto-writer.
- */
-function firstCitations(destinations: DestinationFile[]): Map<string, Citation> {
-  const found = new Map<string, Citation>();
-  const sorted = [...destinations].sort((a, b) => a.file.localeCompare(b.file));
-  for (const { file, text } of sorted) {
-    const lines = text.split("\n");
-    lines.forEach((lineText, idx) => {
-      const keysOnLine = distinctCitedKeysInLine(lineText);
-      if (keysOnLine.length !== 1) return; // 0 or 2+ keys — no evidence, or ambiguous cross-reference
-      const key = keysOnLine[0];
-      if (!found.has(key)) {
-        found.set(key, { file, line: idx + 1, lineText });
-      }
-    });
-  }
-  return found;
-}
-
-/** Deterministic short hook extracted from a destination line, for the pointer's Description. */
-function extractHook(lineText: string): string {
-  let s = lineText.replace(/^\s*[-*]\s+/, "").trim();
-  const bold = s.match(/\*\*(.+?)\*\*/);
-  if (bold) return bold[1].trim();
-  s = s
-    .replace(/`/g, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
-  return s.split(/\s+/).filter(Boolean).slice(0, 8).join(" ");
-}
-
-function sortKeys(keys: Iterable<string>): string[] {
-  return [...keys].sort((a, b) => parseInt(a.slice(4), 10) - parseInt(b.slice(4), 10));
-}
 
 export interface FindCandidatesResult {
   candidates: TrimCandidate[];
@@ -148,6 +62,8 @@ export interface FindCandidatesResult {
   totalDataRows: number;
   /** Rows already a pointer (idempotence gate) — not re-proposed. */
   alreadyPointer: number;
+  /** Destination lines skipped as index/pointer-shaped, not narrative evidence — surfaced so coverage loss is never silent. */
+  indexRejections: IndexRejection[];
 }
 
 /**
@@ -162,7 +78,7 @@ export function findTrimCandidates(
   registry: string,
   destinations: DestinationFile[]
 ): FindCandidatesResult {
-  const citations = firstCitations(destinations);
+  const { citations, indexRejections } = firstCitations(destinations);
   const candidates: TrimCandidate[] = [];
   let alreadyPointer = 0;
   let totalDataRows = 0;
@@ -192,7 +108,7 @@ export function findTrimCandidates(
     });
   }
 
-  return { candidates: sortCandidates(candidates), totalDataRows, alreadyPointer };
+  return { candidates: sortCandidates(candidates), totalDataRows, alreadyPointer, indexRejections };
 }
 
 function sortCandidates(candidates: TrimCandidate[]): TrimCandidate[] {

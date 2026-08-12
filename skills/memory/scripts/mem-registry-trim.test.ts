@@ -188,4 +188,65 @@ try {
 }
 assert(threw, "verifyTrimStats throws when registry size grows");
 
+// --- index/pointer-shaped destination lines are rejected as evidence -----
+// Live production catch (2026-08-12, DevGuru): today's consolidation run
+// proposed 10 candidates off semantic/kb-promotion-provenance.md, an
+// MEM-key → destination lookup table (one single-key line per row) — all
+// 10 rejected on review. An index row isn't condensed narrative, it's a
+// pointer elsewhere; citation-detect.ts now rejects lines shaped like a
+// lookup/index row (`→ see`, `see …md`, or a `| MEM-N | ... |` table row),
+// shared with mem-learnings-trim-core.ts (poller-brain#300).
+const INDEX_REGISTRY = `# MEM Registry
+
+| Key | Status | Created | Obsoleted | Description |
+|-----|--------|---------|-----------|-------------|
+| MEM-201 | ACTIVE | 2026-08-12 | — | should NOT be trimmed off an index row |
+`;
+const INDEX_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/kb-index.md",
+    text: [
+      "| Key | Destination |",
+      "|-----|-------------|",
+      "| MEM-201 | see semantic/other.md — some hook |",
+    ].join("\n"),
+  },
+];
+const indexFound = findTrimCandidates(INDEX_REGISTRY, INDEX_DESTINATIONS);
+assert(
+  indexFound.candidates.length === 0,
+  "an index/lookup-table row citing exactly one key is NOT treated as narrative evidence — it's a pointer, not condensed content"
+);
+assert(
+  indexFound.indexRejections.length === 1 &&
+    indexFound.indexRejections[0].key === "MEM-201" &&
+    indexFound.indexRejections[0].file === "semantic/kb-index.md",
+  "the index row rejection is reported (not silently dropped) — DevGuru review round 2: coverage loss must never be silent"
+);
+
+// --- generalized index-shape detection (round 2): not just literal `kb/`
+// paths or a `| MEM-N |` first cell — any markdown table row containing a
+// path to another .md file is index-shaped, regardless of column layout.
+const GENERALIZED_INDEX_REGISTRY = `# MEM Registry
+
+| Key | Status | Created | Obsoleted | Description |
+|-----|--------|---------|-----------|-------------|
+| MEM-301 | ACTIVE | 2026-08-12 | — | should NOT be trimmed off a differently-shaped index row |
+`;
+const GENERALIZED_INDEX_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/other-index.md",
+    text: [
+      "| Destination | Key |",
+      "|-------------|-----|",
+      "| semantic/other.md | MEM-301 |",
+    ].join("\n"),
+  },
+];
+const generalizedIndexFound = findTrimCandidates(GENERALIZED_INDEX_REGISTRY, GENERALIZED_INDEX_DESTINATIONS);
+assert(
+  generalizedIndexFound.candidates.length === 0 && generalizedIndexFound.indexRejections.length === 1,
+  "a table row is index-shaped by two cheap combined signals (table row + path to another .md file), not a hardcoded column layout"
+);
+
 console.log(`✅ all ${passed} assertions passed`);
