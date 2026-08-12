@@ -31,15 +31,17 @@ export interface Citation {
   line: number;
   lineText: string;
   /**
-   * Nearest markdown heading (`#` through `######`) at or above `line`
-   * within the same destination file, text with the `#` markers stripped —
-   * null if the file has no heading before this line. Preferred hook
-   * source over the citing line itself: a citing line is very often a
-   * `**How to apply:**`/`**Why:**`-style labeled paragraph fragment, not a
-   * standalone description (DevGuru catch, poller-brain#300 review round
-   * 3, live data: `extractHook` on real entries returned the literal label
-   * text "How to apply:", and on a wrapped line a mid-sentence fragment
-   * starting with `> ` or `|`).
+   * Nearest markdown heading (`#` through `######`) above `line` within the
+   * same destination file, text with the `#` markers stripped — null if no
+   * heading precedes this line. Governs until the NEXT heading (standard
+   * markdown section semantics), regardless of blank lines in between — a
+   * real entry is routinely `### Title` / blank / `**Rule:** ...` / blank /
+   * `**How to apply:** ...`, so a heading must survive blank-line gaps to
+   * govern its own entry's citations (DevGuru catch, poller-brain#300
+   * review round 4: an earlier blank-line-stops-the-scan boundary rejected
+   * the heading for exactly this shape on his real brain, falling through
+   * to a prose fallback that kept producing garbage in a new shape each
+   * round). This is now the ONLY hook source — see `extractHook`.
    */
   heading: string | null;
 }
@@ -111,20 +113,22 @@ const HEADING_LINE_RE = /^#{1,6}\s+(.+?)\s*$/;
 
 /**
  * Nearest heading text governing `lineIdx` (0-indexed) in `lines`, `#`
- * markers stripped — null if none precedes it. Stops at the first blank
- * line reached without finding a heading: a heading's entry ends at the
- * paragraph break, so unrelated content further down the file (separated
- * by a blank line) is NOT considered part of it, even if it's the nearest
- * heading textually above (DevGuru catch, poller-brain#300 review round 3
- * follow-up: without this boundary, a single early heading in a
- * destination file "leaked" onto every later paragraph, including ones
- * with no real connection to it).
+ * markers stripped — null if none precedes it anywhere in the file. A
+ * heading governs everything below it up to the next heading (or end of
+ * file) — plain markdown section scoping, not a heuristic — so blank
+ * lines/paragraph breaks in between do NOT end its reach (poller-brain#300
+ * review round 4: the correct boundary is the next heading, not a blank
+ * line; bounding on blank lines rejected the governing heading for the
+ * routine `### Title` / blank / `**Rule:**` / blank / `**How to
+ * apply:**` shape). Trade-off accepted deliberately: a stray unrelated
+ * paragraph inside a heading's section (no heading of its own) inherits
+ * that heading as its hook too — imprecise but never garbage, which is the
+ * property this function optimizes for.
  */
 function nearestHeading(lines: string[], lineIdx: number): string | null {
   for (let i = lineIdx; i >= 0; i--) {
     const m = HEADING_LINE_RE.exec(lines[i]);
     if (m) return m[1].trim();
-    if (lines[i].trim() === "" && i !== lineIdx) return null;
   }
   return null;
 }
@@ -158,59 +162,43 @@ export function firstCitations(destinations: DestinationFile[]): CitationScan {
   return { citations: found, indexRejections };
 }
 
-/** A bold span whose text is a paragraph LABEL (`**Rule:**`, `**Why:**`, `**How to apply:**`), not content. */
-const LABEL_BOLD_RE = /^[A-Za-z][\w /-]*:$/;
-
 /**
- * Words/fragments extracted from a raw destination line — last-resort
- * fallback, no heading and no usable bold. Deliberately strips ONLY a
- * plain bullet marker (`-`/`*`), NOT a blockquote (`>`) or table (`|`)
- * marker — those are left in place so `isReliableHook` can see and reject
- * a line that is structurally a blockquote/table continuation, rather than
- * laundering the marker away and proposing the fragment anyway.
- */
-function plainTextFallback(lineText: string): string {
-  const s = lineText
-    .replace(/^\s*[-*]\s+/, "")
-    .replace(/`/g, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .trim();
-  return s.split(/\s+/).filter(Boolean).slice(0, 8).join(" ");
-}
-
-/**
- * A hook this short, or one starting mid-structure (blockquote/table
- * continuation), is a garbage fragment rather than a description — the
- * caller must treat it as unreliable rather than propose it (DevGuru catch,
- * poller-brain#300 review round 3: on real entries this caught the literal
- * label text "How to apply:" and a wrapped-line fragment starting `> `).
+ * A hook failing this is a garbage fragment rather than a description — the
+ * caller must treat it as unreliable rather than propose it. Each check
+ * traces to a real observed shape (DevGuru catches, poller-brain#300
+ * review rounds 3-4, live data): too short or a bare `>`/`|` start ("MEM-41
+ * → wrapped blockquote continuation"); a stray `**` marker ("MEM-115 →
+ * `2026-08-02 (MEM-115):** caught under-applying...`" — an orphaned bold
+ * marker, not real content); a lowercase start ("MEM-124 → `around.
+ * (MEM-124, ...`", "MEM-7 → `transparently in-thread...`" — both start
+ * mid-sentence, not at a title); a bare citation parenthesis as the whole
+ * hook ("MEM-95 → `(MEM-95, 2026-07-24.)`" — the citation ITSELF, zero
+ * description content).
  */
 export function isReliableHook(hook: string): boolean {
-  return hook.length >= 15 && !/^[>|]/.test(hook);
+  const s = hook.trim();
+  if (s.length < 15) return false;
+  if (/^[>|(]/.test(s)) return false;
+  if (s.includes("**")) return false;
+  if (/^[a-z]/.test(s)) return false;
+  return true;
 }
 
 /**
  * Deterministic short hook for a proposed pointer, from a destination
- * citation. Prefers the citation's nearest heading (the entry's own title)
- * over the citing line itself — a citing line is very often a labeled
- * paragraph fragment (`**How to apply:** ...`) rather than a standalone
- * description. Falls back to the first NON-LABEL bold span on the line
- * (skipping `**Rule:**`-shaped labels), then to a plain-text word slice.
- * Does not itself validate the result — callers check `isReliableHook` and
- * exclude/report anything that still comes out too short or fragment-like.
+ * citation. The citation's nearest governing heading is the ONLY source —
+ * no fallback to the citing line's bold spans or plain text. Round 3 tried
+ * a heading-first-then-fallback design; round 4 (DevGuru, live data on his
+ * brain) found the fallback kept reproducing garbage in a new shape every
+ * round (label bolds, then orphaned `**` markers, mid-sentence fragments,
+ * bare citation parens) — a citing line's prose is, structurally, not a
+ * title, and no amount of pattern-matching makes it one. A heading is
+ * either present (trustworthy by construction: it's the entry's own title)
+ * or absent, in which case the caller excludes the key via
+ * `isReliableHook`/`unreliableHooks` rather than guessing from prose.
  */
-export function extractHook(citation: Citation): string {
-  if (citation.heading && isReliableHook(citation.heading)) return citation.heading;
-
-  const s = citation.lineText.replace(/^\s*[-*]\s+/, "").trim();
-  const boldRe = /\*\*(.+?)\*\*/g;
-  let m: RegExpExecArray | null;
-  while ((m = boldRe.exec(s))) {
-    const text = m[1].trim();
-    if (!LABEL_BOLD_RE.test(text)) return text;
-  }
-
-  return plainTextFallback(citation.lineText);
+export function extractHook(citation: Citation): string | null {
+  return citation.heading;
 }
 
 export function sortKeys(keys: Iterable<string>): string[] {

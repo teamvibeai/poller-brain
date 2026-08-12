@@ -245,8 +245,14 @@ export function findLearningsTrimCandidates(
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
 
     const hook = extractHook(citation);
-    if (!isReliableHook(hook)) {
-      unreliableHooks.push({ key, file: citation.file, line: citation.line, lineText: citation.lineText, hook });
+    if (hook === null || !isReliableHook(hook)) {
+      unreliableHooks.push({
+        key,
+        file: citation.file,
+        line: citation.line,
+        lineText: citation.lineText,
+        hook: hook ?? "(no governing heading)",
+      });
       continue;
     }
 

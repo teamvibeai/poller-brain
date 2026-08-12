@@ -89,8 +89,16 @@ const BULLET_DESTINATIONS: DestinationFile[] = [
   {
     file: "semantic/topic.md",
     text: [
+      "### NIKDY žádný krok způsobující ztrátu dat",
+      "",
       "- **NIKDY žádný krok způsobující ztrátu dat** — full incident writeup. [MEM-99]",
+      "",
+      "### Bounded-field rule",
+      "",
       "- **bounded-field rule** — sibling family listed for cleanup. [MEM-93][MEM-94][MEM-122]",
+      "",
+      "### Correction lesson",
+      "",
       "- **[MEM-172] correction:** the suspicious thing was a false positive ([MEM-166]).",
       "- **[MEM-172] dedicated recap:** the monitoring pipeline is confirmed working end-to-end.",
     ].join("\n"),
@@ -117,18 +125,22 @@ assert(
   bulletMem99.entryStartLine === 3 && bulletMem99.entryEndLine === 3,
   "bullet: MEM-99 candidate points at the right single-line LEARNINGS.md entry span"
 );
-assert(bulletMem99.file === "semantic/topic.md" && bulletMem99.line === 1, "bullet: MEM-99 candidate points at the right destination file:line");
+assert(bulletMem99.file === "semantic/topic.md" && bulletMem99.line === 3, "bullet: MEM-99 candidate points at the right destination file:line");
 assert(
   bulletMem99.lineText.includes("full incident writeup"),
   "bullet: MEM-99 candidate carries the FULL citing line, not just the hook"
 );
-assert(bulletMem99.hook === "NIKDY žádný krok způsobující ztrátu dat", "bullet: MEM-99 hook extracted correctly");
+assert(
+  bulletMem99.hook === "NIKDY žádný krok způsobující ztrátu dat",
+  "bullet: MEM-99 hook extracted from its governing heading, not the citing line's bold span"
+);
 
 const bulletMem172 = bulletFound.candidates.find((c) => c.key === "MEM-172")!;
 assert(
-  bulletMem172.entryStartLine === 5 && bulletMem172.line === 4 && bulletMem172.lineText.includes("dedicated recap"),
-  "bullet: MEM-172 candidate uses its OWN single-key destination line (line 4), not the ambiguous shared line (line 3) — scan-past-rejection"
+  bulletMem172.entryStartLine === 5 && bulletMem172.line === 12 && bulletMem172.lineText.includes("dedicated recap"),
+  "bullet: MEM-172 candidate uses its OWN single-key destination line (line 12), not the ambiguous shared line (line 11) — scan-past-rejection"
 );
+assert(bulletMem172.hook === "Correction lesson", "bullet: MEM-172 hook extracted from its governing heading");
 
 // Approve ONLY MEM-99 — MEM-172, despite being a valid candidate, must stay untouched.
 const bulletPartial = applyLearningsTrimCandidates(BULLET_LEARNINGS, [bulletMem99]);
@@ -147,12 +159,12 @@ const bulletR1 = applyLearningsTrimCandidates(BULLET_LEARNINGS, bulletFound.cand
 verifyLearningsTrimStats(bulletR1.stats);
 assert(bulletR1.stats.trimmedEntries === 2, "bullet: both proposed candidates applied when both are approved");
 assert(
-  bulletR1.learnings.includes("- [MEM-99] → see semantic/topic.md:1 — NIKDY žádný krok způsobující ztrátu dat (Source: Jakub, 2026-07-28)"),
+  bulletR1.learnings.includes("- [MEM-99] → see semantic/topic.md:3 — NIKDY žádný krok způsobující ztrátu dat (Source: Jakub, 2026-07-28)"),
   "bullet: MEM-99 entry rewritten to a `-` pointer with correct file:line, hook, and preserved provenance"
 );
 assert(
-  bulletR1.learnings.includes("- [MEM-172] → see semantic/topic.md:4 — [MEM-172] dedicated recap: (Source: X)"),
-  "bullet: MEM-172 entry trimmed using its OWN single-key destination line (line 4), provenance preserved"
+  bulletR1.learnings.includes("- [MEM-172] → see semantic/topic.md:12 — Correction lesson (Source: X)"),
+  "bullet: MEM-172 entry trimmed using its OWN single-key destination line (line 12), provenance preserved"
 );
 assert(
   bulletR1.learnings.includes("**Bounded-field rule** — cap every new field you add. (Source: DevGuru, [MEM-93][MEM-94][MEM-122])"),
@@ -214,7 +226,12 @@ const HEADING_DESTINATIONS: DestinationFile[] = [
   {
     file: "semantic/topic.md",
     text: [
+      "### CI green discipline",
+      "",
       "- **CI green discipline** — full incident writeup, PR#254 postmortem. [MEM-163]",
+      "",
+      "### Bounded field rule",
+      "",
       "- **bounded-field rule** — sibling family listed for cleanup. [MEM-93][MEM-94][MEM-122]",
     ].join("\n"),
   },
@@ -245,7 +262,7 @@ const headingR1 = applyLearningsTrimCandidates(HEADING_LEARNINGS, headingFound.c
 verifyLearningsTrimStats(headingR1.stats);
 assert(headingR1.stats.trimmedEntries === 1, "heading: exactly one entry trimmed");
 assert(
-  headingR1.learnings.includes("### [MEM-163] → see semantic/topic.md:1 — CI green discipline (Source: Jakub, 2026-07-29)"),
+  headingR1.learnings.includes("### [MEM-163] → see semantic/topic.md:3 — CI green discipline (Source: Jakub, 2026-07-29)"),
   "heading: entry rewritten to a `###` pointer (matching its own entry format), with provenance preserved"
 );
 assert(
