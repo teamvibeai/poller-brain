@@ -103,6 +103,13 @@ The JSON file is written at the same time as the markdown report, in the same co
     "nonEmpty": false,
     "itemCount": 0
   },
+  "reflectionStatus": {
+    "lastReflectionDate": "2026-05-25",
+    "daysSinceReflection": 11,
+    "overdueThresholdDays": 3,
+    "isOverdue": true,
+    "nonConformingReflectionFiles": 0
+  },
   "brainCommitSha": "abc123def456789..."
 }
 ```
@@ -120,6 +127,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `selfAssessment` | `object` | Boolean pass/fail per eval criterion (see Eval Criteria below) |
 | `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. **One sentence per item after the prefix. Cap at 5 items.** |
 | `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
+| `reflectionStatus` | `object` | Self-reported reflection cadence, computed by `scripts/reflection-guard.sh` (poller-brain#157). `lastReflectionDate` (string \| null): date parsed from the newest `memory/episodic/reflection-*.md` filename, or `null` if none exists yet. `daysSinceReflection` (int \| null): days elapsed since that date. `overdueThresholdDays` (int): the threshold used, from `REFLECTION_OVERDUE_THRESHOLD_DAYS` (default 3). `isOverdue` (bool): `daysSinceReflection >= overdueThresholdDays`, or `true` when no reflection has ever run. `nonConformingReflectionFiles` (int): count of `reflection-*.md` files that don't match the strict `reflection-YYYY-MM-DD.md` shape (e.g. a stray `reflection-template.md` or a split `reflection-2026-08-12-part2.md`) — lets the fleet metric distinguish "reflects, but under an unparseable filename" from "never reflected" when `lastReflectionDate` is `null`. Used by the eval pipeline to track fleet-wide reflection lag. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
@@ -153,17 +161,7 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `session-capture-logged` | Were session capture writes to semantic/ logged in TODAY.md? | For every regular-session commit that created or modified a file in memory/semantic/, a corresponding log entry exists in memory/TODAY.md (or the archived daily log) mentioning the file or 'session capture'. If no semantic/ files were modified during regular sessions, pass automatically. |
 | `semantic-naming-convention` | Do new semantic/ files follow kebab-case naming convention? | All files created in memory/semantic/ since the last consolidation use kebab-case naming (lowercase, hyphens, no underscores or spaces, .md extension). Examples: stepforge.md, vest-liquidation.md. If no new semantic/ files were created, pass automatically. |
 | `session-capture-has-context` | Do new semantic/ files from session capture include a Context section? | Every file created in memory/semantic/ during regular sessions (not maintenance) contains a heading '## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
-| `reflection-overdue` | Is reflection cadence within the mechanical threshold? | reflectionStatus.isOverdue === false, OR reflection was performed in this same maintenance pass (filesChanged includes a memory/episodic/reflection-*.md entry). |
-
-## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
-
-## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
-
-## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
-
-## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
-
-## Context' or '## Kontext' with at least one line of text below it. This ensures reference files explain why they exist. If no new session-capture files were created, pass automatically. |
+| `reflection-overdue` | Is reflection cadence within the mechanical threshold? | Pass: `reflectionStatus.isOverdue === false`, OR reflection was performed in this same maintenance pass (`filesChanged` includes a `memory/episodic/reflection-*.md` entry). Fail: otherwise (including `isOverdue === true` and any `null`/malformed value). Do NOT re-derive the day-threshold comparison from `daysSinceReflection`/`overdueThresholdDays` — `scripts/reflection-guard.sh` is the sole source of truth for `isOverdue`, including its own boundary condition and the `daysSinceReflection: null` case for a brain that has never reflected. Sourced from `scripts/reflection-guard.sh` output (poller-brain#157). |
 
 ### Reflection Criteria
 
@@ -172,14 +170,6 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 | `concrete-improvement-proposal` | Did reflection produce at least one concrete process change proposal? | Report includes at least one specific proposal for changing the maintenance process, with a stated rationale (what should change and why), not merely an observation that something is broken |
 | `previous-recommendations-reviewed` | Did reflection review follow-through on previous recommendations? | Report explicitly references at least one recommendation from a prior maintenance cycle and states whether it was implemented, partially addressed, or remains pending |
 | `gap-impact-analysis` | Did reflection connect at least one memory gap to a specific operational consequence? | At least one entry in observations identifies a specific memory gap AND explains how that gap caused a concrete problem or reduced maintenance effectiveness in recent cycles. Per-report applicability: if observations contains zero gap-class entries (no language like 'lacks', 'missing', 'thin', 'no entry for', 'gap in coverage'), the report is excluded from scoring (treated as not-applicable for this criterion). The criterion only evaluates reports where at least one gap-class observation is present after the poller-brain#95 routing rule moves gap-only entries to processImprovements. |
-| `verifiable-recommendations` | Did reflection include at least one recommendation with a stated success criterion? | At least one entry in recommendations specifies: (1) a concrete change to make, (2) the current problem it addresses, AND (3) a verifiable condition that would confirm the recommendation was implemented and effective in a future maintenance cycle |
-| `deletion-with-preservation-evidence` | Did reflection explicitly account for each deleted file's content preservation? | For every file deletion recorded in filesChanged (operationCounts.deleted > 0): the report names in decisions or observations the specific destination file where the deleted content was preserved, OR explicitly states the content was redundant with a specifically named existing file. If operationCounts.deleted is 0, the criterion passes automatically. |
-
-#95 routing rule moves gap-only entries to processImprovements. |
-| `verifiable-recommendations` | Did reflection include at least one recommendation with a stated success criterion? | At least one entry in recommendations specifies: (1) a concrete change to make, (2) the current problem it addresses, AND (3) a verifiable condition that would confirm the recommendation was implemented and effective in a future maintenance cycle |
-| `deletion-with-preservation-evidence` | Did reflection explicitly account for each deleted file's content preservation? | For every file deletion recorded in filesChanged (operationCounts.deleted > 0): the report names in decisions or observations the specific destination file where the deleted content was preserved, OR explicitly states the content was redundant with a specifically named existing file. If operationCounts.deleted is 0, the criterion passes automatically. |
-
-#95 routing rule moves gap-only entries to processImprovements. |
 | `verifiable-recommendations` | Did reflection include at least one recommendation with a stated success criterion? | At least one entry in recommendations specifies: (1) a concrete change to make, (2) the current problem it addresses, AND (3) a verifiable condition that would confirm the recommendation was implemented and effective in a future maintenance cycle |
 | `deletion-with-preservation-evidence` | Did reflection explicitly account for each deleted file's content preservation? | For every file deletion recorded in filesChanged (operationCounts.deleted > 0): the report names in decisions or observations the specific destination file where the deleted content was preserved, OR explicitly states the content was redundant with a specifically named existing file. If operationCounts.deleted is 0, the criterion passes automatically. |
 
@@ -234,7 +224,8 @@ assumed. Do not write new entries to `PENDING_ISSUES.md`.
 
 ## Twice Weekly
 
-- **Memory reflection**: Check `memory/episodic/reflection-*.md` for the last reflection date. If 3+ days old (or none exist), run the memory-reflect skill to assess memory quality. **Produce a report.**
+- **Memory reflection**: Run `bash scripts/reflection-guard.sh` first. If it exits 0, reflection is due — run the memory-reflect skill to assess memory quality. **Produce a report.** If it exits non-zero, reflection is not yet due — skip it (no reflection report needed).
+  - **`reflectionStatus` field is ALWAYS required**, in every consolidation report, whether or not reflection ran this pass — this is not conditional on the guard's exit code. `scripts/reflection-guard.sh` prints a `REFLECTION_STATUS_JSON: {...}` line with `lastReflectionDate`, `daysSinceReflection`, `overdueThresholdDays`, `isOverdue`. Copy those fields into `reflectionStatus` (poller-brain#157) — if reflection ran this pass, run the guard again *after* it completes so the reported values reflect the just-written `reflection-*.md` file, not the stale pre-run state.
 
 ## Heartbeat → Scheduled Messages Migration
 
