@@ -64,21 +64,35 @@ in_window() {
 }
 
 # Returns 0 (true/idle) only when we can positively confirm that the last
-# IDLE_STREAK_MIN consolidation reports each promoted nothing (no file under
-# memory/core|semantic|episodic|procedural/ in that report's filesChanged).
+# IDLE_STREAK_MIN consolidation reports each promoted nothing, per their own
+# mandatory `## Tier Coverage` section (skills/memory/consolidate/skill.md
+# Step 12 / MAINTENANCE.md "Tier coverage check" — every report MUST include
+# a 4-line block, one per memory tier, each line either "Updated ..." or a
+# "No new content/significant events/workflows — confirmed" pass line).
+#
+# Reads the *.md* report, not the JSON one: the JSON report is deleted by
+# the platform almost immediately after commit (platform v0.1.54, see
+# MAINTENANCE.md's "Report file age check" note) — confirmed empirically on
+# two real brains (DevGuru review poller-brain#168 round 2: 81 JSON adds +
+# 81 JSON deletes in the same repo, 0 JSON files on disk; same 0-JSON count
+# reproduced on this brain). A JSON-based check is a permanent no-op on any
+# brain running platform >= v0.1.54, so it can't be the source of truth here
+# regardless of how it parses.
+#
 # This is a retrospective check on actual report outcomes, not a forward
 # guess from commit volume — DevGuru brain's own evidence (poller-brain#168
 # review round 1) showed commit counts of 35/41/43 on days that still
 # produced zero promotions, so "commits since last run" cannot serve as an
 # idle proxy at all. Any detection failure (no reports dir, fewer than
-# IDLE_STREAK_MIN consolidation reports on record, unreadable report file)
-# returns 1 (not idle) — a failed check must never cause a silent skip; it
-# falls through to the existing time-only policy instead.
+# IDLE_STREAK_MIN consolidation reports on record, unreadable report file,
+# a report missing/malformed Tier Coverage section) returns 1 (not idle) —
+# a failed check must never cause a silent skip; it falls through to the
+# existing time-only policy instead.
 is_idle_since_last_run() {
   [ -d "$REPORTS_DIR" ] || return 1
 
   local reports
-  reports=$(find "$REPORTS_DIR" -maxdepth 1 -name '*-consolidation.json' 2>/dev/null | sort | tail -n "$IDLE_STREAK_MIN")
+  reports=$(find "$REPORTS_DIR" -maxdepth 1 -name '*-memory-consolidation.md' 2>/dev/null | sort | tail -n "$IDLE_STREAK_MIN")
   [ -z "$reports" ] && return 1
 
   local found=0
@@ -87,12 +101,22 @@ is_idle_since_last_run() {
     [ -n "$report" ] || continue
     found=$((found + 1))
     [ -r "$report" ] || return 1
-    # A promoted file shows up as a quoted filesChanged path under one of
-    # the four memory tiers. Matching too loosely (any mention of the
-    # substring, e.g. in a decisions/observations sentence) only risks a
-    # false "not idle" -> an unnecessary run, never a wrongful skip, so the
-    # anchored-but-simple grep below is safe in the direction that matters.
-    if grep -qE '"memory/(core|semantic|episodic|procedural)/' "$report"; then
+
+    # Extract the Tier Coverage block (from its heading to the next `## `
+    # heading or EOF) and require it to be non-empty -- an older/malformed
+    # report without this mandatory section can't be positively confirmed
+    # zero-promotion, so it must not count toward the idle streak.
+    local section
+    section=$(awk '/^## Tier Coverage/{flag=1; print; next} /^## /{if(flag) exit} flag' "$report")
+    [ -z "$section" ] && return 1
+
+    # Any tier line saying "Updated ..." means this report promoted
+    # something -> streak broken. Matching "Updated" too loosely elsewhere
+    # in the report would only risk a false "not idle" (an unnecessary run,
+    # never a wrongful skip) since the search is confined to the Tier
+    # Coverage block, which is exactly what the "safe failure direction"
+    # principle calls for.
+    if echo "$section" | grep -qi 'Updated'; then
       return 1   # this report promoted something -> streak broken, not idle
     fi
   done <<< "$reports"
