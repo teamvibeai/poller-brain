@@ -15,27 +15,34 @@
 # - Preferred window: 00:00–06:00 UTC (configurable via CONSOLIDATION_WINDOW_START/END)
 # - If 24h+ since last run AND inside the window → run
 # - If 48h+ since last run AND brain is NOT idle → run regardless of time (safety fallback)
-# - If brain IS idle (no non-consolidation commits since last run) → skip, up to
-#   IDLE_FALLBACK_HOURS (default 7d), then force a run anyway (long-idle check-in)
+# - If brain IS idle (last IDLE_STREAK_MIN consolidation reports promoted
+#   nothing) → skip, up to IDLE_FALLBACK_HOURS (default 7d), then force a
+#   run anyway (long-idle check-in)
 # - If <24h since last run → skip
 #
-# Idle-skip rationale (teamvibeai/poller-brain#168): a brain with zero session
-# activity since its last consolidation still produced a full report every day
-# under the old time-only gate (measured: DevGuru brain generated 9 consecutive
-# daily reports 2026-08-05..08-13 with zero core/semantic/episodic promotions
-# each time). The skill itself intentionally has no partial/lightweight mode
-# (skills/memory/consolidate/skill.md — reinstated 2026-04-29 after skipping
-# steps broke the summary-md-regenerated eval criterion), so the fix belongs
-# here at the trigger, not inside the run: skip the ENTIRE run (no report) on
-# an idle day, never a partial one. Mirrors reflection-guard.sh's cadence-gate
-# pattern (poller-brain#157) applied to the opposite problem (running too
-# often instead of too rarely).
+# Idle-skip rationale (teamvibeai/poller-brain#168): a brain with nothing to
+# promote still produced a full report every day under the old time-only gate
+# (measured: DevGuru brain generated 9 consecutive daily reports 2026-08-05..
+# 08-13 with zero core/semantic/episodic/procedural promotions each time,
+# despite real commit activity every one of those days — routine session
+# `log:` entries and automated report commits never stop, so "commits since
+# last run" cannot distinguish a genuinely unproductive brain from a busy
+# one; only the reports' own promotion outcome can). The skill itself
+# intentionally has no partial/lightweight mode (skills/memory/consolidate/
+# skill.md — reinstated 2026-04-29 after skipping steps broke the
+# summary-md-regenerated eval criterion), so the fix belongs here at the
+# trigger, not inside the run: skip the ENTIRE run (no report) once a streak
+# of recent runs has promoted nothing, never a partial one. Mirrors
+# reflection-guard.sh's cadence-gate pattern (poller-brain#157) applied to
+# the opposite problem (running too often instead of too rarely).
 
 BRAIN_DIR="${1:-.}"
 GUARD_FILE="$BRAIN_DIR/memory/.last_consolidation"
+REPORTS_DIR="$BRAIN_DIR/reports"
 INTERVAL_HOURS=24
 FALLBACK_HOURS=48
 IDLE_FALLBACK_HOURS="${CONSOLIDATION_IDLE_FALLBACK_HOURS:-168}"  # 7 days
+IDLE_STREAK_MIN="${CONSOLIDATION_IDLE_STREAK_MIN:-2}"  # consecutive zero-promotion reports required
 WINDOW_START="${CONSOLIDATION_WINDOW_START:-0}"   # hour UTC (inclusive)
 WINDOW_END="${CONSOLIDATION_WINDOW_END:-6}"       # hour UTC (exclusive)
 
@@ -56,22 +63,41 @@ in_window() {
   fi
 }
 
-# Returns 0 (true/idle) only when we can positively confirm zero
-# non-consolidation commits since $LAST_DATE. Any detection failure (not a
-# git repo, git missing, malformed date) returns 1 (not idle) — a failed
-# check must never cause a silent skip; it falls through to the existing
-# time-only policy instead.
+# Returns 0 (true/idle) only when we can positively confirm that the last
+# IDLE_STREAK_MIN consolidation reports each promoted nothing (no file under
+# memory/core|semantic|episodic|procedural/ in that report's filesChanged).
+# This is a retrospective check on actual report outcomes, not a forward
+# guess from commit volume — DevGuru brain's own evidence (poller-brain#168
+# review round 1) showed commit counts of 35/41/43 on days that still
+# produced zero promotions, so "commits since last run" cannot serve as an
+# idle proxy at all. Any detection failure (no reports dir, fewer than
+# IDLE_STREAK_MIN consolidation reports on record, unreadable report file)
+# returns 1 (not idle) — a failed check must never cause a silent skip; it
+# falls through to the existing time-only policy instead.
 is_idle_since_last_run() {
-  if ! git -C "$BRAIN_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    return 1
-  fi
-  local commit_count
-  commit_count=$(git -C "$BRAIN_DIR" log --oneline --since="$LAST_DATE 00:00:00 UTC" \
-    --invert-grep --grep='^chore: consolidate memory' 2>/dev/null | wc -l | tr -d '[:space:]')
-  if ! [ "$commit_count" -ge 0 ] 2>/dev/null; then
-    return 1
-  fi
-  [ "$commit_count" -eq 0 ]
+  [ -d "$REPORTS_DIR" ] || return 1
+
+  local reports
+  reports=$(find "$REPORTS_DIR" -maxdepth 1 -name '*-consolidation.json' 2>/dev/null | sort | tail -n "$IDLE_STREAK_MIN")
+  [ -z "$reports" ] && return 1
+
+  local found=0
+  local report
+  while IFS= read -r report; do
+    [ -n "$report" ] || continue
+    found=$((found + 1))
+    [ -r "$report" ] || return 1
+    # A promoted file shows up as a quoted filesChanged path under one of
+    # the four memory tiers. Matching too loosely (any mention of the
+    # substring, e.g. in a decisions/observations sentence) only risks a
+    # false "not idle" -> an unnecessary run, never a wrongful skip, so the
+    # anchored-but-simple grep below is safe in the direction that matters.
+    if grep -qE '"memory/(core|semantic|episodic|procedural)/' "$report"; then
+      return 1   # this report promoted something -> streak broken, not idle
+    fi
+  done <<< "$reports"
+
+  [ "$found" -ge "$IDLE_STREAK_MIN" ]
 }
 
 if [ ! -f "$GUARD_FILE" ]; then
@@ -110,10 +136,10 @@ fi
 # 24h+ elapsed from here on — check idle state before any time-based escalation.
 if is_idle_since_last_run; then
   if [ "$ELAPSED_HOURS" -ge "$IDLE_FALLBACK_HOURS" ]; then
-    echo "consolidation_needed: true (idle but overdue — last ran ${ELAPSED_HOURS}h ago with 0 non-consolidation commits, idle fallback threshold ${IDLE_FALLBACK_HOURS}h — forcing check-in run)"
+    echo "consolidation_needed: true (idle but overdue — last ran ${ELAPSED_HOURS}h ago, last ${IDLE_STREAK_MIN} report(s) promoted nothing, idle fallback threshold ${IDLE_FALLBACK_HOURS}h — forcing check-in run)"
     exit 0
   else
-    echo "consolidation_needed: false (idle-skip — last ran ${ELAPSED_HOURS}h ago with 0 non-consolidation commits, idle fallback threshold ${IDLE_FALLBACK_HOURS}h)"
+    echo "consolidation_needed: false (idle-skip — last ran ${ELAPSED_HOURS}h ago, last ${IDLE_STREAK_MIN} report(s) promoted nothing, idle fallback threshold ${IDLE_FALLBACK_HOURS}h)"
     exit 1
   fi
 fi
