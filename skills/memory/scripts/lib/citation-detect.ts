@@ -181,7 +181,69 @@ export function isReliableHook(hook: string): boolean {
   if (/^[>|(]/.test(s)) return false;
   if (s.includes("**")) return false;
   if (/^[a-z]/.test(s)) return false;
+  // poller-brain#343 round 2 (DevGuru catch): a MEM-N token surviving
+  // stripMemCitations means it wasn't in a safely-strippable leading/
+  // trailing tag position (e.g. embedded mid-sentence: "Halt logic
+  // (mirrors MEM-47)", "Why MEM-213 was retracted") — such a token would
+  // become a citation to that key once this hook is written into
+  // LEARNINGS.md as a pointer, corrupting the distinct-key invariant
+  // regardless of whether the guard happens to catch it. Reject outright
+  // rather than attempt a cosmetic repair that can only produce a worse
+  // fragment.
+  if (/\bMEM-\d+\b/.test(s)) return false;
   return true;
+}
+
+/**
+ * A single MEM-N citation token in a BALANCED wrapped form only:
+ * `` `[MEM-257]` ``, `[MEM-172]`, `` `MEM-47` ``, or a compact cluster like
+ * `[MEM-93/94/122]`. Deliberately excludes the bare, unwrapped form
+ * (`MEM-213` with no backtick/bracket at all) — round 3 (DevGuru catch, live
+ * measurement on his own brain's 96 real headings): independently-optional
+ * wrapper characters let the leading/trailing anchors match an UNBALANCED
+ * fragment, truncating real prose instead of removing a real tag:
+ * `Pointer hygiene [see MEM-213]` → trailing match grabs bare `MEM-213]`
+ * (the lone `]`, no matching `[`) → `Pointer hygiene [see`; `MEM-213:
+ * descriptive title long enough` → leading match grabs bare `MEM-213` →
+ * `: descriptive title long enough`; `Everything you need about MEM-213` →
+ * trailing bare match → `Everything you need about`. All three pass
+ * `isReliableHook` and would have shipped a truncated hook. Requiring a
+ * matched wrapper pair (or none at all, i.e. not attempting the strip)
+ * removes the bare form from the tag grammar entirely — a naked `MEM-213`
+ * anywhere is never "tag position", so it always falls through to
+ * `isReliableHook`'s embedded-MEM- rejection instead.
+ */
+const TAG_TOKEN_SRC =
+  "(?:`\\[MEM-\\d+(?:[/,]\\d+)*\\]`|\\[MEM-\\d+(?:[/,]\\d+)*\\]|`MEM-\\d+(?:[/,]\\d+)*`)";
+/** A run of one or more tag tokens (multi-key clusters like `[MEM-213][MEM-214]`), anchored to the START of the string. */
+const LEADING_TAGS_RE = new RegExp(`^(?:${TAG_TOKEN_SRC}\\s*)+`);
+/** Same, anchored to the END of the string. */
+const TRAILING_TAGS_RE = new RegExp(`(?:\\s*${TAG_TOKEN_SRC})+$`);
+
+/**
+ * Strip a LEADING and/or TRAILING run of MEM-N citation tag(s) — own or
+ * foreign — from a heading before it's reused as a hook (poller-brain#343:
+ * destination headings routinely self-tag their own promoted key, e.g.
+ * `## Title [MEM-213][MEM-214]` or `` ## Title `[MEM-257]` `` — and a token
+ * left in place becomes a citation to that key once embedded in the new
+ * LEARNINGS.md pointer, silently changing the document's distinct-key set
+ * and tripping `verifyLearningsTrimStats`'s count-verify guard).
+ *
+ * Deliberately narrow (DevGuru catch, round 2): a tag at the very start or
+ * end of the heading is unambiguous decoration — the WHOLE wrapped unit is
+ * matched and removed together, so no empty backtick/bracket artifact is
+ * left behind and no unrelated punctuation elsewhere in the string is
+ * touched. A MEM-N token embedded mid-heading (running prose or a
+ * parenthetical, e.g. `Halt logic (mirrors MEM-47)`) is NOT touched here —
+ * cosmetically repairing that class only produces a worse fragment (`Halt
+ * logic (mirrors)`). `isReliableHook` rejects any hook that still contains a
+ * MEM-N reference after this pass (including a bare/unbalanced token this
+ * function never attempts to strip — see `TAG_TOKEN_SRC`), routing the key
+ * to `unreliableHooks` for manual review — the only two outcomes are
+ * "cleanly stripped" or "excluded", never "mangled and shipped".
+ */
+function stripMemCitations(heading: string): string {
+  return heading.replace(LEADING_TAGS_RE, "").replace(TRAILING_TAGS_RE, "").trim();
 }
 
 /**
@@ -196,9 +258,15 @@ export function isReliableHook(hook: string): boolean {
  * either present (trustworthy by construction: it's the entry's own title)
  * or absent, in which case the caller excludes the key via
  * `isReliableHook`/`unreliableHooks` rather than guessing from prose.
+ *
+ * Round 5 (poller-brain#343): the heading text is stripped of
+ * leading/trailing `MEM-N` tag tokens first — see `stripMemCitations`. A
+ * token that survives the strip (embedded mid-heading) makes
+ * `isReliableHook` reject the result, same excluded-not-guessed path.
  */
 export function extractHook(citation: Citation): string | null {
-  return citation.heading;
+  if (citation.heading === null) return null;
+  return stripMemCitations(citation.heading);
 }
 
 export function sortKeys(keys: Iterable<string>): string[] {

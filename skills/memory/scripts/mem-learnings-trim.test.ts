@@ -407,6 +407,246 @@ try {
 }
 assert(staleThrew, "applyLearningsTrimCandidates throws instead of overwriting an entry that doesn't actually cite the candidate's key");
 
+// --- poller-brain#343 regression: a destination heading that self-tags a
+// DIFFERENT key than the one being cited (e.g. `## Title [MEM-213][MEM-214]`
+// governing a dedicated single-key line for MEM-213 only) must NOT drag the
+// foreign key (MEM-214) into the new LEARNINGS.md pointer's hook — that
+// silently changes the document's distinct-key set and (pre-fix) tripped
+// verifyLearningsTrimStats's count-verify guard, independent of which
+// candidate was selected.
+const MULTIKEY_HEADING_LEARNINGS = `# Learnings
+
+### Reaction scoping lesson
+**Rule:** a Slack reaction only shows for the user who added it, not shared team-wide.
+**Why:** assumed reactions were a shared signal; they aren't.
+**How to apply:** never rely on a reaction count as a cross-user signal. (Source: X, [MEM-213])
+`;
+
+const MULTIKEY_HEADING_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/session-tooling-limitations.md",
+    text: [
+      "## Slack reactions are per-adding-user, not shared [MEM-213][MEM-214]",
+      "",
+      "- reactions are scoped to the adding user's own view. [MEM-213]",
+    ].join("\n"),
+  },
+];
+
+const multikeyFound = findLearningsTrimCandidates(MULTIKEY_HEADING_LEARNINGS, MULTIKEY_HEADING_DESTINATIONS);
+assert(
+  multikeyFound.candidates.length === 1 && multikeyFound.candidates[0].key === "MEM-213",
+  "multi-key heading: MEM-213 is still proposed despite its governing heading also tagging MEM-214"
+);
+assert(
+  !multikeyFound.candidates[0].hook.includes("MEM-214") && !multikeyFound.candidates[0].hook.includes("MEM-213"),
+  "multi-key heading: extracted hook has BOTH the foreign key (MEM-214) and the redundant self-citation (MEM-213) stripped"
+);
+assert(
+  multikeyFound.candidates[0].hook === "Slack reactions are per-adding-user, not shared",
+  "multi-key heading: stripped hook keeps the descriptive prose intact"
+);
+
+const multikeyR1 = applyLearningsTrimCandidates(MULTIKEY_HEADING_LEARNINGS, multikeyFound.candidates);
+verifyLearningsTrimStats(multikeyR1.stats); // must NOT throw — this is the exact pb#343 abort reproduction
+assert(
+  multikeyR1.stats.distinctKeysBefore === multikeyR1.stats.distinctKeysAfter,
+  "multi-key heading: MEM-214 (never cited anywhere in LEARNINGS.md) is NOT introduced by the trim — distinct-key set is unchanged"
+);
+assert(
+  !multikeyR1.learnings.includes("MEM-214"),
+  "multi-key heading: the rewritten pointer line does not mention the foreign key at all"
+);
+
+// --- poller-brain#343 round 2 (DevGuru catch): a governing heading wraps
+// its own citation tag in BACKTICKS, not just brackets — the original
+// bracket-only strip left a dangling empty code span (`` `` ``) instead of
+// cleanly removing the whole wrapped unit.
+const BACKTICK_TAG_LEARNINGS = `# Learnings
+
+### Backtick-wrapped tag lesson
+**Rule:** a governing heading may wrap its own citation tag in backticks, not just brackets.
+**Why:** real brains do this; a bracket-only strip leaves a dangling empty code span behind.
+**How to apply:** treat backtick-wrapped tags the same as bracket-only ones. (Source: X, [MEM-257])
+`;
+
+const BACKTICK_TAG_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/tooling.md",
+    text: [
+      "## Session tooling gotcha `[MEM-257]`",
+      "",
+      "- dedicated single-key line for MEM-257. [MEM-257]",
+    ].join("\n"),
+  },
+];
+
+const backtickFound = findLearningsTrimCandidates(BACKTICK_TAG_LEARNINGS, BACKTICK_TAG_DESTINATIONS);
+assert(
+  backtickFound.candidates.length === 1 && backtickFound.candidates[0].key === "MEM-257",
+  "backtick-wrapped tag: MEM-257 is proposed"
+);
+assert(
+  backtickFound.candidates[0].hook === "Session tooling gotcha",
+  "backtick-wrapped tag: the whole backtick+bracket wrapper is stripped as one unit, no dangling empty code span"
+);
+
+// --- poller-brain#343 round 2 (DevGuru catch): a MEM-N reference embedded
+// MID-heading (not in a safe leading/trailing tag position) can't be
+// cosmetically repaired without producing a worse fragment — must be
+// excluded via unreliableHooks, not silently stripped-and-shipped, and the
+// reported hook must show the REAL reason (the heading text itself, with
+// the foreign key visible), not the generic "(no governing heading)" label
+// used for the genuinely-no-heading case (that label would be false here —
+// a heading DOES exist, it's just unusable as a hook).
+const EMBEDDED_KEY_LEARNINGS = `# Learnings
+
+### Halt logic follow-up
+**Rule:** a halt condition needs an explicit re-arm step.
+**Why:** without it, the halt silently never clears.
+**How to apply:** always pair a halt with its re-arm. (Source: Y, [MEM-500])
+`;
+
+const EMBEDDED_KEY_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "procedural/halt-logic.md",
+    text: [
+      "### Halt logic (mirrors MEM-47)",
+      "",
+      "- the re-arm step is a dedicated single-key line. [MEM-500]",
+    ].join("\n"),
+  },
+];
+
+const embeddedFound = findLearningsTrimCandidates(EMBEDDED_KEY_LEARNINGS, EMBEDDED_KEY_DESTINATIONS);
+assert(
+  embeddedFound.candidates.length === 0,
+  "embedded mid-heading key: MEM-500's governing heading cites a DIFFERENT key (MEM-47) mid-sentence, not a safe tag position — MEM-500 is NOT proposed"
+);
+assert(
+  embeddedFound.unreliableHooks.length === 1 && embeddedFound.unreliableHooks[0].key === "MEM-500",
+  "embedded mid-heading key: MEM-500 is routed to unreliableHooks instead of silently dropped"
+);
+assert(
+  embeddedFound.unreliableHooks[0].hook.includes("MEM-47"),
+  'embedded mid-heading key: the reported hook shows the real heading text (foreign MEM-47 visible), not a false "(no governing heading)" label'
+);
+
+// --- poller-brain#343 round 2 (DevGuru catch): a heading-wide punctuation
+// cleanup pass must never touch text that has nothing to do with the
+// stripped tag — regression-locks that only the tag boundary is touched.
+const UNRELATED_PUNCTUATION_LEARNINGS = `# Learnings
+
+### Config default lesson
+**Rule:** a feature flag default must be explicit, not inferred.
+**Why:** an inferred default silently drifted between environments.
+**How to apply:** always set both branches explicitly. (Source: Z, [MEM-600])
+`;
+
+const UNRELATED_PUNCTUATION_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/flags.md",
+    text: [
+      "## Feature flag semantics isProduction ? undefined : fallback [MEM-600]",
+      "",
+      "- dedicated single-key line. [MEM-600]",
+    ].join("\n"),
+  },
+];
+
+const punctFound = findLearningsTrimCandidates(UNRELATED_PUNCTUATION_LEARNINGS, UNRELATED_PUNCTUATION_DESTINATIONS);
+assert(
+  punctFound.candidates.length === 1 && punctFound.candidates[0].key === "MEM-600",
+  "unrelated punctuation: MEM-600 is proposed"
+);
+assert(
+  punctFound.candidates[0].hook === "Feature flag semantics isProduction ? undefined : fallback",
+  "unrelated punctuation: the space before the unrelated ':' mid-heading survives untouched — proves cleanup is scoped to the tag boundary, not heading-wide"
+);
+
+// --- poller-brain#343 round 3 (DevGuru catch, measured on his own brain's
+// 96 real headings): a BARE, unwrapped MEM-N token must never be treated as
+// safe tag position — independently-optional wrapper chars let the old
+// leading/trailing match grab an UNBALANCED fragment (a lone `]` with no
+// matching `[`, or a naked digits-only token), truncating real prose instead
+// of removing a real tag. Each case below governs a DIFFERENT key
+// (MEM-901/902/903) than the one it's supposedly citing, so a truncated
+// hook would be trivially detectable by a human reviewer as wrong — but the
+// whole point of `unreliableHooks` is that it never reaches one.
+const BARE_TOKEN_LEARNINGS = `# Learnings
+
+### Bracket mismatch follow-up
+**Rule:** a citation cluster inside prose can still look like a clean trailing bracket.
+**Why:** the lone closing bracket has no matching opener nearby.
+**How to apply:** never trust a trailing "]" alone as tag position. (Source: A, [MEM-901])
+
+### Colon-prefixed follow-up
+**Rule:** a bare leading key immediately followed by a colon looks like a title prefix.
+**Why:** it's actually just prose that happens to start with a citation.
+**How to apply:** never strip a bare leading token, colon or not. (Source: B, [MEM-902])
+
+### Trailing bare follow-up
+**Rule:** a bare key at the very end of a sentence looks like trailing tag position.
+**Why:** it's the object of the sentence, not decoration.
+**How to apply:** never strip a bare trailing token either. (Source: C, [MEM-903])
+
+### Accidental-uppercase follow-up
+**Rule:** the old lowercase-start check caught bare leading tokens only by luck.
+**Why:** a bare key followed by an uppercase word slips right through that check.
+**How to apply:** the wrapped-only tag grammar removes the luck dependency. (Source: D, [MEM-904])
+`;
+
+const BARE_TOKEN_DESTINATIONS: DestinationFile[] = [
+  {
+    file: "semantic/bare-token-shapes.md",
+    text: [
+      "## Pointer hygiene [see MEM-901]",
+      "",
+      "- dedicated single-key line for MEM-901. [MEM-901]",
+      "",
+      "## MEM-902: descriptive title long enough",
+      "",
+      "- dedicated single-key line for MEM-902. [MEM-902]",
+      "",
+      "## Everything you need about MEM-903",
+      "",
+      "- dedicated single-key line for MEM-903. [MEM-903]",
+      "",
+      "## MEM-904 Adjudication needs a review today",
+      "",
+      "- dedicated single-key line for MEM-904. [MEM-904]",
+    ].join("\n"),
+  },
+];
+
+const bareFound = findLearningsTrimCandidates(BARE_TOKEN_LEARNINGS, BARE_TOKEN_DESTINATIONS);
+assert(
+  bareFound.candidates.length === 0,
+  "bare token: none of MEM-901/902/903/904 are proposed — every governing heading has a bare, unwrapped token, never a safe tag position"
+);
+assert(
+  bareFound.unreliableHooks.length === 4 &&
+    bareFound.unreliableHooks.map((h) => h.key).sort().join(",") === "MEM-901,MEM-902,MEM-903,MEM-904",
+  "bare token: all 4 are routed to unreliableHooks instead of a truncated hook"
+);
+const bareHooks = new Map(bareFound.unreliableHooks.map((h) => [h.key, h.hook]));
+assert(
+  bareHooks.get("MEM-901") === "Pointer hygiene [see MEM-901]",
+  'bare token: MEM-901 heading is untouched, NOT truncated to "Pointer hygiene [see" (unbalanced trailing "]" with no matching "[")'
+);
+assert(
+  bareHooks.get("MEM-902") === "MEM-902: descriptive title long enough",
+  'bare token: MEM-902 heading is untouched, NOT truncated to ": descriptive title long enough"'
+);
+assert(
+  bareHooks.get("MEM-903") === "Everything you need about MEM-903",
+  'bare token: MEM-903 heading is untouched, NOT truncated to "Everything you need about"'
+);
+assert(
+  bareHooks.get("MEM-904") === "MEM-904 Adjudication needs a review today",
+  "bare token: MEM-904 heading is untouched even though the truncated remainder would start uppercase and slip past the old lowercase-start check"
+);
+
 // --- distinctKeysBefore/After: the real invariant verify now checks ------
 assert(
   bulletR1.stats.distinctKeysBefore === bulletR1.stats.distinctKeysAfter,
