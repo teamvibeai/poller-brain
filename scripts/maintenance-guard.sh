@@ -37,7 +37,6 @@
 # the opposite problem (running too often instead of too rarely).
 
 BRAIN_DIR="${1:-.}"
-GUARD_FILE="$BRAIN_DIR/memory/.last_consolidation"
 REPORTS_DIR="$BRAIN_DIR/reports"
 INTERVAL_HOURS=24
 FALLBACK_HOURS=48
@@ -124,15 +123,43 @@ is_idle_since_last_run() {
   [ "$found" -ge "$IDLE_STREAK_MIN" ]
 }
 
-if [ ! -f "$GUARD_FILE" ]; then
-  echo "consolidation_needed: true (no guard file found)"
+# Source of truth for "when did consolidation last actually run": the
+# newest reports/*-memory-consolidation.md file, not the separately-maintained
+# memory/.last_consolidation marker (poller-brain#346). The marker depends on
+# a deterministic-but-external write (poller hook, tv#128/pb#109/#112) firing
+# *after* a report is POSTed — three real incidents (07-29, 08-01, 08-12..08-19)
+# all trace back to the report simply never being produced (pb#257/PR#262
+# targets that root cause), which left the marker stale/desynced regardless of
+# how faithfully the poller hook itself worked. It's also gitignored (local to
+# the container), so a re-clone always starts from "no marker" even when the
+# committed reports/ history goes back further. Reading the report filename
+# directly removes that dependency: if no new report exists, there was no new
+# consolidation, full stop. Mirrors the same find-and-parse pattern already
+# used by is_idle_since_last_run() above.
+#
+# The filename date is when the *report* was written, which is normally the
+# same day the run happened — except after a backfill/recovery run that
+# processes an older gap (e.g. today's run producing a report for a period
+# that started days ago): in that case this reads slightly stale until the
+# run completes and writes today's report, at most delaying the *next*
+# trigger by one skipped-then-caught-up cycle, never causing a missed run.
+#
+# `[0-9]*` (not the bare `*` used above in is_idle_since_last_run) excludes
+# non-date-prefixed report names (e.g. a `recovery-memory-consolidation.md`
+# style file) from winning `sort | tail -n 1` — letters sort after digits, so
+# an unprefixed name would otherwise mask the real newest dated report and
+# permanently fail-open every single heartbeat instead of just once.
+LATEST_REPORT=$(find "$REPORTS_DIR" -maxdepth 1 -name '[0-9]*-memory-consolidation.md' 2>/dev/null | sort | tail -n 1)
+
+if [ -z "$LATEST_REPORT" ]; then
+  echo "consolidation_needed: true (no consolidation report found)"
   exit 0
 fi
 
-LAST_DATE=$(cat "$GUARD_FILE" | tr -d '[:space:]')
+LAST_DATE=$(basename "$LATEST_REPORT" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}')
 
 if [ -z "$LAST_DATE" ]; then
-  echo "consolidation_needed: true (guard file empty)"
+  echo "consolidation_needed: true (cannot parse date from report filename: $(basename "$LATEST_REPORT"))"
   exit 0
 fi
 
