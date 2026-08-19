@@ -122,7 +122,7 @@ const server = http.createServer((req, res) => {
       const raw = (params.get('secret') ?? '').replace(/\r\n/g, '\n');
       const secret = raw.includes('\n') ? raw.replace(/[ \t\r\n]*$/, '\n') : raw.trim();
 
-      if (!secret) {
+      if (!secret || !secret.trim()) {
         res.writeHead(400, { 'Content-Type': 'text/plain' });
         res.end('Missing secret');
         return;

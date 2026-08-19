@@ -8,7 +8,7 @@
 // not \n. A test that POSTs %0A (what curl/a manual test sends) never exercises that
 // path — these tests POST %0D%0A to match what a real browser actually sends.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -68,6 +68,44 @@ function submit(formBody) {
   });
 }
 
+// Like submit(), but for inputs expected to be REJECTED (400) — the server doesn't
+// shut down on that path (only on a successful save), so this reads the HTTP
+// response directly instead of waiting for process exit, then kills the child.
+function submitExpectRejected(formBody) {
+  return new Promise((resolve, reject) => {
+    const port = nextPort++;
+    const outFile = join(WORK, `out-${port}.txt`);
+    const child = spawn(process.execPath, [
+      SERVER, '--service', 'test', '--port', String(port), '--out-file', outFile,
+    ]);
+
+    child.stdout.on('data', (d) => {
+      if (d.toString().includes('SERVER_READY')) {
+        const req = http.request({
+          hostname: 'localhost', port, path: '/save', method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': Buffer.byteLength(formBody),
+          },
+        }, (res) => {
+          res.resume();
+          res.on('end', () => {
+            setTimeout(() => {
+              child.kill();
+              resolve({ status: res.statusCode, fileExists: existsSync(outFile) });
+            }, 200);
+          });
+        });
+        req.on('error', reject);
+        req.end(formBody);
+      }
+    });
+    child.on('error', reject);
+
+    setTimeout(() => { child.kill(); reject(new Error('timed out waiting for server')); }, 5000);
+  });
+}
+
 console.log('server.mjs — CRLF / trailing-newline handling (pb#326)');
 
 // A browser's form submission CRLF-normalizes the value: a pasted "line1\nline2\n"
@@ -100,6 +138,18 @@ const curlBody = 'secret=' + encodeURIComponent(multiline);
 const got4 = await submit(curlBody);
 eq('curl-style (LF-only) multi-line value also gets exactly one trailing LF',
   got4.toString('utf8'), multiline + '\n');
+
+// A whitespace-only submission must be rejected (400, no file written) — the
+// trailing-LF collapse in the multi-line branch above turns "" into "\n", which
+// is truthy, so the emptiness guard has to check the *trimmed* value, not just
+// truthiness (DevGuru round-2 finding: pre-fix this silently wrote a "\n" file
+// and returned 200).
+for (const whitespaceOnly of ['\n\n', ' \n ', '   ']) {
+  const body = 'secret=' + encodeURIComponent(whitespaceOnly).replaceAll('%0A', '%0D%0A');
+  const res = await submitExpectRejected(body);
+  eq(`whitespace-only ${JSON.stringify(whitespaceOnly)} is rejected (400)`, res.status, 400);
+  ok(`whitespace-only ${JSON.stringify(whitespaceOnly)} writes no file`, !res.fileExists);
+}
 
 rmSync(WORK, { recursive: true, force: true });
 
