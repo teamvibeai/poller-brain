@@ -2,8 +2,8 @@
 name: memory-consolidate
 description: |
   Memory consolidation skill. Run during maintenance heartbeat to process daily
-  logs into long-term memory. Should be invoked when memory/.last_consolidation
-  is 1+ days old or missing.
+  logs into long-term memory. Should be invoked when the newest
+  reports/*-memory-consolidation.md is 1+ days old or missing.
 ---
 
 # Memory Consolidation
@@ -12,7 +12,10 @@ Process recent daily logs and promote important information to long-term memory.
 
 ## When to Run
 
-Check `memory/.last_consolidation` for the date of last consolidation.
+Check the newest `reports/*-memory-consolidation.md` filename for the date of
+last consolidation (`poller-brain#346` — this is the authoritative source, not
+the gitignored `memory/.last_consolidation` marker, which only tracks when a
+report was POSTed and can lag behind or be absent after a re-clone).
 If it's 1+ days old or missing, run consolidation.
 
 ## Algorithm
@@ -50,8 +53,10 @@ If either entry is missing, add it now. Do NOT advance to Step 1 with these entr
 
 ### 1. Scan Daily Logs
 
-Read all files in `memory/daily/` dated since the last consolidation date.
-If no `.last_consolidation` file exists, process the last 14 days of logs.
+Read all files in `memory/daily/` dated since the last consolidation date
+(the date parsed from the newest `reports/*-memory-consolidation.md`
+filename, per "When to Run" above — not `memory/.last_consolidation`).
+If no matching report exists, process the last 14 days of logs.
 
 ### 1b. Process `[MEM-NNN]` Tracked Keys (priority)
 
