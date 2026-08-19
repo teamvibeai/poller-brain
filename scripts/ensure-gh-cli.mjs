@@ -24,6 +24,15 @@
 // throttle stamp so N brains sharing one container don't all pay full
 // install cost (or fight over the dpkg lock) every session; and a
 // declared hook timeout that actually covers the worst-case install path.
+//
+// DevGuru round 2 caught the first timeout budget was still wrong (175s
+// against a declared 150s, since the apt and binary paths run
+// sequentially, not exclusively) and that a killed run never wrote the
+// throttle stamp — the one expensive failure path would repeat every
+// session forever, silently. Fixed: tighter per-step timeouts (~135s
+// total), the failure stamp now written before attempting (not after),
+// and the binary fallback verifies by actually running `gh --version`
+// rather than just checking the file was copied.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -42,9 +51,14 @@ function commandExists(cmd) {
   return result.status === 0;
 }
 
+let lastErrorMessage = null;
+
 function logDetail(msg) {
   // Verbose per-attempt diagnostics — not meant to surface every session,
-  // only useful when actively debugging a failing install.
+  // only useful when actively debugging a failing install. Also captured
+  // as lastErrorMessage so a failed outcome line (stdout) can carry the
+  // reason instead of pointing at stderr nothing surfaces.
+  lastErrorMessage = msg;
   console.error(`[ensure-gh-cli] ${msg}`);
 }
 
@@ -71,20 +85,26 @@ function writeStamp(state) {
 }
 
 function tryAptInstall() {
-  if (!commandExists("apt-get")) return false;
-  if (process.getuid?.() !== 0) return false;
+  if (!commandExists("apt-get")) {
+    logDetail("apt-get not available, skipping apt path");
+    return false;
+  }
+  if (process.getuid?.() !== 0) {
+    logDetail("not running as root, skipping apt path");
+    return false;
+  }
   try {
     // Lock::Timeout: wait for a concurrent apt run (sibling brain in the
     // same container) instead of racing/failing hard on lock contention.
     execFileSync(
       "apt-get",
       ["update", "-qq", "-o", "DPkg::Lock::Timeout=30"],
-      { stdio: "ignore", timeout: 40_000 },
+      { stdio: "ignore", timeout: 30_000 },
     );
     execFileSync(
       "apt-get",
       ["install", "-y", "--no-install-recommends", "-qq", "-o", "DPkg::Lock::Timeout=30", "gh"],
-      { stdio: "ignore", timeout: 60_000 },
+      { stdio: "ignore", timeout: 45_000 },
     );
     return commandExists("gh");
   } catch (err) {
@@ -132,7 +152,7 @@ function tryBinaryInstall() {
 
     const checksumsPath = join(work, "checksums.txt");
     execFileSync("curl", ["-fsSL", "--max-time", "15", "-o", checksumsPath, checksumsUrl], {
-      timeout: 20_000,
+      timeout: 15_000,
     });
     const checksumsText = readFileSync(checksumsPath, "utf8");
     const line = checksumsText.split("\n").find((l) => l.trim().endsWith(tarballName));
@@ -143,8 +163,8 @@ function tryBinaryInstall() {
     }
 
     const tarballPath = join(work, "gh.tar.gz");
-    execFileSync("curl", ["-fsSL", "--max-time", "30", "-o", tarballPath, tarballUrl], {
-      timeout: 35_000,
+    execFileSync("curl", ["-fsSL", "--max-time", "25", "-o", tarballPath, tarballUrl], {
+      timeout: 25_000,
     });
 
     const actualSha256 = sha256File(tarballPath);
@@ -153,7 +173,7 @@ function tryBinaryInstall() {
       return false;
     }
 
-    execFileSync("tar", ["-xzf", tarballPath, "-C", work], { timeout: 15_000 });
+    execFileSync("tar", ["-xzf", tarballPath, "-C", work], { timeout: 10_000 });
     const extractedBin = join(work, `gh_${GH_VERSION}_linux_${arch}`, "bin", "gh");
     if (!existsSync(extractedBin)) {
       logDetail("extracted archive missing expected gh binary");
@@ -164,10 +184,11 @@ function tryBinaryInstall() {
     chmodSync(dest, 0o755);
     // Not commandExists("gh") here: installDir (persistent-storage bin, or
     // /usr/local/bin) may not be on THIS process's PATH yet even though the
-    // harness guarantees it for the session proper — cp+chmod succeeding
-    // (execFileSync throws otherwise) is the real signal. Verified live:
-    // without this, a successful install was misreported as a failure.
-    return existsSync(dest);
+    // harness guarantees it for the session proper. Run the binary itself
+    // instead — proves it's the right arch, executable, and not truncated,
+    // which a plain existsSync() wouldn't catch (DevGuru round 2).
+    execFileSync(dest, ["--version"], { timeout: 5_000 });
+    return true;
   } catch (err) {
     logDetail(`binary fallback install failed: ${err.message}`);
     return false;
@@ -185,13 +206,22 @@ function main() {
     return; // still in backoff window — silent, no repeat cost/noise
   }
 
+  // Write the failure stamp BEFORE attempting, not after: the internal
+  // timeout budget (~135s) sits close to the hook's declared 150s ceiling,
+  // and if the harness ever kills this process mid-install, a stamp
+  // written only on completion would never land — so the same expensive
+  // failure path would repeat every session, silently, forever (DevGuru
+  // round 2). Overwritten with lastSuccessAt below on an actual success.
+  writeStamp({ lastFailureAt: now });
+
   const installed = tryAptInstall() || tryBinaryInstall();
   if (installed) {
     logOutcome("gh CLI installed successfully");
     writeStamp({ lastSuccessAt: now });
   } else {
-    logOutcome("gh CLI install failed — curl+GITHUB_TOKEN fallback still works, will retry after backoff window");
-    writeStamp({ lastFailureAt: now });
+    logOutcome(
+      `gh CLI install failed (${lastErrorMessage ?? "unknown reason"}) — curl+GITHUB_TOKEN fallback still works, will retry after backoff window`,
+    );
   }
 }
 
