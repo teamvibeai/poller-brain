@@ -60,9 +60,18 @@ function textToSections(text, maxLen = 2900) {
   return sections
 }
 
+// Per Slack's docs, most WRITE methods accept a JSON body; READ/list methods are the
+// risk class — some (chat.getPermalink, pins.list) reject JSON outright and report
+// arguments as missing no matter what's sent, others (bookmarks.list) don't. There's no
+// clean rule to predict which; each entry below was confirmed by an actual failing call
+// (poller-brain#345). Before adding a new read/list method to either branch, probe it
+// live rather than assuming by analogy.
+function needsFormEncoding(method) {
+  return method.startsWith('conversations.') || method.startsWith('files.') || method === 'chat.getPermalink' || method === 'pins.list'
+}
+
 async function slackApi(method, body) {
-  // Some Slack methods (conversations.replies, conversations.history) require form-urlencoded
-  const useForm = method.startsWith('conversations.') || method.startsWith('files.')
+  const useForm = needsFormEncoding(method)
   const headers = { Authorization: `Bearer ${BOT_TOKEN}` }
   let reqBody
   if (useForm) {
@@ -547,7 +556,12 @@ async function resolveDisplayName(userId) {
       userId
     _userInfoCache.set(userId, name)
     return name
-  } catch {
+  } catch (err) {
+    // users.info is currently degrading silently in production (returns raw userId).
+    // Root cause not yet diagnosed — could be the same JSON-body issue as pb#345, or a
+    // missing users:read scope. Logged so the next occurrence is diagnosable instead of
+    // silently swallowed; do not guess-fix the encoding here (poller-brain#345 review).
+    console.error(`resolveDisplayName(${userId}) failed: ${err.message}`)
     _userInfoCache.set(userId, userId)
     return userId
   }
