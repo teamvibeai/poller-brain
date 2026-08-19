@@ -120,7 +120,7 @@ In all cases the platform value is **write-only after save** — no list endpoin
 - **One-shot:** The server automatically shuts down 2s after receiving a value. The output file persists until the agent deletes it — clean up as soon as the value is consumed.
 - **Concurrent runs:** Default `--out-file` is randomly named, so multiple receiver instances on the same host don't collide on the same path.
 - **Security:** The tunnel URL is random and short-lived. The server only accepts one submission before shutting down. The plaintext is written to a single 0600-mode file and never to the server's stdout.
-- **No input masking:** The form field is a plain `<textarea>`, not a masked `<input type="password">` — a deliberate tradeoff, not an oversight. A masked single-line input silently corrupts multi-line secrets (browsers CRLF-normalize and a naive `.trim()` eats the trailing newline many key formats require); the shoulder-surf protection a masked field gives up is minor next to that data-loss risk. See [pb#326](https://github.com/teamvibeai/poller-brain/issues/326).
+- **No input masking:** The form field is a plain `<textarea>`, not a masked `<input type="password">` — a deliberate tradeoff, not an oversight. A single-line `<input>` runs the browser's value-sanitization algorithm on every keystroke/paste, which strips newlines outright — that's what silently corrupted multi-line secrets, not a submission-time encoding quirk; the shoulder-surf protection a masked field gives up is minor next to that data-loss risk. See [pb#326](https://github.com/teamvibeai/poller-brain/issues/326).
 
 ## Typical Agent Workflow
 
