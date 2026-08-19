@@ -31,7 +31,7 @@ node $CLAUDE_CONFIG_DIR/skills/secret-receiver/server.mjs \
 | `--port` | `3456` | Local HTTP server port |
 | `--service` | (required) | Display label shown on the form page (no longer a keychain key) |
 | `--title` | `"Secret"` | Form page title |
-| `--description` | `""` | Help text shown above the input field |
+| `--description` | `""` | Help text shown above the textarea |
 | `--out-file` | random path under `os.tmpdir()` | Where to write the captured value (0600 mode). Override when you want a specific path, e.g. tmpfs |
 
 ### Starting the tunnel
@@ -101,6 +101,8 @@ rm /var/folders/.../secret-receiver-ab12cd34.txt
 
 Avoid `value=$(cat <file>)` — that pulls the plaintext into the shell environment and any subsequent `set -x` / `env` / process listing leaks it.
 
+**Never diagnose the captured value by printing any part of its content** (`head -1`, "show me the first line", `wc -c` output piped through something that echoes the body, etc.). That is the one guarantee this skill exists to provide — the plaintext never reaches the agent's stdout or LLM context — and a debugging step that prints even a fragment defeats it. If the value looks wrong (auth fails, a downstream tool rejects it), assert over *derived* properties instead: byte length (`wc -c < <file>`), line count, a regex match (`grep -qE '^-----BEGIN' <file>`), or best of all, whether it actually works (sign something, call the API). If it's genuinely corrupt, ask the user to resubmit — don't inspect the broken value to find out why.
+
 ## Where the captured value can land
 
 This skill only captures the value — it doesn't pick a destination. Decide that *before* you spin the form up:
@@ -118,6 +120,7 @@ In all cases the platform value is **write-only after save** — no list endpoin
 - **One-shot:** The server automatically shuts down 2s after receiving a value. The output file persists until the agent deletes it — clean up as soon as the value is consumed.
 - **Concurrent runs:** Default `--out-file` is randomly named, so multiple receiver instances on the same host don't collide on the same path.
 - **Security:** The tunnel URL is random and short-lived. The server only accepts one submission before shutting down. The plaintext is written to a single 0600-mode file and never to the server's stdout.
+- **No input masking:** The form field is a plain `<textarea>`, not a masked `<input type="password">` — a deliberate tradeoff, not an oversight. A masked single-line input silently corrupts multi-line secrets (browsers CRLF-normalize and a naive `.trim()` eats the trailing newline many key formats require); the shoulder-surf protection a masked field gives up is minor next to that data-loss risk. See [pb#326](https://github.com/teamvibeai/poller-brain/issues/326).
 
 ## Typical Agent Workflow
 
