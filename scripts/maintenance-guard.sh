@@ -138,11 +138,12 @@ is_idle_since_last_run() {
 # used by is_idle_since_last_run() above.
 #
 # The filename date is when the *report* was written, which is normally the
-# same day the run happened — except after a backfill/recovery run that
-# processes an older gap (e.g. today's run producing a report for a period
-# that started days ago): in that case this reads slightly stale until the
-# run completes and writes today's report, at most delaying the *next*
-# trigger by one skipped-then-caught-up cycle, never causing a missed run.
+# same day the run happened — except mid-run, while a backfill/recovery
+# session is still processing an older gap and hasn't written today's report
+# yet: this reads the stale older date, which makes ELAPSED_HOURS LARGER, so
+# the guard looks MORE overdue, not less. That can only trigger one extra
+# run (which itself writes today's report and closes the gap) — it can never
+# cause a missed run.
 #
 # `[0-9]*` (not the bare `*` used above in is_idle_since_last_run) excludes
 # non-date-prefixed report names (e.g. a `recovery-memory-consolidation.md`
