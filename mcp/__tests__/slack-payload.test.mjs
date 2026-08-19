@@ -110,6 +110,24 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
   ok('i prose section carries the stripped URL, no asterisks', r.blocks.find(b => b.type === 'section').text.text.includes('https://x.io/a') && !r.blocks.find(b => b.type === 'section').text.text.includes('*https'))
 }
 
+// (m) poller-brain#322: URL mid-sentence inside a bold span (not the whole
+// span, unlike #225) -> wrapped in `<url>`, sentence stays bold, no stray `*`
+{
+  const r = buildSendPayload({ text: '*testovat můžeš na https://x.io/a*' })
+  ok('m URL wrapped, bold markers kept', r.effectiveText === '*testovat můžeš na <https://x.io/a>*')
+  ok('m no blocks synthesized (still plain passthrough)', r.blocks.length === 0)
+  ok('m transformed echoes the wrap, not the strip', r.transformed?.reason === 'bold_wrapped_url_in_text' && r.transformed.bold_url_wrapped === true && !r.transformed.bold_url_stripped)
+}
+
+// (n) #225 and #322 fixes coexist without double-matching the same URL —
+// solo-span case still strips (not wraps), embedded case still wraps
+{
+  const r = buildSendPayload({ text: 'Report: *https://x.io/a* a *viz https://y.io/b* diky' })
+  ok('n solo-span URL stripped (unchanged #225 behavior)', r.effectiveText.includes('Report: https://x.io/a a'))
+  ok('n embedded URL wrapped (#322)', r.effectiveText.includes('*viz <https://y.io/b>*'))
+  ok('n both flags present', r.transformed?.bold_url_stripped === true && r.transformed?.bold_url_wrapped === true)
+}
+
 // (f) buildSendResponse key order — the poller truncates a logged tool_result at
 // 200 chars, so a code that lands after unbounded prose is invisible to whoever
 // counts warnings in the session log (#108 counting, #184 phase 3).

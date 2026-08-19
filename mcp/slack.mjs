@@ -489,6 +489,45 @@ function stripBoldWrappedUrl(text) {
   return text.replace(/(^|\s)\*(https?:\/\/[^\s*]+)\*(?=\s|$)/g, '$1$2')
 }
 
+// Repairs the distinct gap from #225 (poller-brain#322): a bare URL sitting
+// mid-sentence inside a `*...*` bold span, immediately before the closing
+// `*`, where the span also contains OTHER text (`*testovat můžeš na
+// https://x*`). Same Slack-autolinker adjacency bug as #225 — `*` isn't a
+// stop character, so it gets swallowed into the href — but here stripping
+// the markers (the #225 fix) would also destroy the sentence's intended bold
+// formatting, which #225 deliberately left alone for exactly this shape. Fix:
+// wrap only the URL itself in explicit `<url>` link syntax, so the character
+// immediately before the closing `*` becomes `>` instead of a URL char — the
+// bold span, the link, and the closing `*` all render correctly this way
+// (empirically verified against live Slack rendering, poller-brain#322
+// thread, same verification bar #225 set).
+// Requires a real opening `(^|\s)\*` anchor (mirrors #225's own anchor) —
+// an earlier draft matched ANY "URL immediately followed by word-boundary
+// `*`", with no requirement that it sit inside an actual bold span. DevGuru
+// measured 3 live false positives from that: a Cloudflare route glob ending
+// `/*` (common in this workspace, already `<url>`-wrapped by the author —
+// the internal `*` isn't a bold marker at all), the same shape inside a
+// ` ``` ` code fence (mutating content meant to be copied/run), and a plain
+// prose URL with a literal trailing `*`. The anchor requires an actual
+// unmatched opening `*` before the URL, which none of those have, so they're
+// no longer touched.
+// Trailing punctuation (`.,;:!?`) is captured separately and placed AFTER
+// the closing `>` rather than inside it — `<url>`'s href isn't heuristically
+// trimmed by Slack's autolinker the way a bare URL's is (DevGuru measured
+// `<https://example.com/y.>` swallowing the period into the href live), so a
+// bold sentence ending "...https://x/a." would otherwise ship a broken link.
+// Runs AFTER stripBoldWrappedUrl so the two never double-match the same span:
+// the solo-url case already has its asterisks removed by the time this runs,
+// so there's no trailing `*` left for this regex to find.
+// Deliberately narrow like #225: only `*` (not `_..._`/`~...~`) — no evidence
+// yet the same adjacency bug hits those markers; extend if/when reported.
+function wrapBoldEmbeddedUrl(text) {
+  return text.replace(
+    /(^|\s)\*([^*\n]*\s)(https?:\/\/[^\s*<>]*[^\s*<>.,;:!?])([.,;:!?]*)\*(?=\s|$)/g,
+    '$1*$2<$3>$4*'
+  )
+}
+
 // Pure payload builder for send_message: decides final blocks / effective text /
 // transform echo BEFORE any network I/O, so the three-way branch (auto-convert
 // vs section-prepend vs verbatim passthrough) is unit-testable without Slack.
@@ -503,13 +542,16 @@ function buildSendPayload(args, { hasModals = false } = {}) {
   // supplies its own blocks, `text` is still sent — either prepended as a
   // section or as the notification fallback — so the same rendering bug would
   // reach Slack either way. HTML-entity normalization (#243) runs before it —
-  // order doesn't matter functionally (disjoint patterns) but boldUrlFixed
-  // below is measured against the entity-normalized text, not raw, so it only
-  // flags actual bold-url stripping.
+  // order doesn't matter functionally (disjoint patterns) but boldUrlFixed /
+  // boldUrlWrapped below are measured against the entity-normalized text, not
+  // raw, so they only flag actual bold-url repairs. #322's wrap runs after
+  // #225's strip (see wrapBoldEmbeddedUrl comment for why order matters).
   const rawText = args.text
   const htmlNormalized = typeof rawText === 'string' ? normalizeHtmlEntities(rawText) : rawText
-  const text = typeof htmlNormalized === 'string' ? stripBoldWrappedUrl(htmlNormalized) : htmlNormalized
-  const boldUrlFixed = text !== htmlNormalized
+  const stripped = typeof htmlNormalized === 'string' ? stripBoldWrappedUrl(htmlNormalized) : htmlNormalized
+  const text = typeof stripped === 'string' ? wrapBoldEmbeddedUrl(stripped) : stripped
+  const boldUrlFixed = stripped !== htmlNormalized
+  const boldUrlWrapped = text !== stripped
 
   const agentBlocks = args.blocks ? [...args.blocks] : []
   const agentSuppliedBlocks = agentBlocks.length > 0
@@ -535,6 +577,11 @@ function buildSendPayload(args, { hasModals = false } = {}) {
     transformed = transformed
       ? { ...transformed, bold_url_stripped: true }
       : { reason: 'bold_wrapped_url_in_text', bold_url_stripped: true }
+  }
+  if (boldUrlWrapped) {
+    transformed = transformed
+      ? { ...transformed, bold_url_wrapped: true }
+      : { reason: 'bold_wrapped_url_in_text', bold_url_wrapped: true }
   }
 
   return { blocks, effectiveText, transformed, tableWarning, agentSuppliedBlocks }
@@ -576,7 +623,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback. AUTO-REPAIR: a bare URL wrapped in bold as its own span (`*https://...*`) is auto-stripped to a plain URL — Slack mangles that pattern\'s link (see `transformed.bold_url_stripped`). Prefer a bare URL or `<url|label>` yourself rather than relying on this.' },
+        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback. AUTO-REPAIR: a bare URL wrapped in bold as its own span (`*https://...*`) is auto-stripped to a plain URL — Slack mangles that pattern\'s link (see `transformed.bold_url_stripped`). A bare URL wrapped in bold ALONGSIDE other text (`*see https://...*`) is auto-wrapped as `*see <https://...>*` instead, since stripping would also lose the intended bold (see `transformed.bold_url_wrapped`). Prefer a bare URL or `<url|label>` yourself rather than relying on either repair.' },
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions, or a `markdown` block for tables/GFM). See https://api.slack.com/block-kit. Providing blocks OPTS OUT of table auto-convert — your blocks are sent as-is and `text` is prepended as a visible section block. Omit blocks to let a GFM table in `text` auto-convert.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread). Pass null to send a top-level channel message even when in a thread session.' },

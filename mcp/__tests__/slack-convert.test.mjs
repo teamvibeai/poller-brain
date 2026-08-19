@@ -9,9 +9,9 @@ import { dirname, join } from 'node:path'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
-const exports = '\nexport { isTableLine, computePipeTableWarning, gfmInlineToMrkdwn, convertPipeTablesToBlocks, textToSections, stripBoldWrappedUrl }\n'
+const exports = '\nexport { isTableLine, computePipeTableWarning, gfmInlineToMrkdwn, convertPipeTablesToBlocks, textToSections, stripBoldWrappedUrl, wrapBoldEmbeddedUrl }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
-const { computePipeTableWarning, convertPipeTablesToBlocks, stripBoldWrappedUrl } = mod
+const { computePipeTableWarning, convertPipeTablesToBlocks, stripBoldWrappedUrl, wrapBoldEmbeddedUrl } = mod
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
@@ -95,6 +95,40 @@ const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++;
   const t = 'Jen normální text s https://x.io/a bez formátování.'
   ok('13 unwrapped URL untouched', stripBoldWrappedUrl(t) === t)
   ok('13 no URL at all untouched', stripBoldWrappedUrl('*tučně* bez URL') === '*tučně* bez URL')
+}
+
+// 14) poller-brain#322: URL mid-sentence inside a real `*...*` bold span -> wrapped
+{
+  ok('14 mid-sentence url wrapped, span stays bold', wrapBoldEmbeddedUrl('*testovat můžeš na https://x.io/a*') === '*testovat můžeš na <https://x.io/a>*')
+  ok('14 leading text, end of string', wrapBoldEmbeddedUrl('*Viz https://x.io/a*') === '*Viz <https://x.io/a>*')
+  ok('14 url NOT adjacent to closing star untouched (no adjacency bug here)', wrapBoldEmbeddedUrl('*https://x.io/a je hotovo*') === '*https://x.io/a je hotovo*')
+  ok('14 trailing punctuation moved outside the link', wrapBoldEmbeddedUrl('*viz https://x.io/a.*') === '*viz <https://x.io/a>.*')
+  ok('14 trailing punctuation, multiple marks', wrapBoldEmbeddedUrl('*hotovo, https://x.io/a!*') === '*hotovo, <https://x.io/a>!*')
+}
+// 15) poller-brain#322 DevGuru round-1 blocking catch: NOT touched — URL not
+// inside a real bold span (no matching opening `*` anchor before it), even
+// though the URL itself is immediately followed by a word-boundary `*`
+{
+  ok('15 cloudflare route glob (URL contains literal /*) untouched', wrapBoldEmbeddedUrl('routa https://console.sitebrew.app/* pokrývá vše') === 'routa https://console.sitebrew.app/* pokrývá vše')
+  const fence = 'Příklad:\n```\ncurl https://x.io/a*\n```\nkonec'
+  ok('15 url+trailing-star inside a code fence untouched', wrapBoldEmbeddedUrl(fence) === fence)
+  ok('15 plain prose url with literal trailing star untouched', wrapBoldEmbeddedUrl('zdroj https://x.io/a* (viz níže)') === 'zdroj https://x.io/a* (viz níže)')
+}
+// 16) poller-brain#322: NOT touched — other markers / already-explicit-link idempotence
+{
+  ok('16 underscore-italic untouched', wrapBoldEmbeddedUrl('_Viz https://x.io/a_') === '_Viz https://x.io/a_')
+  ok('16 double-star GFM bold untouched (different pattern)', wrapBoldEmbeddedUrl('**Viz https://x.io/a**') === '**Viz https://x.io/a**')
+  ok('16 already <url> form is idempotent', wrapBoldEmbeddedUrl('*Viz <https://x.io/a>*') === '*Viz <https://x.io/a>*')
+  ok('16 already <url|label> form is idempotent', wrapBoldEmbeddedUrl('*Viz <https://x.io/a|label>*') === '*Viz <https://x.io/a|label>*')
+  ok('16 #225 solo-span case untouched (that shape is stripBoldWrappedUrl\'s job)', wrapBoldEmbeddedUrl('*https://x.io/a*') === '*https://x.io/a*')
+}
+// 17) poller-brain#322: strip→wrap pipeline order — solo-span strips (#225),
+// embedded-in-sentence wraps (#322), no double-matching within one string
+{
+  const combo = 'Report: *https://x.io/a* a *viz https://y.io/b* diky'
+  const afterStrip = stripBoldWrappedUrl(combo)
+  ok('17 strip only touches the solo-span occurrence', afterStrip === 'Report: https://x.io/a a *viz https://y.io/b* diky')
+  ok('17 wrap only touches the embedded occurrence, strip result untouched otherwise', wrapBoldEmbeddedUrl(afterStrip) === 'Report: https://x.io/a a *viz <https://y.io/b>* diky')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
