@@ -12,9 +12,9 @@ import { dirname, join } from 'node:path'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
-const exports = '\nexport { buildSendPayload, buildSendResponse }\n'
+const exports = '\nexport { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
-const { buildSendPayload, buildSendResponse } = mod
+const { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi } = mod
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
@@ -177,6 +177,40 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
   const r = buildSendPayload({ text: 'the literal `&lt;@U1&gt;` syntax vs a real ping &lt;@U2&gt;' })
   ok('j inline code span left escaped', r.effectiveText.includes('`&lt;@U1&gt;`'))
   ok('j prose outside inline code still unescaped', r.effectiveText.includes('a real ping <@U2>'))
+}
+
+// (k) poller-brain#345: every method actually called via slackApi() in this file (from
+// `grep -n "slackApi('" slack.mjs`, kept in sync manually) gets the encoding Slack's live
+// API actually requires for it — not just the two named in the original ticket. DevGuru's
+// live probe (2026-08-19) additionally caught pins.list failing the same way as
+// chat.getPermalink; the pre-fix test suite passed 169/169 while pins.list was broken,
+// because the old asserts only named the ticket's one method instead of every call site.
+{
+  const formEncoded = ['conversations.info', 'conversations.replies', 'conversations.history', 'conversations.setTopic', 'conversations.setPurpose', 'files.getUploadURLExternal', 'files.completeUploadExternal', 'chat.getPermalink', 'pins.list']
+  const jsonEncoded = ['auth.test', 'users.info', 'chat.postMessage', 'chat.update', 'reactions.add', 'reactions.remove', 'bookmarks.list', 'assistant.threads.setStatus']
+  for (const m of formEncoded) ok(`k ${m} form-encoded`, needsFormEncoding(m))
+  for (const m of jsonEncoded) ok(`k ${m} JSON-encoded`, !needsFormEncoding(m))
+}
+
+// (l) poller-brain#345 nit: prove slackApi() actually consults the predicate (not just
+// that the diff currently wires it in) — mock fetch, call the real slackApi(), and read
+// back the Content-Type/body shape it sent. Would catch a future regression where the
+// condition is inlined again and silently drifts from needsFormEncoding.
+{
+  const calls = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, headers: opts.headers, body: opts.body })
+    return { json: async () => ({ ok: true }) }
+  }
+  await slackApi('chat.getPermalink', { channel: 'C1', message_ts: '1.1' })
+  await slackApi('chat.postMessage', { channel: 'C1', text: 'hi' })
+  globalThis.fetch = realFetch
+
+  ok('l form method sends x-www-form-urlencoded', calls[0].headers['Content-Type'] === 'application/x-www-form-urlencoded')
+  ok('l form method body is urlencoded, not JSON', calls[0].body === 'channel=C1&message_ts=1.1')
+  ok('l json method sends application/json', calls[1].headers['Content-Type'] === 'application/json')
+  ok('l json method body is a JSON string', calls[1].body === JSON.stringify({ channel: 'C1', text: 'hi' }))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
