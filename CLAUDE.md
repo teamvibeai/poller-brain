@@ -190,11 +190,13 @@ the foreground — it dies with the session. Launch it via the `background-task`
 your turn, and you'll be woken in this channel when it ends. Never poll or `sleep` waiting
 for one. Best-effort only: it survives session teardown, not a poller restart.
 
-**Do not confuse this with the harness's own `Bash(run_in_background: true)`** — that keeps the
-command inside the current session's process group, which a poller teardown kills outright
-(group-kill, #308). The `background-task` skill instead launches its runner detached (`setsid`,
-its own process group) and delivers the result via an `.inbox/` drop (`bg-task.mjs`/`bg-task-runner.mjs`)
-— of these two mechanisms, only it survives teardown.
+**Do not confuse this with the harness's own `Bash(run_in_background: true)`** — that parameter's
+output and completion notification are scoped to *this* session (the task file lives in a
+per-session directory; the notification is delivered by re-invoking this session), so once the
+session ends there is nothing left to deliver it to — the command may even keep running, orphaned
+and unobserved. The `background-task` skill instead launches its runner detached (`setsid`, own
+process group) and delivers via an `.inbox/` drop (`bg-task.mjs`/`bg-task-runner.mjs`) that any
+later session picks up — of these two mechanisms, only it survives teardown.
 
 **Never end a turn on a silently-contingent promise.** If your last message tells someone "I'll
 ping you when X finishes" and X won't finish within this turn (CI, a background task, a scheduled
