@@ -14,5 +14,18 @@
       "mcp__slack__*",
       "mcp__teamvibe-api__*"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node $CLAUDE_CONFIG_DIR/scripts/ensure-gh-cli.mjs",
+            "timeout": 150
+          }
+        ]
+      }
+    ]
   }
 }
