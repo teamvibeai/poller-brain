@@ -65,7 +65,10 @@ function textToSections(text, maxLen = 2900) {
 // arguments as missing no matter what's sent, others (bookmarks.list) don't. There's no
 // clean rule to predict which; each entry below was confirmed by an actual failing call
 // (poller-brain#345). Before adding a new read/list method to either branch, probe it
-// live rather than assuming by analogy.
+// live rather than assuming by analogy. pins.add/pins.remove live-probed 2026-08-19
+// (poller-brain#315, DevGuru): both content types return message_not_found on a bogus
+// timestamp (not invalid_arguments), confirming the JSON body parses — WRITE-method
+// default holds, no exception needed.
 function needsFormEncoding(method) {
   return method.startsWith('conversations.') || method.startsWith('files.') || method === 'chat.getPermalink' || method === 'pins.list'
 }
@@ -760,6 +763,28 @@ const TOOLS = [
     },
   },
   {
+    name: 'pin_message',
+    description: 'Pin a message to a channel. Slack surfaces too_many_pins if the channel is at its pin limit, or not_pinnable for message types that cannot be pinned — both bubble up as errors.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        timestamp: { type: 'string', description: 'Message timestamp to pin (default: current thread timestamp, or original message timestamp if not in a thread)' },
+      },
+    },
+  },
+  {
+    name: 'unpin_message',
+    description: 'Unpin a message from a channel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        timestamp: { type: 'string', description: 'Message timestamp to unpin (default: current thread timestamp, or original message timestamp if not in a thread)' },
+      },
+    },
+  },
+  {
     name: 'list_bookmarks',
     description: 'List bookmarks (links pinned at the top) of a channel.',
     inputSchema: {
@@ -1121,6 +1146,43 @@ async function handleTool(name, args) {
         }),
       }))
       return { ok: true, items }
+    }
+
+    case 'pin_message': {
+      // Default mirrors get_permalink, not add_reaction/remove_reaction: pb#315's use
+      // case is pinning the top-level tracking message, so an omitted timestamp inside
+      // a thread must resolve to the thread root, not the triggering reply.
+      const channel = args.channel || DEFAULT_CHANNEL
+      const timestamp = args.timestamp || DEFAULT_THREAD_TS || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!timestamp) throw new Error('timestamp required')
+      try {
+        await slackApi('pins.add', { channel, timestamp })
+      } catch (e) {
+        // already_pinned confirmed via Slack docs only, not a live probe (DevGuru,
+        // poller-brain#315) — a real pin is a visible channel event, not repeatable
+        // freely in review.
+        if (e.message?.includes('already_pinned')) return { ok: true, already_pinned: true }
+        throw e
+      }
+      return { ok: true }
+    }
+
+    case 'unpin_message': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      const timestamp = args.timestamp || DEFAULT_THREAD_TS || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!timestamp) throw new Error('timestamp required')
+      try {
+        await slackApi('pins.remove', { channel, timestamp })
+      } catch (e) {
+        // no_pin live-verified against a real unpinned message (DevGuru, poller-brain#315).
+        // Slack's docs also list not_pinned for the file-pin variant — this guard only
+        // covers the message-pin error string, not files.
+        if (e.message?.includes('no_pin')) return { ok: true, no_pin: true }
+        throw e
+      }
+      return { ok: true }
     }
 
     case 'list_bookmarks': {

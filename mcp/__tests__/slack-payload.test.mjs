@@ -205,7 +205,7 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
 // because the old asserts only named the ticket's one method instead of every call site.
 {
   const formEncoded = ['conversations.info', 'conversations.replies', 'conversations.history', 'conversations.setTopic', 'conversations.setPurpose', 'files.getUploadURLExternal', 'files.completeUploadExternal', 'chat.getPermalink', 'pins.list']
-  const jsonEncoded = ['auth.test', 'users.info', 'chat.postMessage', 'chat.update', 'reactions.add', 'reactions.remove', 'bookmarks.list', 'assistant.threads.setStatus']
+  const jsonEncoded = ['auth.test', 'users.info', 'chat.postMessage', 'chat.update', 'reactions.add', 'reactions.remove', 'bookmarks.list', 'assistant.threads.setStatus', 'pins.add', 'pins.remove']
   for (const m of formEncoded) ok(`k ${m} form-encoded`, needsFormEncoding(m))
   for (const m of jsonEncoded) ok(`k ${m} JSON-encoded`, !needsFormEncoding(m))
 }
