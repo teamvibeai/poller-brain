@@ -107,13 +107,33 @@ const WIKILINK_RE = /\[\[[^\]]+\]\]/;
  * several `[[wikilink]]` targets alongside citations (e.g. `[MEM-71]
  * [[iam-quota-strategy]] · [MEM-73] (this mechanism) · [[poller-error-
  * reporting]]`) — a pointer to elsewhere, same as an `.md` path, just
- * bracket syntax instead of a filename. A `[[wikilink]]` anywhere on the
- * line is treated the same as a `.md` file path: it marks the line as
- * pointing elsewhere rather than being condensed narrative content itself.
+ * bracket syntax instead of a filename. Round 2 (DevGuru): a bare
+ * `WIKILINK_RE.test(line)` over-fit — it flagged EVERY line that merely
+ * contains a `[[wikilink]]` anywhere, not just a line that IS a list of
+ * links. Measured regression against `main` on 4 brains: +27 wrongly
+ * rejected lines, 3 keys (MEM-124/279/283) lost all citation evidence,
+ * including the exact subject-position narrative shape #334 exists to
+ * unlock (`- **[MEM-124] PLNÁ odpovědnost předána JARVISovi...** (viz
+ * `[[codex-cli-integration]]`)` — one wikilink mid-sentence, not a
+ * pointer row). Narrowed to require the line be MOSTLY link/citation
+ * syntax: strip wikilinks, MEM-N citations, and inline code, then only
+ * flag if under 30 chars of prose remain (calibrated against 133 real
+ * rejection lines across the same 4-brain corpus — a starting point, not
+ * an authoritative constant; DevGuru measured 0 lost keys, +5 correctly
+ * rejected true pointer lines with this threshold).
  */
+function residualProse(line: string): string {
+  return line
+    .replace(/\[\[[^\]]+\]\]/g, "")
+    .replace(/`?\[?MEM-\d+(?:[/,]\d+)*\]?`?/g, "")
+    .replace(/`[^`]*`/g, "")
+    .replace(/[\s\-*#·—–|:;,.()§→>]+/g, " ")
+    .trim();
+}
+
 function isIndexShapedLine(line: string): boolean {
   if (/→\s*see\s|(?:^|\s)see\s+\S+\.md\b/.test(line)) return true;
-  if (WIKILINK_RE.test(line)) return true;
+  if (WIKILINK_RE.test(line) && residualProse(line).length < 30) return true;
   return TABLE_ROW_RE.test(line) && FILE_PATH_RE.test(line);
 }
 
