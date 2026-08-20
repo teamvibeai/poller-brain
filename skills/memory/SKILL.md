@@ -334,7 +334,7 @@ When you learn something new, route it:
 
 | Promotion path | When to use | Example |
 |---------------|-------------|---------|
-| **Skill pitfall** | Mistake is specific to a skill/tool and would benefit from contextual warning | Slack tilde rendering → add Pitfalls section to `skills/slack/skill.md` |
+| **Skill pitfall** | Mistake is specific to a skill/tool and would benefit from contextual warning | Slack tilde rendering → add Pitfalls section to `skills/slack/SKILL.md` |
 | **LEARNINGS.md** | Mistake reveals a general operational rule | "Always tag the person you're replying to" → `core/LEARNINGS.md` |
 | **Hardcoded guard** | Mistake is critical enough to need automated prevention | Guard check before consolidation → `scripts/maintenance-guard.sh` (derives last-run date from `reports/*-memory-consolidation.md`, poller-brain#346) |
 
