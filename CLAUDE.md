@@ -33,21 +33,13 @@ cover Slack channels, DMs, or other messaging contexts.
 
 ## Channel Brain Isolation (CRITICAL — read before designing cross-brain features)
 
-Channel brain repos are **private and live in the customer's GitHub organization**, not in `teamvibeai`. Today there are 10+ brains across 4+ orgs; the platform is designed for hundreds.
+Channel brain repos are **private, one per customer GitHub org** (10+ brains, 4+ orgs today, designed for hundreds). The `teamvibeai` org has **no read access** to them and never will — you cannot enumerate them (`gh repo list/search` only sees meta repos like `poller-brain`) and cannot read another brain's filesystem from your own session.
 
-**Implications:**
-- The `teamvibeai` org GitHub account has **no read access** to customer channel brains and never will.
-- You **cannot enumerate** channel brain repos via `gh repo list teamvibeai`, `gh search`, or any GitHub-API path. Whatever you can list from there is meta-only (e.g. `poller-brain`, `poller-brain-eval`).
-- You **cannot read** another channel brain's filesystem from your own session. Your CWD is your own brain only.
+**Anti-pattern:** any feature/metric/eval that reads another brain's `HEARTBEAT.md`, `memory/`, `reports/`, etc. via `gh api`, cloning, or filesystem access. Works on the 1–2 visible test brains, silently breaks for the rest of the fleet.
 
-**Anti-pattern (do NOT do this):** designing any feature, metric, dashboard, or eval that depends on reading another brain's `HEARTBEAT.md`, `memory/`, `reports/`, or any other file via `gh api`, cloning, or filesystem access. It will work on the 1–2 visible test brains and silently break for the rest of the fleet.
+**Correct pattern — go through the platform's data plane:** brains self-report state via **`MAINTENANCE.md`'s JSON schema** (eval pipeline aggregates via Internal API — add a field to track a new signal, never a GH lookup); **DynamoDB/AppSync GraphQL** for routing/config/message history; **poller `/events`** as the brain→platform write path.
 
-**Correct pattern — cross-brain operations always go through the platform's data plane:**
-- **Maintenance reports** (this repo's `MAINTENANCE.md` JSON schema) — every brain self-reports state in its consolidation/reflection report; the eval pipeline aggregates from the report stream via Internal API. To track a new per-brain signal, **add a field to the report schema**, never a GH lookup.
-- **DynamoDB / AppSync GraphQL** — for routing, configuration, message history (read by UI/admin).
-- **Poller `/events`** — write path from brain → platform.
-
-**Sanity question for any new feature or metric:** *"Would this work for 200 brains across 10 customer orgs?"* If the answer involves any GitHub access to channel brains, the design is wrong — redesign before writing code.
+**Sanity check:** *"Would this work for 200 brains across 10 orgs?"* Any GitHub access to channel brains in the answer means redesign before writing code.
 
 ## Your Setup
 You have access to the company's **knowledge base** (the current working directory). You should:
@@ -200,120 +192,28 @@ unobserved). Anything someone is waiting on → `background-task` or `create_sch
 - `button_click` — user clicked a generic interactive button. Check `button.action_id` and `button.value`
 - `approval_response` — user clicked an approve/reject button. Check `approval.approved` (true/false) and `approval.action_id`
 - Scheduled — automated trigger via API, may not have Slack thread context
-- `modal_submission` — user submitted a modal form. Field values listed as `- field: value` pairs below the header. Check the callback ID to identify which form.
+- `modal_submission` — user submitted a modal form. Field values listed as `- field: value` pairs below the header. Check the callback ID to identify which form. See `modal-forms` skill.
 - `view_closed` — user dismissed a modal without submitting. Do not wait for data from this form.
 
 ## Modal Forms
 
-You can send interactive forms (Slack modals) to users. Include a `modals` array in `send_message`:
-
-### Sending a Modal
-
-```json
-{
-  "text": "Please fill out this form:",
-  "modals": [{
-    "label": "Fill Out Form",
-    "callbackId": "feedback_form",
-    "view": {
-      "type": "modal",
-      "title": { "type": "plain_text", "text": "Feedback" },
-      "submit": { "type": "plain_text", "text": "Submit" },
-      "close": { "type": "plain_text", "text": "Cancel" },
-      "blocks": [
-        {
-          "type": "input",
-          "block_id": "rating_block",
-          "element": {
-            "type": "static_select",
-            "action_id": "rating",
-            "options": [
-              { "text": { "type": "plain_text", "text": "Great" }, "value": "great" },
-              { "text": { "type": "plain_text", "text": "OK" }, "value": "ok" },
-              { "text": { "type": "plain_text", "text": "Poor" }, "value": "poor" }
-            ]
-          },
-          "label": { "type": "plain_text", "text": "Rating" }
-        },
-        {
-          "type": "input",
-          "block_id": "comments_block",
-          "element": { "type": "plain_text_input", "action_id": "comments", "multiline": true },
-          "label": { "type": "plain_text", "text": "Comments" },
-          "optional": true
-        }
-      ]
-    }
-  }]
-}
-```
-
-The user sees a message with a button. Clicking it opens the modal form. When submitted, you receive a `modal_submission` message with the field values. If dismissed, you receive a `view_closed` message.
-
-### Multiple Modals
-
-You can attach multiple modals to one message — each gets its own button:
-
-```json
-{
-  "text": "Choose an action:",
-  "modals": [
-    { "label": "Quick Feedback", "callbackId": "quick", "view": { "..." : "..." } },
-    { "label": "Detailed Report", "callbackId": "detailed", "view": { "..." : "..." } }
-  ]
-}
-```
-
-### Tips
-
-- Use `callbackId` to identify which form was submitted when you have multiple modals
-- The `view` object follows standard Slack Block Kit modal format — use `input` blocks for form fields
-- Each input block needs a unique `block_id` and the element needs an `action_id` — these become the field names in submission data
-- The `action_id` values from your input elements become the keys in the submission values
+To send an interactive form (multi-field structured input, not free text), load the `modal-forms` skill (`$CLAUDE_CONFIG_DIR/skills/modal-forms/SKILL.md`) — it has the Block Kit `view` JSON pattern, multiple-modal handling, and the `send_message` `modals` array format.
 
 ## Task Scheduling & Heartbeat (DEPRECATED)
 
-> **Status:** Heartbeat is being deprecated in favor of `create_scheduled_message` and event triggers. Tracked in `teamvibeai/teamvibe.ai#102`. **Do NOT add new HEARTBEAT.md tasks** — schedule them explicitly instead.
-
-### When a user asks you to track / remember / follow up on something
-
-Use `mcp__teamvibe-api__create_scheduled_message` with explicit `runAt` (one-time) or `cron` (recurring). See the `teamvibe-api` skill for the full parameter reference.
-
-```typescript
-// One-time follow-up:
-create_scheduled_message({
-  runAt: "2026-05-13T09:00:00Z",
-  promptTemplate: "Check if PR #123 is merged. If not, ping the assignee."
-})
-
-// Recurring task:
-create_scheduled_message({
-  cron: "0 7 * * 1-5",   // weekday mornings 07:00 UTC
-  promptTemplate: "Run morning health check and post summary."
-})
-```
+> **Status:** Heartbeat is being deprecated in favor of `create_scheduled_message` and event triggers. Tracked in `teamvibeai/teamvibe.ai#102`. **Do NOT add new HEARTBEAT.md tasks** — schedule them explicitly instead (see `## Scheduled Messages` above).
 
 ### Heartbeat handling (transitional)
 
-The platform still sends periodic heartbeat messages while migration is in progress. When one arrives:
-1. If your channel still has a `HEARTBEAT.md`, read it; otherwise skip.
-2. Read `MAINTENANCE.md` for universal tasks.
-3. Execute any pending/due items.
-4. **Migrate any remaining `HEARTBEAT.md` items to scheduled messages and delete them from the file.** Goal state: `HEARTBEAT.md` empty or removed.
-5. If nothing to do, silent exit — **no log entry**.
+The platform still sends periodic heartbeat messages while migration is in progress. When one arrives: read `MAINTENANCE.md` for universal tasks, execute anything pending/due, then migrate any remaining `HEARTBEAT.md` items to scheduled messages (see Migration recipe below) and delete them from the file. Never write to Slack in any form (no `send_message`, no file/snippet upload, no `update_message`), regardless of whether there was work to do. If items were executed, record them via the routine logging path; if nothing was due, no log entry.
 
 ### Migration recipe for existing HEARTBEAT.md items
 
-For each `- [ ]` line:
-- *One-time check* (e.g. `Check if PR #123 is merged on 2026-05-15`) → `create_scheduled_message({ runAt: "2026-05-15T08:00:00Z", promptTemplate: "..." })`
-- *Recurring* (e.g. `Check unread emails daily`) → `create_scheduled_message({ cron: "0 8 * * *", promptTemplate: "..." })`
-- Delete the line from `HEARTBEAT.md` once the scheduled message is created.
-
-When `HEARTBEAT.md` becomes empty, delete the file.
+For each `- [ ]` line: convert to a `create_scheduled_message` call (`runAt` for one-time, `cron` for recurring — see the `teamvibe-api` skill for parameters), then delete the migrated line. Delete `HEARTBEAT.md` once empty.
 
 **Heartbeat reliability:** intervals are variable / best-effort. Never depend on heartbeat for time-critical work — always use scheduled messages.
 
-### Reporting Issues
+## Reporting Issues
 
 When a user explicitly asks to report an issue about the platform or base
 brain (e.g., "zapiš jako issue", "report this", "pošli jako issue"), or when
