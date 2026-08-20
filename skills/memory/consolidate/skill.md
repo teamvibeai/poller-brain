@@ -423,7 +423,7 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 | LEARNINGS.md | 3100 | 5000 | :white_check_mark: |
 | MEM_REGISTRY.md | 800 | 5000 | :white_check_mark: |
 | PREFERENCES.md | 2100 | 5000 | :white_check_mark: |
-| MISTAKES.md | 0 | — | — |
+| MISTAKES.md | 3400 | 5000 | :white_check_mark: |
 | TODAY.md | 1100 | — | — |
 ```
 
@@ -432,7 +432,8 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 - `SUMMARY.md` > 9000 — risk: context bloat
 - `LEARNINGS.md` > 5000 — risk: too many rules to follow (reduction paths: Step 5c archival, Step 5d promoted-bullet trim)
 - `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries, trim promoted ACTIVE rows)
-- `PREFERENCES.md` > 5000 — risk: preference set too large to track reliably. Same 5000B convention as LEARNINGS.md/MEM_REGISTRY.md, added `teamvibeai/poller-brain#300` — previously untracked, meaning a brain could accumulate an unbounded PREFERENCES.md with no signal in this report. **Tracking only for now**: flag :warning: when exceeded, but there is no dedicated reduction step yet (no Step 9f) — a brain that trips this threshold should be flagged in `processImprovements` (Step 11) rather than silently reported. A reduction mechanism can reuse the same citation-based trim pattern as Step 5d/9e once real over-threshold data justifies building it.
+- `PREFERENCES.md` > 5000 — risk: preference set too large to track reliably. Same 5000B convention as LEARNINGS.md/MEM_REGISTRY.md, added `teamvibeai/poller-brain#300` — previously untracked, meaning a brain could accumulate an unbounded PREFERENCES.md with no signal in this report. **Tracking only for now**: flag :warning: when exceeded, but there is no dedicated reduction step yet — a brain that trips this threshold should be flagged in `processImprovements` (Step 11) rather than silently reported. A reduction mechanism can reuse the same citation-based trim pattern as Step 5d/9e/9f once real over-threshold data justifies building it.
+- `MISTAKES.md` > 5000 — risk: staging area grows unbounded and stops being a scannable to-do list. Added `teamvibeai/poller-brain#328` — the existing consolidate Step 5 ("Promote Mistakes") was meant to cover this via a `status:` lifecycle but never fires on any brain, so this file had no reduction path at all before now (Step 5's dead trigger is tracked separately, not fixed here). Reduction path: Step 9f.
 
 #### 9c. CLAUDE.md Gradual Reduction
 
@@ -508,6 +509,31 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts"
 **Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** no scanning is involved — you already know the exact key, destination file, and line with certainty, because you just wrote and verified it yourself moments earlier. Apply it immediately: `--apply --only <that key>`. This is safe without a human review pass precisely because there's no ambiguity to review — unlike the backfill path, nothing was *found*, it was *authored*.
 
 A row the script cannot find cited anywhere (or only ever cited ambiguously) is left with its full narrative — that's expected, not a failure, whether that's because it's genuinely not yet promoted or because a candidate was reviewed and rejected.
+
+#### 9f. MISTAKES.md Promoted-Entry Trim & Archival
+
+`memory/core/MISTAKES.md` is meant to be an active staging to-do list, but it has no reduction path — the existing Step 5 ("Promote Mistakes") is supposed to retire an entry once its lesson is promoted, but nothing in the actual write path (`mem-write.ts`, Step 1b.4) ever emits the `status:` field Step 5's trigger depends on, so it cannot fire on any brain (`teamvibeai/poller-brain#328`). This step rewrites an entry to a short pointer once its lesson has demonstrably been promoted elsewhere, same content-based detection as Step 5d/9e — never keyed off `status:`.
+
+> **Two things happen on a trim, not one.** `MISTAKES.md` entries often carry incident-specific detail (exact date, exact failure scenario) that a condensed `LEARNINGS.md`/`semantic/`/`procedural/` restatement drops, so pointer-shrinking in place (Step 5d's approach) would silently lose that detail forever:
+> 1. The full original entry is archived **verbatim** to `memory/episodic/archive/mistakes-YYYY-Hn.md` (half-year bucket, same convention as Step 5c's learnings archive) — nothing is deleted, only relocated.
+> 2. The entry in `MISTAKES.md` is replaced with a short pointer citing the destination that proves promotion. The archive location itself is surfaced once, in a single aggregate stub line at the end of the file (same amortized pattern Step 9d's registry archival uses for N archived rows) — not a per-entry annotation, since on a short entry that made the pointer longer than the entry it replaced. Every archived entry's own provenance header still embeds its `[MEM-N]` tag, so it stays directly `grep`-able.
+>
+> **Detection reuses `citation-detect.ts` unchanged** — same heuristic and adversarial hardening as Step 9e (`teamvibeai/poller-brain#244`/`#300`) against index-shaped lines, multi-key ambiguity, and unreliable hooks. Read candidates as evidence for human review, never as auto-write proof — same propose/apply split as Step 9e's script. `core/LEARNINGS.md` is itself a valid destination for this step (unlike Step 5d's LEARNINGS-trim, which excludes all of `core/`), since a mistake is commonly promoted straight into a LEARNINGS rule rather than a semantic/procedural writeup.
+
+If the Memory Metrics table (Step 9b) shows `MISTAKES.md` exceeding 5000 bytes, run the deterministic trim script:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-mistakes-trim.ts"
+```
+
+1. **Run it** and read the printed parse summary (`entries=N, multi-key=M, pointers=P, candidates=C`) plus the index-rejection and unreliable-hook lists, then the candidate list itself (key, `MISTAKES.md` entry span, destination `file:line`, full citing line, proposed pointer). An over-cap file containing `MEM-` keys where recognized entries cover only a small fraction of the file's bytes is flagged as a likely entry-format mismatch, not treated as a clean result — this catches a misparse even when `entries > 0` (e.g. a stray sub-bullet misread as its own entry), not just a 0-entries result.
+2. **Review each candidate** — does the citing line actually restate/condense this entry's lesson, or does it just mention the key in passing? Reject anything that isn't clearly the former (same judgment call as Step 9e).
+3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-mistakes-trim.ts" --apply --only MEM-1,MEM-5,...`. There is no "apply everything found" mode — you always name the keys. The script count-verifies before writing — it aborts (exit 1) without writing if the round-trip/archival counts don't add up.
+4. **Log it** in the markdown report under `## MISTAKES.md Promoted-Entry Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), archive bucket, size delta, and the verify checks.
+5. **Report tracking:** add `memory/core/MISTAKES.md` and the touched `memory/episodic/archive/mistakes-YYYY-Hn.md` to `filesChanged` when anything was applied (skip both when nothing was proposed, or nothing was approved).
+6. If `MISTAKES.md` is under 5000 bytes, or nothing is proposed, skip logging this step.
+
+An entry the script cannot find cited anywhere (or only ever cited ambiguously, or bundles multiple keys) is left with its full narrative — that's expected, not a failure.
 
 ### 10. Assess Daily Log Compliance
 

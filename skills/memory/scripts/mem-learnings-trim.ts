@@ -62,6 +62,14 @@ function walk(absDir: string, relDir: string, out: DestinationFile[]): void {
     const relPath = path.join(relDir, entry.name);
     const absPath = path.join(absDir, entry.name);
     if (entry.isDirectory()) {
+      // episodic/archive/ holds relocated, dead history (Step 5c learnings
+      // archive, Step 9f mistakes archive) — a key cited there is evidence
+      // it USED to live somewhere, not that it's currently promoted.
+      // Scanning it as a destination lets a trim rewrite a live entry into
+      // a pointer at an archive file instead of its actual current home.
+      // poller-brain#328 review round 1 (DevGuru): measured this happening
+      // for real via the new mistakes archive this same PR introduces.
+      if (relPath === "episodic/archive") continue;
       walk(absPath, relPath, out);
     } else if (entry.name.endsWith(".md")) {
       out.push({ file: relPath, text: fs.readFileSync(absPath, "utf-8") });
