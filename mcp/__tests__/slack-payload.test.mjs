@@ -203,6 +203,9 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
 // live probe (2026-08-19) additionally caught pins.list failing the same way as
 // chat.getPermalink; the pre-fix test suite passed 169/169 while pins.list was broken,
 // because the old asserts only named the ticket's one method instead of every call site.
+// jsonEncoded below = the 10 methods currently on the JSON branch (poller-brain#348):
+// 9 confirmed-safe + users.info, which is unverified pending poller-brain#349 — kept here
+// because its branch doesn't change, not because it's been confirmed.
 {
   const formEncoded = ['conversations.info', 'conversations.replies', 'conversations.history', 'conversations.setTopic', 'conversations.setPurpose', 'files.getUploadURLExternal', 'files.completeUploadExternal', 'chat.getPermalink', 'pins.list']
   const jsonEncoded = ['auth.test', 'users.info', 'chat.postMessage', 'chat.update', 'reactions.add', 'reactions.remove', 'bookmarks.list', 'assistant.threads.setStatus', 'pins.add', 'pins.remove']

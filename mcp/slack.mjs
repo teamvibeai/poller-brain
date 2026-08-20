@@ -60,17 +60,39 @@ function textToSections(text, maxLen = 2900) {
   return sections
 }
 
-// Per Slack's docs, most WRITE methods accept a JSON body; READ/list methods are the
-// risk class — some (chat.getPermalink, pins.list) reject JSON outright and report
-// arguments as missing no matter what's sent, others (bookmarks.list) don't. There's no
-// clean rule to predict which; each entry below was confirmed by an actual failing call
-// (poller-brain#345). Before adding a new read/list method to either branch, probe it
-// live rather than assuming by analogy. pins.add/pins.remove live-probed 2026-08-19
-// (poller-brain#315, DevGuru): both content types return message_not_found on a bogus
-// timestamp (not invalid_arguments), confirming the JSON body parses — WRITE-method
-// default holds, no exception needed.
+// Slack's Web API has no clean read/write rule for which content-type a method
+// accepts — some read methods reject JSON outright (chat.getPermalink, pins.list),
+// others don't (bookmarks.list), and some write methods reject JSON too
+// (conversations.setTopic/setPurpose, files.*). Form-encoding is the safer default:
+// per Slack's own docs (docs.slack.dev/apis/web-api), arguments are passed "as GET
+// querystring parameters, POST parameters presented as application/x-www-form-urlencoded,
+// or a mix" — form is the documented universal transport, while JSON is only "Most
+// write methods allow arguments with application/json" (not a guarantee, and not for
+// reads). JSON is therefore a NAMED EXCEPTION, granted per-method only once actually
+// confirmed safe — never inferred from a namespace or verb (poller-brain#348). Before
+// adding a method here, probe it live rather than assuming by analogy.
+const JSON_SAFE_METHODS = new Set([
+  'auth.test',
+  'users.info', // unverified — pending poller-brain#349 (candidate cause of list_thread_participants degradation, do not treat as confirmed-safe)
+  'chat.postMessage',
+  'chat.update',
+  'reactions.add',
+  'reactions.remove',
+  'pins.add',
+  'pins.remove', // pins.add/pins.remove live-probed 2026-08-19 (poller-brain#315, DevGuru): both content types return message_not_found on a bogus timestamp (not invalid_arguments), confirming JSON parses
+  'bookmarks.list',
+  'assistant.threads.setStatus',
+])
 function needsFormEncoding(method) {
-  return method.startsWith('conversations.') || method.startsWith('files.') || method === 'chat.getPermalink' || method === 'pins.list'
+  return !JSON_SAFE_METHODS.has(method)
+}
+
+function encodeFormBody(body) {
+  return new URLSearchParams(
+    Object.entries(body)
+      .filter(([, v]) => v != null) // drops both undefined and null (would otherwise serialize as the literal "undefined"/"null")
+      .map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)]),
+  ).toString()
 }
 
 async function slackApi(method, body) {
@@ -79,7 +101,7 @@ async function slackApi(method, body) {
   let reqBody
   if (useForm) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    reqBody = new URLSearchParams(Object.entries(body).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)])).toString()
+    reqBody = encodeFormBody(body)
   } else {
     headers['Content-Type'] = 'application/json'
     reqBody = JSON.stringify(body)
