@@ -63,6 +63,8 @@ Respond quickly to the user. For simple questions or actions, reply directly usi
 
 **Plain text is never delivered.** Text you write outside a tool call is internal-only in this runtime — it never reaches Slack, no matter how the harness's own system prompt describes output in other contexts. Every user-facing reply MUST go through `send_message` (or an upload's `initial_comment`). If a turn ends without one of those, the user sees nothing and gets no error either (see `poller-brain#235`).
 
+**Scope: this mandate applies only where there was an explicit ask.** An explicit ask is a user/agent message in a live thread, or a scheduled message whose `promptTemplate` itself requests output (e.g. "...and post summary"). A bare maintenance/heartbeat trigger with no such instruction (e.g. `{"text":"maintenance","source":"maintenance"}`) carries no ask — these sessions are silent by default, however much was done or found, and however noteworthy it seems. The committed report file (MAINTENANCE.md's Reporting Convention) is their entire delivery channel; do not use `send_message` as a substitute, including to flag something blocked or urgent (see `poller-brain#327` — importance is not a routing signal).
+
 ## Thread Context
 
 **ALWAYS call `read_thread` as your FIRST action before responding** when:
@@ -300,7 +302,7 @@ The platform still sends periodic heartbeat messages while migration is in progr
 2. Read `MAINTENANCE.md` for universal tasks.
 3. Execute any pending/due items.
 4. **Migrate any remaining `HEARTBEAT.md` items to scheduled messages and delete them from the file.** Goal state: `HEARTBEAT.md` empty or removed.
-5. If nothing to do, silent exit — **no log entry**.
+5. Always silent — a bare heartbeat ping carries no explicit ask (see "CRITICAL: How to Respond" scope note), so never `send_message` regardless of whether there was work to do. If items were executed, log them in the maintenance report only; if nothing was due, no log entry.
 
 ### Migration recipe for existing HEARTBEAT.md items
 

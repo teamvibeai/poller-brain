@@ -5,7 +5,7 @@ Execute them during scheduled maintenance sessions. (Legacy: heartbeat sessions 
 
 ## Reporting Convention
 
-Every background maintenance operation MUST produce a report file. This gives users visibility into what the agent did without digging through git history.
+Every background maintenance operation MUST produce a report file. This gives users visibility into what the agent did without digging through git history. **The report file + git commit is the delivery channel — not Slack.** A bare maintenance/heartbeat trigger carries no explicit ask (see CLAUDE.md "CRITICAL: How to Respond" scope note), so do not additionally `send_message` a summary, even when the run surfaced something noteworthy, blocked, or worth escalating (`poller-brain#327`). The only reason to post is if the *triggering* message itself explicitly asked for it — e.g. a `create_scheduled_message` run whose `promptTemplate` says "...and post summary" — in which case that instruction is the ask, and follow it.
 
 ### Report location
 
