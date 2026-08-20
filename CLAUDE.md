@@ -63,7 +63,9 @@ Respond quickly to the user. For simple questions or actions, reply directly usi
 
 **Plain text is never delivered.** Text you write outside a tool call is internal-only in this runtime — it never reaches Slack, no matter how the harness's own system prompt describes output in other contexts. Every user-facing reply MUST go through `send_message` (or an upload's `initial_comment`). If a turn ends without one of those, the user sees nothing and gets no error either (see `poller-brain#235`).
 
-**Scope: this mandate applies only where there was an explicit ask.** An explicit ask is a user/agent message in a live thread, or a scheduled message whose `promptTemplate` itself requests output (e.g. "...and post summary"). A bare maintenance/heartbeat trigger with no such instruction (e.g. `{"text":"maintenance","source":"maintenance"}`) carries no ask — these sessions are silent by default, however much was done or found, and however noteworthy it seems. The committed report file (MAINTENANCE.md's Reporting Convention) is their entire delivery channel; do not use `send_message` as a substitute, including to flag something blocked or urgent (see `poller-brain#327` — importance is not a routing signal).
+**Scope: the expectation above that a session ends with a reply applies only where there was an explicit ask.** (The rule directly above it is unconditional — plain text outside a tool call never reaches Slack, in any session.) An explicit ask is a user/agent message in a live thread, or a scheduled message whose `promptTemplate` itself requests output (e.g. "...and post summary"). Two other trigger shapes need their own rule instead of falling out of this one by inference:
+- **Bare maintenance/heartbeat trigger** (e.g. `{"text":"maintenance","source":"maintenance"}`, no instruction) — no ask, silent by default, however much was done or found and however noteworthy it seems. The committed report file (MAINTENANCE.md's Reporting Convention) is the entire delivery channel — do not write to Slack in any form (no `send_message`, no file/snippet upload, no `update_message`), including to flag something blocked or urgent (see `poller-brain#327` — importance is not a routing signal).
+- **Scheduled run whose `promptTemplate` names work but never asks for output** (e.g. "Produce reports. Commit.") — silent if the work lands in a committed artifact (report file, memory/git commit); if it produces no committed artifact, post one short result line instead.
 
 ## Thread Context
 
@@ -202,6 +204,7 @@ unobserved). Anything someone is waiting on → `background-task` or `create_sch
 - `button_click` — user clicked a generic interactive button. Check `button.action_id` and `button.value`
 - `approval_response` — user clicked an approve/reject button. Check `approval.approved` (true/false) and `approval.action_id`
 - Scheduled — automated trigger via API, may not have Slack thread context
+- Bare maintenance/heartbeat trigger — generic system ping with no instruction (e.g. `{"text":"maintenance","source":"maintenance"}`); see "CRITICAL: How to Respond" scope note for the silent-by-default rule
 - `modal_submission` — user submitted a modal form. Field values listed as `- field: value` pairs below the header. Check the callback ID to identify which form.
 - `view_closed` — user dismissed a modal without submitting. Do not wait for data from this form.
 
@@ -302,7 +305,7 @@ The platform still sends periodic heartbeat messages while migration is in progr
 2. Read `MAINTENANCE.md` for universal tasks.
 3. Execute any pending/due items.
 4. **Migrate any remaining `HEARTBEAT.md` items to scheduled messages and delete them from the file.** Goal state: `HEARTBEAT.md` empty or removed.
-5. Always silent — a bare heartbeat ping carries no explicit ask (see "CRITICAL: How to Respond" scope note), so never `send_message` regardless of whether there was work to do. If items were executed, log them in the maintenance report only; if nothing was due, no log entry.
+5. Always silent — a bare heartbeat ping carries no explicit ask (see "CRITICAL: How to Respond" scope note), so never write to Slack in any form regardless of whether there was work to do. If items were executed, record them via the routine logging path (`log-write.ts`) or a maintenance report if the operation produces one; if nothing was due, no log entry.
 
 ### Migration recipe for existing HEARTBEAT.md items
 
