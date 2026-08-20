@@ -158,7 +158,7 @@ Route new/updated facts to appropriate locations:
 Review `memory/core/MISTAKES.md` for entries ready to be promoted. For each entry with status `new`:
 
 1. **Determine the promotion path:**
-   - Is the mistake specific to a skill/tool? → Add a pitfall to the relevant `skills/*/skill.md` file (create a `## Pitfalls` section if needed)
+   - Is the mistake specific to a skill/tool? → Add a pitfall to the relevant `skills/*/SKILL.md` file (create a `## Pitfalls` section if needed)
    - Is it a general operational rule? → Extract the lesson to `memory/core/LEARNINGS.md`
    - Is it critical enough for automated prevention? → Create a guard (file check, validation step) and document it in `memory/procedural/`
 
