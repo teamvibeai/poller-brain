@@ -20,13 +20,27 @@
  *
  * There is no "--apply --all" / blind-trust-everything mode on purpose.
  *
+ * SPAN SELECTORS (poller-brain#334): a key can have MORE THAN ONE candidate
+ * — e.g. its own real entry, and an unrelated entry that merely mentions the
+ * key once in passing (a cross-reference bullet inside a DIFFERENT key's
+ * entry, which the parser reads as its own single-key "entry" — a known,
+ * documented false-positive shape). A bare `--only MEM-25` is only accepted
+ * when MEM-25 has exactly ONE candidate; with 2+, it's rejected as
+ * ambiguous and you must disambiguate with `MEM-25@<entryStartLine>` (the
+ * line number `mem-learnings-trim.ts` (no `--apply`) prints next to each
+ * candidate) to pick exactly the one you reviewed and approved:
+ *   npx tsx mem-learnings-trim.ts --apply --only MEM-25@67
+ * This prevents silently applying BOTH the genuine candidate and the bogus
+ * one just because they share a key.
+ *
  * Idempotent: re-running --apply with a key that's already a pointer is a
  * no-op for that key. Count-verified: aborts (exit 1) on any invariant
  * break — no silent drop.
  *
  * Usage:
- *   npx tsx mem-learnings-trim.ts                          # propose: list candidates, write nothing
+ *   npx tsx mem-learnings-trim.ts                            # propose: list candidates, write nothing
  *   npx tsx mem-learnings-trim.ts --apply --only MEM-1,MEM-5  # apply exactly these approved keys
+ *   npx tsx mem-learnings-trim.ts --apply --only MEM-25@67    # apply MEM-25's candidate at entryStartLine 67 specifically
  */
 
 import * as fs from "fs";
@@ -36,8 +50,12 @@ import {
   findLearningsTrimCandidates,
   applyLearningsTrimCandidates,
   verifyLearningsTrimStats,
+  parseOnlySelectors,
+  groupCandidatesByKey,
+  unambiguousHeadlineKeys,
   type DestinationFile,
   type LearningsTrimCandidate,
+  type OnlySelector,
   type UnreliableHook,
 } from "./lib/mem-learnings-trim-core.js";
 import type { IndexRejection } from "./lib/citation-detect.js";
@@ -80,25 +98,58 @@ function collectDestinations(): DestinationFile[] {
   return destinations;
 }
 
-function parseOnlyFlag(): string[] | null {
+function parseOnlyFlag(): OnlySelector[] | null {
   const idx = process.argv.indexOf("--only");
   if (idx === -1) return null;
   const raw = process.argv[idx + 1];
   if (!raw) {
-    console.error("--only requires a comma-separated key list, e.g. --only MEM-1,MEM-5");
+    console.error(
+      "--only requires a comma-separated key list, e.g. --only MEM-1,MEM-5 " +
+        "(or MEM-25@67 to disambiguate a key with more than one candidate)"
+    );
     process.exit(1);
   }
-  return raw.split(",").map((k) => k.trim()).filter(Boolean);
+  try {
+    return parseOnlySelectors(raw);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
 }
 
 function printProposals(candidates: LearningsTrimCandidate[]): void {
+  const byKey = groupCandidatesByKey(candidates);
+  const selectorFor = (c: LearningsTrimCandidate): string =>
+    byKey.get(c.key)!.length > 1 ? `${c.key}@${c.entryStartLine}` : c.key;
+
+  // DevGuru catch (poller-brain#334 review round 1, blocking 2): the
+  // headline copy-paste command used to pre-expand to EVERY candidate,
+  // including ALL span selectors for an ambiguous key — copy-pasting it
+  // verbatim applied both the genuine candidate and the bogus cross-ref
+  // one, silently overwriting the cross-ref bullet with a duplicate
+  // pointer (verify checks stay green because distinct-key count doesn't
+  // change). The headline now only lists keys with exactly ONE candidate
+  // (`unambiguousHeadlineKeys`); ambiguous keys are left OUT on purpose and
+  // called out below, so copy-pasting the headline can never apply more
+  // than one candidate for the same key — a reviewer must explicitly pick a
+  // span selector per ambiguous key from the per-candidate list.
+  const unambiguousKeys = unambiguousHeadlineKeys(candidates);
+  const ambiguousKeys = [...new Set(candidates.filter((c) => byKey.get(c.key)!.length > 1).map((c) => c.key))];
+
   console.log(`${candidates.length} trim candidate(s) found. Nothing written — review, then apply with:`);
-  console.log(`  npx tsx mem-learnings-trim.ts --apply --only ${candidates.map((c) => c.key).join(",") || "<keys>"}`);
-  console.log("(or a hand-picked subset of the keys below)\n");
+  console.log(`  npx tsx mem-learnings-trim.ts --apply --only ${unambiguousKeys.join(",") || "<keys>"}`);
+  if (ambiguousKeys.length > 0) {
+    console.log(
+      `(${ambiguousKeys.length} key(s) have 2+ candidates and are deliberately NOT in the command above — ` +
+        `pick a span selector (MEM-N@<line>, shown below) for each and add it by hand: ${ambiguousKeys.join(", ")})\n`
+    );
+  } else {
+    console.log("(or a hand-picked subset of the keys above)\n");
+  }
   for (const c of candidates) {
     const span = c.entryStartLine === c.entryEndLine ? `${c.entryStartLine}` : `${c.entryStartLine}-${c.entryEndLine}`;
     const marker = c.format === "heading" ? "###" : "-";
-    console.log(`${c.key} (LEARNINGS.md:${span}, ${c.format} entry) → ${c.file}:${c.line}`);
+    console.log(`${selectorFor(c)} (LEARNINGS.md:${span}, ${c.format} entry) → ${c.file}:${c.line}`);
     console.log(`  citing line:      ${c.lineText.trim()}`);
     // Must match applyLearningsTrimCandidates' actual write, verbatim — a
     // reviewer approves THIS text (DevGuru catch, poller-brain#300 review
@@ -220,17 +271,45 @@ function main(): void {
 
   printParseSummary({ totalEntries, multiKeyEntries, alreadyPointer, candidates });
 
-  const approved = new Set(onlyKeys!);
-  const unknown = [...approved].filter((k) => !candidates.some((c) => c.key === k));
-  if (unknown.length > 0) {
+  const byKey = groupCandidatesByKey(candidates);
+  const toApply: LearningsTrimCandidate[] = [];
+  const errors: string[] = [];
+  for (const sel of onlyKeys!) {
+    const forKey = byKey.get(sel.key) ?? [];
+    if (sel.line === null) {
+      if (forKey.length === 0) {
+        errors.push(`${sel.key}: no trim candidate (not found, or already a pointer)`);
+      } else if (forKey.length > 1) {
+        errors.push(
+          `${sel.key}: ${forKey.length} candidates (entryStartLine ${forKey
+            .map((c) => c.entryStartLine)
+            .join(", ")}) — ambiguous, a bare key is not enough. Use a span selector, ` +
+            `e.g. --only ${sel.key}@${forKey[0].entryStartLine}`
+        );
+      } else {
+        toApply.push(forKey[0]);
+      }
+    } else {
+      const match = forKey.find((c) => c.entryStartLine === sel.line);
+      if (!match) {
+        errors.push(
+          `${sel.key}@${sel.line}: no candidate at that entryStartLine — available: ` +
+            `${forKey.map((c) => c.entryStartLine).join(", ") || "(none)"}`
+        );
+      } else {
+        toApply.push(match);
+      }
+    }
+  }
+  if (errors.length > 0) {
     console.error(
-      `--only lists key(s) with no trim candidate (not found, or already a pointer): ${unknown.join(", ")}. ` +
-        `Aborting — no write performed.`
+      [`--only has unresolved selector(s):`, ...errors.map((e) => `  ${e}`), `Aborting — no write performed.`].join(
+        "\n"
+      )
     );
     process.exit(1);
   }
 
-  const toApply = candidates.filter((c) => approved.has(c.key));
   const { learnings, stats } = applyLearningsTrimCandidates(learningsBefore, toApply);
 
   // Machine count-verify BEFORE writing — throws (→ exit 1) on any violation.
