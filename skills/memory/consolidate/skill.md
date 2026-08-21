@@ -241,9 +241,9 @@ If `memory/semantic/` doesn't exist or is empty, skip this step and set `selfAss
 
 ### 5c. LEARNINGS.md Gradual Reduction
 
-If `memory/core/LEARNINGS.md` exceeds 5000 bytes, perform **one** small archival per consolidation cycle. This mirrors Step 9c (CLAUDE.md reduction) but for lessons memory — without this step, LEARNINGS.md grows monotonically because promotion appends new entries but never retires resolved or superseded ones.
+If `memory/core/LEARNINGS.md` exceeds its threshold, perform **one** small archival per consolidation cycle. This mirrors Step 9c (CLAUDE.md reduction) but for lessons memory — without this step, LEARNINGS.md grows monotonically because promotion appends new entries but never retires resolved or superseded ones.
 
-**Preflight:** Run `wc -c memory/core/LEARNINGS.md`. If under 5000 bytes, skip this step entirely. If over 5000 bytes, proceed.
+**Preflight:** Run `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-scaled-threshold.ts" --mode learnings` (see Step 9b's "Scaled thresholds" note — `teamvibeai/poller-brain#324`). If `overCap` is false, skip this step entirely. If true, proceed.
 
 1. **Identify one archival candidate** (1–3 oldest entries) in `LEARNINGS.md` that meets ANY of:
    - Has a `[MEM-NNN]` key whose status in `memory/MEM_REGISTRY.md` is `OBSOLETE` or `REMOVED` (i.e., the lesson has already been superseded via the MEM lifecycle in Step 1c)
@@ -282,7 +282,7 @@ Different brains write `LEARNINGS.md` in different conventions — a top-level `
 
 > **False-positive shape #5 — a key can have MORE THAN ONE candidate (`teamvibeai/poller-brain#334`).** A cross-reference bullet inside a DIFFERENT key's entry (e.g. "...same fix as `[MEM-25]`") can itself parse as its own single-key "entry", alongside `MEM-25`'s own real entry — two candidates sharing one key, only one of them genuine. The propose output's headline copy-paste command deliberately omits any key with 2+ candidates; disambiguate with a span selector, `MEM-N@<entryStartLine>` (the line number printed next to each candidate) — see step 3.
 
-If the Memory Metrics table (Step 9b) shows `LEARNINGS.md` exceeding 5000 bytes, run the deterministic trim script:
+If the Memory Metrics table (Step 9b) shows `LEARNINGS.md` over its (scaled) threshold, run the deterministic trim script:
 
 ```bash
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts"
@@ -295,7 +295,7 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts"
 3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts" --apply --only MEM-1,MEM-5,...`. A key with only one candidate takes a bare key; a key with 2+ candidates (false-positive shape #5 above) is rejected as ambiguous unless you disambiguate with `MEM-N@<entryStartLine>`, e.g. `--only MEM-25@67,MEM-5`. The script count-verifies before writing — it aborts (exit 1) without writing if `LEARNINGS.md` would grow or if the set of distinct `MEM-N` keys cited in the file would change.
 4. **Log it** in the markdown report under `## LEARNINGS.md Promoted-Entry Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), size delta, and the verify checks.
 5. **Report tracking:** add `memory/core/LEARNINGS.md` to `filesChanged` when anything was applied (skip when nothing was proposed, or nothing was approved).
-6. If `LEARNINGS.md` is under 5000 bytes, or nothing is proposed, skip logging this step.
+6. If `LEARNINGS.md` is under its (scaled) threshold, or nothing is proposed, skip logging this step.
 
 An entry the script cannot find cited anywhere (or only ever cited ambiguously, or bundles multiple keys) is left with its full narrative — that's expected, not a failure.
 
@@ -338,6 +338,8 @@ Pick the trim target **by property, not by section name** — SUMMARY structure 
 The 9000 B cap is a soft bound that keeps the always-in-context SUMMARY.md from crowding the working context. Encoding the trigger here removes the prior reliance on reflection-cycle recommendation chaining, where the same trim was re-proposed across cycles without ever landing (`teamvibeai/poller-brain#186`).
 
 ### 7. Archive Old Daily Logs
+
+This 30-day figure is also restated in base-brain `CLAUDE.md`'s memory-persistence rules (always in context, unlike this skill, which only loads during consolidation) — if this threshold ever changes, update that mention too so the two don't drift apart the way `MAINTENANCE.md` and this file did (`teamvibeai/poller-brain#318`).
 
 For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older than 30 days:
 - **Delete them.** Their content has already been promoted to long-term memory in steps 2–4.
@@ -415,6 +417,8 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 - `CLAUDE.md`, `memory/SUMMARY.md`, `memory/TODAY.md`, `memory/MEM_REGISTRY.md`
 - `memory/core/LEARNINGS.md`, `memory/core/PREFERENCES.md`, `memory/core/MISTAKES.md`
 
+For `LEARNINGS.md` and `MEM_REGISTRY.md`, don't compare the size against a flat number — run the scaled-threshold script instead (see **Scaled thresholds** below) and use its printed `threshold` value in the table.
+
 **Include this table in the markdown report:**
 ```markdown
 ## Memory Metrics
@@ -422,8 +426,8 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 |------|-------------|-----------|--------|
 | CLAUDE.md | 2800 | 10000 | :white_check_mark: |
 | SUMMARY.md | 4200 | 9000 | :white_check_mark: |
-| LEARNINGS.md | 3100 | 5000 | :white_check_mark: |
-| MEM_REGISTRY.md | 800 | 5000 | :white_check_mark: |
+| LEARNINGS.md | 3100 | 5000 (scaled, 7 entries) | :white_check_mark: |
+| MEM_REGISTRY.md | 800 | 5000 (scaled, 3 rows) | :white_check_mark: |
 | PREFERENCES.md | 2100 | 5000 | :white_check_mark: |
 | MISTAKES.md | 0 | — | — |
 | TODAY.md | 1100 | — | — |
@@ -432,9 +436,18 @@ Measure sizes of key memory files and include a `## Memory Metrics` section in t
 **Thresholds** (flag as :warning: if exceeded):
 - `CLAUDE.md` > 10000 — risk: instruction overload
 - `SUMMARY.md` > 9000 — risk: context bloat
-- `LEARNINGS.md` > 5000 — risk: too many rules to follow (reduction paths: Step 5c archival, Step 5d promoted-bullet trim)
-- `MEM_REGISTRY.md` > 5000 — risk: registry too large (archive REMOVED entries, trim promoted ACTIVE rows)
-- `PREFERENCES.md` > 5000 — risk: preference set too large to track reliably. Same 5000B convention as LEARNINGS.md/MEM_REGISTRY.md, added `teamvibeai/poller-brain#300` — previously untracked, meaning a brain could accumulate an unbounded PREFERENCES.md with no signal in this report. **Tracking only for now**: flag :warning: when exceeded, but there is no dedicated reduction step yet (no Step 9f) — a brain that trips this threshold should be flagged in `processImprovements` (Step 11) rather than silently reported. A reduction mechanism can reuse the same citation-based trim pattern as Step 5d/9e once real over-threshold data justifies building it.
+- `LEARNINGS.md` — risk: too many rules to follow (reduction paths: Step 5c archival, Step 5d promoted-bullet trim)
+- `MEM_REGISTRY.md` — risk: registry too large (archive REMOVED entries, trim promoted ACTIVE rows)
+- `PREFERENCES.md` > 5000 — risk: preference set too large to track reliably. Same 5000B convention originally shared with LEARNINGS.md/MEM_REGISTRY.md, added `teamvibeai/poller-brain#300` — previously untracked, meaning a brain could accumulate an unbounded PREFERENCES.md with no signal in this report. **Tracking only for now**: flag :warning: when exceeded, but there is no dedicated reduction step yet (no Step 9f) — a brain that trips this threshold should be flagged in `processImprovements` (Step 11) rather than silently reported. A reduction mechanism can reuse the same citation-based trim pattern as Step 5d/9e once real over-threshold data justifies building it. **Deliberately stays on the flat 5000B cap** (not scaled like its two siblings below) — PREFERENCES.md has no enforced entry format and no existing parser, so there's nothing reliable to scale against yet; revisit once a reduction mechanism exists.
+
+**Scaled thresholds for `LEARNINGS.md` / `MEM_REGISTRY.md`** (`teamvibeai/poller-brain#324`, `teamvibeai/poller-brain#300`): both files are lifecycle-append-only in practice — a mature, `ACTIVE`-heavy brain's row/entry count only grows, since the reduction gates (Step 5c/5d/9d/9e) only ever touch `OBSOLETE`/`REMOVED`-keyed or demonstrably-duplicated content, never live `ACTIVE` narrative. A flat 5000B cap on such a file isn't a "trim harder" signal, it's mathematically unreachable past a certain row/entry count — verified on `teamvibeai/poller-brain#324`: 58 registry rows × 85B (shortest real row) + 231B overhead = 5161B, already over cap with every row at its practical minimum. Run:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-scaled-threshold.ts" --mode registry
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-scaled-threshold.ts" --mode learnings
+```
+
+Each prints size, row/entry count, and `threshold = max(5000, overhead + count × per-item bytes)` — the `max(5000, …)` keeps the original floor for small/young brains, so a file with few rows/entries doesn't get an artificially tight threshold. Use the printed `threshold` (not a flat 5000) everywhere this skill compares LEARNINGS.md/MEM_REGISTRY.md against "the cap" (this table, Step 5c preflight, Step 5d/9d/9e triggers). See `lib/mem-scaled-threshold-core.ts` for the exact constants and their derivation.
 
 #### 9c. CLAUDE.md Gradual Reduction
 
@@ -469,7 +482,7 @@ This ensures steady progress toward the threshold while allowing time to detect 
 
 > **Scope — mechanical only.** This automates relocation of *dead* data (rows already marked REMOVED via the MEM lifecycle). It does **not** touch ACTIVE/OBSOLETE rows or inline policy prose (e.g. HOLD-rule sections) — relocating live content is a semantic judgment that stays with reflection, not this automated step. On registries whose bulk is live prose, the byte target may need a complementary manual prose move; that is out of scope here.
 
-If the Memory Metrics table (Step 9b) shows `MEM_REGISTRY.md` exceeding 5000 bytes, run the deterministic archival script:
+If the Memory Metrics table (Step 9b) shows `MEM_REGISTRY.md` over its (scaled) threshold, run the deterministic archival script:
 
 ```bash
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-archive.ts"
@@ -481,7 +494,7 @@ The script is **idempotent** (a second consecutive run is a byte-identical no-op
 2. **On non-zero exit**, treat it as an integrity alarm: do NOT commit a partial state, and record the failure in the report. Investigate before retrying.
 3. **Log it** in the markdown report under `## MEM_REGISTRY Archival`: relocated keys, size delta, and the three verify checks (`round-trip`, `count`, `live REMOVED == 0`).
 4. **Report tracking:** add `memory/MEM_REGISTRY.md` and `memory/MEM_REGISTRY_ARCHIVE.md` to `filesChanged` when the script relocated any rows (skip both when it was a no-op).
-5. If `MEM_REGISTRY.md` is under 5000 bytes, or the script reports a no-op, skip logging this step.
+5. If `MEM_REGISTRY.md` is under its (scaled) threshold, or the script reports a no-op, skip logging this step.
 
 The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries archived to [MEM_REGISTRY_ARCHIVE.md](...) — Keys: ...` — so the audit trail stays navigable from the live registry. The key list in the stub also keeps the `mem-write.ts` next-key counter correct (it additionally scans the archive as defense-in-depth).
 
@@ -505,7 +518,7 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts"
 3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts" --apply --only MEM-1,MEM-5,...`. The script performs its own **count-verify** before writing — it aborts (exit 1) without writing if the registry would grow or if its row/citation counts don't add up.
 4. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), size delta, and the verify checks.
 5. **Report tracking:** add `memory/MEM_REGISTRY.md` to `filesChanged` when anything was applied (skip when nothing was proposed, or nothing was approved).
-6. If `MEM_REGISTRY.md` is under 5000 bytes, or nothing is proposed, skip logging this step.
+6. If `MEM_REGISTRY.md` is under its (scaled) threshold, or nothing is proposed, skip logging this step.
 
 **Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** no scanning is involved — you already know the exact key, destination file, and line with certainty, because you just wrote and verified it yourself moments earlier. Apply it immediately: `--apply --only <that key>`. This is safe without a human review pass precisely because there's no ambiguity to review — unlike the backfill path, nothing was *found*, it was *authored*.
 
