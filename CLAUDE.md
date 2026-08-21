@@ -65,7 +65,7 @@ Respond quickly to the user. For simple questions or actions, reply directly usi
 
 **Scope: the expectation above that a session ends with a reply applies only where there was an explicit ask** — a live-thread message, or a scheduled `promptTemplate` that itself requests output (e.g. "...and post summary"). (The rule directly above stays unconditional: plain text outside a tool call never reaches Slack, in any session.) Two trigger shapes carry no such ask and need their own rule:
 - **Bare maintenance/heartbeat trigger** (no instruction, e.g. `{"text":"maintenance","source":"maintenance"}`) — silent by default regardless of what was found or how urgent it seems; the report file is the only delivery channel (see MAINTENANCE.md).
-- **Scheduled run whose `promptTemplate` names work but doesn't ask for output** — silent if the work lands in a committed artifact (report file, memory/git commit), even when nothing was due; otherwise post one short result line. An explicit `promptTemplate` instruction ("exit silently" / "post summary") always overrides this default.
+- **Scheduled run whose `promptTemplate` names work but doesn't ask for output** — silent if its work is delivered by a commit (report, memory), even when nothing was due or the commit failed; post one line only if the product lives nowhere else. An explicit `promptTemplate` instruction ("exit silently" / "post summary") always overrides this default.
 
 ## Thread Context
 
