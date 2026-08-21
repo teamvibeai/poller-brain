@@ -7,9 +7,13 @@
  * Step 5c only archives a LEARNINGS.md entry when its `[MEM-NNN]` key is
  * OBSOLETE/REMOVED in MEM_REGISTRY.md, or when a resolved episodic
  * follow-up exists. On a mature brain, load-bearing lessons stay ACTIVE
- * forever, so that gate rarely fires — LEARNINGS.md grows monotonically
- * with no reachable reduction path (measured: tiketo-dev 43147B, 8.6x the
- * 5000B cap, 9 consecutive "no safe candidate" cycles).
+ * forever; before poller-brain#335's pointer-stub fix, that made the
+ * resolved-episodic-follow-up branch unreachable too (a blanket "never
+ * archive ACTIVE" ban vetoed it), so the gate rarely fired at all —
+ * LEARNINGS.md grew monotonically with no reachable reduction path
+ * (measured: tiketo-dev 43147B, 8.6x the 5000B cap, 9 consecutive "no safe
+ * candidate" cycles). #335 reopened that branch for ACTIVE keys via a
+ * pointer stub — this module's target case (below) stays distinct from it.
  *
  * This module targets a DIFFERENT, narrower case than Step 5c: an entry
  * that started as a short lesson but later got a full incident writeup in
