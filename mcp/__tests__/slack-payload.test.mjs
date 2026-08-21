@@ -203,12 +203,12 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
 // live probe (2026-08-19) additionally caught pins.list failing the same way as
 // chat.getPermalink; the pre-fix test suite passed 169/169 while pins.list was broken,
 // because the old asserts only named the ticket's one method instead of every call site.
-// jsonEncoded below = the 10 methods currently on the JSON branch (poller-brain#348):
-// 9 confirmed-safe + users.info, which is unverified pending poller-brain#349 — kept here
-// because its branch doesn't change, not because it's been confirmed.
+// jsonEncoded below = the 9 confirmed-safe methods on the JSON branch (poller-brain#348).
+// users.info moved to formEncoded in poller-brain#349 (live-confirmed to reject JSON
+// bodies with user_not_found).
 {
-  const formEncoded = ['conversations.info', 'conversations.replies', 'conversations.history', 'conversations.setTopic', 'conversations.setPurpose', 'files.getUploadURLExternal', 'files.completeUploadExternal', 'chat.getPermalink', 'pins.list']
-  const jsonEncoded = ['auth.test', 'users.info', 'chat.postMessage', 'chat.update', 'reactions.add', 'reactions.remove', 'bookmarks.list', 'assistant.threads.setStatus', 'pins.add', 'pins.remove']
+  const formEncoded = ['conversations.info', 'conversations.replies', 'conversations.history', 'conversations.setTopic', 'conversations.setPurpose', 'files.getUploadURLExternal', 'files.completeUploadExternal', 'chat.getPermalink', 'pins.list', 'users.info']
+  const jsonEncoded = ['auth.test', 'chat.postMessage', 'chat.update', 'reactions.add', 'reactions.remove', 'bookmarks.list', 'assistant.threads.setStatus', 'pins.add', 'pins.remove']
   for (const m of formEncoded) ok(`k ${m} form-encoded`, needsFormEncoding(m))
   for (const m of jsonEncoded) ok(`k ${m} JSON-encoded`, !needsFormEncoding(m))
 }
