@@ -337,6 +337,8 @@ The 9000 B cap is a soft bound that keeps the always-in-context SUMMARY.md from 
 
 ### 7. Archive Old Daily Logs
 
+This 30-day figure is also restated in base-brain `CLAUDE.md`'s memory-persistence rules (always in context, unlike this skill, which only loads during consolidation) — if this threshold ever changes, update that mention too so the two don't drift apart the way `MAINTENANCE.md` and this file did (`teamvibeai/poller-brain#318`).
+
 For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older than 30 days:
 - **Delete them.** Their content has already been promoted to long-term memory in steps 2–4.
 - Do NOT create weekly summary files (`weekly-*.md`) — they accumulate in `memory/daily/` and eventually become stale files themselves, causing this step to fail in future runs.
