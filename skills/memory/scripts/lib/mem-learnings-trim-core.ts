@@ -136,6 +136,18 @@ function entryFormatOf(line: string): EntryFormat | null {
   return null;
 }
 
+/**
+ * Number of parsed entries (bullet or heading format) in a LEARNINGS.md-
+ * shaped file. Exposed for `mem-scaled-threshold.ts` (poller-brain#324,
+ * poller-brain#300) so the row-count-driven threshold check reuses the
+ * exact same entry-boundary parser Step 5d already depends on, instead of
+ * a second ad-hoc `- ` / `### ` regex that could silently drift out of
+ * sync with this one and undercount a heading-format brain.
+ */
+export function countLearningsEntries(text: string): number {
+  return parseEntries(text).entries.length;
+}
+
 /** Split `text` into entry spans. Lines before the first entry start (title, blank lines) belong to no entry. */
 function parseEntries(text: string): { entries: Entry[]; lines: string[] } {
   const lines = text.split("\n");
