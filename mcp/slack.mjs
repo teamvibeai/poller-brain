@@ -73,7 +73,6 @@ function textToSections(text, maxLen = 2900) {
 // adding a method here, probe it live rather than assuming by analogy.
 const JSON_SAFE_METHODS = new Set([
   'auth.test',
-  'users.info', // unverified — pending poller-brain#349 (candidate cause of list_thread_participants degradation, do not treat as confirmed-safe)
   'chat.postMessage',
   'chat.update',
   'reactions.add',
@@ -629,10 +628,9 @@ async function resolveDisplayName(userId) {
     _userInfoCache.set(userId, name)
     return name
   } catch (err) {
-    // users.info is currently degrading silently in production (returns raw userId).
-    // Root cause not yet diagnosed — could be the same JSON-body issue as pb#345, or a
-    // missing users:read scope. Logged so the next occurrence is diagnosable instead of
-    // silently swallowed; do not guess-fix the encoding here (poller-brain#345 review).
+    // Root-caused and fixed in poller-brain#349: users.info was in JSON_SAFE_METHODS but
+    // actually rejects a JSON body (returns user_not_found), same class as pb#345. Kept
+    // logged in case a different failure mode shows up here in the future.
     console.error(`resolveDisplayName(${userId}) failed: ${err.message}`)
     _userInfoCache.set(userId, userId)
     return userId

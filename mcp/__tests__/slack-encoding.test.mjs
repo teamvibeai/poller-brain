@@ -2,12 +2,12 @@
 // Locks the design decision: form-encoding is the default, JSON is a NAMED
 // EXCEPTION granted per-method only once confirmed safe (never inferred from a
 // namespace or verb — see the code comment above JSON_SAFE_METHODS). Covers the
-// 10 methods currently on the JSON branch (9 confirmed-safe + users.info, which
-// is unverified pending poller-brain#349 — its branch doesn't change here, it's
-// just not being claimed as confirmed), plus two cases that guard against
-// silently reintroducing a prefix/namespace rule: an unknown method inside an
-// otherwise JSON-safe namespace, and a known-risky read/list method inside a
-// namespace that has an unrelated JSON-safe sibling.
+// 9 confirmed-safe methods currently on the JSON branch, plus two cases that
+// guard against silently reintroducing a prefix/namespace rule: an unknown
+// method inside an otherwise JSON-safe namespace, and a known-risky read/list
+// method inside a namespace that has an unrelated JSON-safe sibling. users.info
+// moved to the form branch in poller-brain#349 (live-confirmed to reject JSON
+// bodies with user_not_found; users:read scope was never the issue).
 // slack.mjs auto-starts a stdio server on import, so we load just the pure
 // prelude (everything before the transport section) and export-by-eval the
 // helpers. No network, no Slack. Run: node mcp/__tests__/slack-encoding.test.mjs
@@ -24,12 +24,10 @@ const { needsFormEncoding, encodeFormBody } = mod
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
 
-// 1) the 10 methods currently on the JSON branch stay there (zero regression) —
-//    9 confirmed-safe + users.info (unverified, see file header)
+// 1) the 9 confirmed-safe methods on the JSON branch stay there (zero regression)
 {
   const jsonSafe = [
     'auth.test',
-    'users.info',
     'chat.postMessage',
     'chat.update',
     'reactions.add',
@@ -52,10 +50,11 @@ const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++;
   ok('3 reactions.list → form', needsFormEncoding('reactions.list') === true)
 }
 
-// 4) previously form-encoded methods stay on form (zero regression)
+// 4) previously form-encoded methods stay on form (zero regression), plus
+//    users.info newly moved to form in poller-brain#349
 {
-  const formMethods = ['conversations.info', 'conversations.replies', 'conversations.history', 'files.getUploadURLExternal', 'chat.getPermalink', 'pins.list']
-  for (const m of formMethods) ok(`4 ${m} → form (unchanged)`, needsFormEncoding(m) === true)
+  const formMethods = ['conversations.info', 'conversations.replies', 'conversations.history', 'files.getUploadURLExternal', 'chat.getPermalink', 'pins.list', 'users.info']
+  for (const m of formMethods) ok(`4 ${m} → form`, needsFormEncoding(m) === true)
 }
 
 // 5) encodeFormBody drops undefined/null values instead of serializing the literal string
