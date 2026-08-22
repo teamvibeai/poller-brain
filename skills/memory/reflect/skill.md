@@ -35,6 +35,8 @@ Scan all memory files for information that may be outdated:
 
 **Action:** Mark stale entries with `[STALE?]` or archive to `memory/episodic/archive/`
 
+**Deletion logging (required at point of deletion):** For every file you delete in this step, immediately add a `decisions` entry before removing the file: `"Deleted [path] — content merged into [specific/destination/file.md]"` OR `"Deleted [path] — content fully superseded by [specific/existing/file.md]"`. Generic phrases like "archived" or "no data loss" without naming the specific file DO NOT qualify. Log first, delete second — this evidence is required for `deletion-with-preservation-evidence`.
+
 ### 2. Contradiction Check
 
 Look for conflicting information across memory files:
@@ -81,6 +83,8 @@ Review memory files for bloat:
 - MEMORY.md should be under 100 lines
 
 **Action:** Split, prune, or archive as needed.
+
+**Deletion logging (required at point of deletion):** For every file deleted or replaced during this step, immediately add a `decisions` entry: `"Deleted [path] — split into [file-a.md] and [file-b.md]"` OR `"Deleted [path] — content merged into [specific/file.md]"` OR `"Deleted [path] — content redundant with [specific/existing/file.md]"`. Log the specific destination(s) before deleting. This is required evidence for `deletion-with-preservation-evidence` — generic "pruned" or "archived" entries without named files fail the criterion.
 
 ## Output
 
