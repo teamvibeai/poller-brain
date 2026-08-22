@@ -7,9 +7,13 @@
  * Step 5c only archives a LEARNINGS.md entry when its `[MEM-NNN]` key is
  * OBSOLETE/REMOVED in MEM_REGISTRY.md, or when a resolved episodic
  * follow-up exists. On a mature brain, load-bearing lessons stay ACTIVE
- * forever, so that gate rarely fires — LEARNINGS.md grows monotonically
- * with no reachable reduction path (measured: tiketo-dev 43147B, 8.6x the
- * 5000B cap, 9 consecutive "no safe candidate" cycles).
+ * forever; before poller-brain#335's pointer-stub fix, that made the
+ * resolved-episodic-follow-up branch unreachable too (a blanket "never
+ * archive ACTIVE" ban vetoed it), so the gate rarely fired at all —
+ * LEARNINGS.md grew monotonically with no reachable reduction path
+ * (measured: tiketo-dev 43147B, 8.6x the 5000B cap, 9 consecutive "no safe
+ * candidate" cycles). #335 reopened that branch for ACTIVE keys via a
+ * pointer stub — this module's target case (below) stays distinct from it.
  *
  * This module targets a DIFFERENT, narrower case than Step 5c: an entry
  * that started as a short lesson but later got a full incident writeup in
@@ -134,6 +138,18 @@ function entryFormatOf(line: string): EntryFormat | null {
   if (HEADING_START_RE.test(line)) return "heading";
   if (BULLET_START_RE.test(line)) return "bullet";
   return null;
+}
+
+/**
+ * Number of parsed entries (bullet or heading format) in a LEARNINGS.md-
+ * shaped file. Exposed for `mem-scaled-threshold.ts` (poller-brain#324,
+ * poller-brain#300) so the row-count-driven threshold check reuses the
+ * exact same entry-boundary parser Step 5d already depends on, instead of
+ * a second ad-hoc `- ` / `### ` regex that could silently drift out of
+ * sync with this one and undercount a heading-format brain.
+ */
+export function countLearningsEntries(text: string): number {
+  return parseEntries(text).entries.length;
 }
 
 /** Split `text` into entry spans. Lines before the first entry start (title, blank lines) belong to no entry. */
@@ -421,6 +437,75 @@ export function applyLearningsTrimCandidates(
       distinctKeysAfter: countDistinctEntryKeys(newLearnings),
     },
   };
+}
+
+export interface OnlySelector {
+  key: string;
+  /** null = bare key (no `@line` suffix). */
+  line: number | null;
+}
+
+/**
+ * Pure parser for a `--only` flag value (comma-separated bare keys and/or
+ * `MEM-N@<entryStartLine>` span selectors) — no argv/process.exit, throws on
+ * a malformed token so it's unit-testable without mocking either
+ * (poller-brain#334 review round 1, nonblocking 1: the CLI's original
+ * inline version silently dropped extra "@"-segments — `tok.split("@")`
+ * destructuring only reads the first two array elements, so
+ * `"MEM-25@3@9"` parsed as `line=3` with no error at all — and `Number()`
+ * accepts non-decimal forms like `"0x3"`). Requires exactly one "@" and a
+ * plain decimal digit run for the line part.
+ */
+export function parseOnlySelectors(raw: string): OnlySelector[] {
+  return raw
+    .split(",")
+    .map((tok) => tok.trim())
+    .filter(Boolean)
+    .map((tok) => {
+      const parts = tok.split("@");
+      if (parts.length > 2) {
+        throw new Error(`--only span selector "${tok}" has more than one "@" — expected MEM-N@<entryStartLine>`);
+      }
+      const [key, lineStr] = parts;
+      if (lineStr === undefined) return { key, line: null };
+      if (!/^\d+$/.test(lineStr)) {
+        throw new Error(
+          `--only span selector "${tok}" has an invalid line number — expected MEM-N@<entryStartLine> (digits only)`
+        );
+      }
+      const line = Number(lineStr);
+      if (line <= 0) {
+        throw new Error(`--only span selector "${tok}" has an invalid line number — expected MEM-N@<entryStartLine>`);
+      }
+      return { key, line };
+    });
+}
+
+/** Groups candidates by key — used both to print `@line` hints only where actually needed, and to resolve `--only` selectors. */
+export function groupCandidatesByKey(candidates: LearningsTrimCandidate[]): Map<string, LearningsTrimCandidate[]> {
+  const byKey = new Map<string, LearningsTrimCandidate[]>();
+  for (const c of candidates) {
+    if (!byKey.has(c.key)) byKey.set(c.key, []);
+    byKey.get(c.key)!.push(c);
+  }
+  return byKey;
+}
+
+/**
+ * Keys with exactly ONE candidate — the only ones safe to list in the
+ * headline copy-paste `--apply --only ...` command (poller-brain#334 review
+ * round 1, blocking 2): the CLI's original headline pre-expanded to EVERY
+ * candidate, including all span selectors for an ambiguous key, so
+ * copy-pasting it verbatim applied both the genuine candidate and a bogus
+ * cross-ref one — overwriting the cross-ref bullet with a duplicate
+ * pointer, silently, since the count-verify checks don't change (two
+ * pointers for the same key don't change the distinct-key count). Ambiguous
+ * keys are deliberately excluded here; a reviewer must pick a span selector
+ * for each by hand.
+ */
+export function unambiguousHeadlineKeys(candidates: LearningsTrimCandidate[]): string[] {
+  const byKey = groupCandidatesByKey(candidates);
+  return candidates.filter((c) => byKey.get(c.key)!.length === 1).map((c) => c.key);
 }
 
 /**

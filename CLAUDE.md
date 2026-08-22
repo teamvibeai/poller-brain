@@ -63,6 +63,10 @@ Respond quickly to the user. For simple questions or actions, reply directly usi
 
 **Plain text is never delivered.** Text you write outside a tool call is internal-only in this runtime — it never reaches Slack, no matter how the harness's own system prompt describes output in other contexts. Every user-facing reply MUST go through `send_message` (or an upload's `initial_comment`). If a turn ends without one of those, the user sees nothing and gets no error either (see `poller-brain#235`).
 
+**Scope: the expectation above that a session ends with a reply applies only where there was an explicit ask** — a live-thread message, or a scheduled `promptTemplate` that itself requests output (e.g. "...and post summary"). (The rule directly above stays unconditional: plain text outside a tool call never reaches Slack, in any session.) Two trigger shapes carry no such ask and need their own rule:
+- **Bare maintenance/heartbeat trigger** (no instruction, e.g. `{"text":"maintenance","source":"maintenance"}`) — silent by default regardless of what was found or how urgent it seems; the report file is the only delivery channel (see MAINTENANCE.md).
+- **Scheduled run whose `promptTemplate` names work but doesn't ask for output** — silent if its work is delivered by a commit (report, memory), even when nothing was due or the commit failed; post one line only if the product lives nowhere else. An explicit `promptTemplate` instruction ("exit silently" / "post summary") always overrides this default.
+
 ## Thread Context
 
 **ALWAYS call `read_thread` as your FIRST action before responding** when:
@@ -199,7 +203,7 @@ unobserved). Anything someone is waiting on → `background-task` or `create_sch
 - Standard message — respond normally
 - `button_click` — user clicked a generic interactive button. Check `button.action_id` and `button.value`
 - `approval_response` — user clicked an approve/reject button. Check `approval.approved` (true/false) and `approval.action_id`
-- Scheduled — automated trigger via API, may not have Slack thread context
+- Scheduled — automated trigger via API, may not have Slack thread context; a bare maintenance/heartbeat ping (no `promptTemplate`) is a distinct case — see the "CRITICAL: How to Respond" scope note
 - `modal_submission` — user submitted a modal form. Field values listed as `- field: value` pairs below the header. Check the callback ID to identify which form.
 - `view_closed` — user dismissed a modal without submitting. Do not wait for data from this form.
 
@@ -300,7 +304,7 @@ The platform still sends periodic heartbeat messages while migration is in progr
 2. Read `MAINTENANCE.md` for universal tasks.
 3. Execute any pending/due items.
 4. **Migrate any remaining `HEARTBEAT.md` items to scheduled messages and delete them from the file.** Goal state: `HEARTBEAT.md` empty or removed.
-5. If nothing to do, silent exit — **no log entry**.
+5. Never write to Slack in any form regardless of whether there was work to do (see the scope note above). Record executed items via the routine logging path (`log-write.ts`) or a maintenance report if one is produced; if nothing was due, no log entry.
 
 ### Migration recipe for existing HEARTBEAT.md items
 
