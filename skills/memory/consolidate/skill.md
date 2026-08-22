@@ -153,6 +153,8 @@ Route new/updated facts to appropriate locations:
 | Lessons | `memory/core/LEARNINGS.md` |
 | Mistakes | `memory/core/MISTAKES.md` |
 
+**Naming convention (enforced):** All new files created in `memory/semantic/`, `memory/episodic/`, and `memory/procedural/` MUST use kebab-case: all lowercase, hyphens only (no underscores, no spaces, no camelCase), `.md` extension. Examples: `stepforge.md`, `vest-liquidation.md`, `api-auth-flow.md`. Reject any filename that contains uppercase letters, underscores, or spaces before writing.
+
 ### 5. Promote Mistakes
 
 Review `memory/core/MISTAKES.md` for entries ready to be promoted. For each entry with status `new`:
