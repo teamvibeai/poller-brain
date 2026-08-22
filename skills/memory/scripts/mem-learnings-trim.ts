@@ -85,9 +85,9 @@ const HAS_MEM_KEY_RE = /\bMEM-\d+\b/;
 // for real via the new mistakes archive this same PR introduces. Scoped to
 // mistakes-*.md specifically (round 2 fix) — excluding the whole
 // episodic/archive/ directory also dropped episodic/archive/learnings-*.md
-// (Step 5c's own archive) as a destination, breaking 3 already-live
+// (Step 5c's own archive) as a destination, breaking 4 already-live
 // reduction paths on a real 261KB over-cap MEM_REGISTRY.md (measured:
-// 26 -> 23 candidates on the DevGuru brain).
+// 26 -> 22 candidates on the DevGuru brain).
 const MISTAKES_ARCHIVE_RE = /^episodic\/archive\/mistakes-.*\.md$/;
 
 function walk(absDir: string, relDir: string, out: DestinationFile[]): void {

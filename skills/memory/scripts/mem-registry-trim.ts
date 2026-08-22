@@ -59,8 +59,8 @@ const DEST_DIRS = ["core", "semantic", "episodic", "procedural"];
 // mistakes archive this same PR introduces. Scoped to mistakes-*.md
 // specifically (round 2 fix) — excluding the whole episodic/archive/
 // directory also dropped episodic/archive/learnings-*.md (Step 5c's own
-// archive) as a destination, breaking 3 already-live reduction paths on a
-// real 261KB over-cap MEM_REGISTRY.md (measured: 26 -> 23 candidates on the
+// archive) as a destination, breaking 4 already-live reduction paths on a
+// real 261KB over-cap MEM_REGISTRY.md (measured: 26 -> 22 candidates on the
 // DevGuru brain).
 const MISTAKES_ARCHIVE_RE = /^episodic\/archive\/mistakes-.*\.md$/;
 
