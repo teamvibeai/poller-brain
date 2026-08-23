@@ -198,27 +198,10 @@ for one. Best-effort only: it survives session teardown, not a poller restart.
 re-invokes *this* session, so after teardown nothing is delivered (the command may keep running,
 unobserved). Anything someone is waiting on → `background-task` or `create_scheduled_message`.
 
-**Same trap, easy to miss inside a single turn.** The poller's idle watchdog kills the session
-after `IDLE_WATCHDOG_KILL_MS` (default 10 min) of stdout silence, tracked purely via complete
-`stream-json` lines — a single foreground *blocking* Bash call (long build, `codex exec`, a slow
-scrape run correctly in the foreground, not via manual `&`/`nohup`) produces none of those until
-it returns. Past ~10 min this is indistinguishable from a hang to the poller: SIGTERM→SIGKILL
-lands mid-work (exit 137). This isn't a separate case from the one above — "will this call outrun
-what the watchdog tolerates" is the same question as "does it outlive my session," just harder to
-see coming for a single call. Known platform gap, not yet fixed: `teamvibeai/teamvibe.ai#106`.
-Same fix as above: launch it as a `background-task` and end your turn — don't invent your own
-`run_in_background`+poll loop for this, it's strictly worse (manual liveness bookkeeping the skill
-already does for you, and easy to get subtly wrong — see next paragraph).
-
-**Only if you genuinely can't end the turn** — later steps in this same reply depend on the
-output — `background-task` doesn't fit, since a wake is always a *new* session, never a resume.
-Fall back to `Bash(run_in_background: true)` and poll it, but **each poll must itself be a
-separate tool call.** A `sleep`/loop wrapped inside one Bash invocation
-(`for i in 1..6; do sleep 40; check-something; done`) is just as atomic and silent to the poller
-as the original blocking call — nothing streams out until that whole script exits, so it still
-trips the watchdog. Use the `Monitor` tool (streams each output line as its own notification) or
-repeated, separate Bash calls spaced out over the turn — never a `sleep`/loop inside a single
-call, even when the intent is "polling."
+This also covers a single slow call within one turn, not just multi-step jobs — a foreground
+*blocking* call (long build, `codex exec`) that runs past the poller's idle watchdog window kills
+your session mid-work the same way. See the `background-task` skill for the same-turn fallback and
+a sleep-loop trap to avoid if you truly can't end your turn.
 
 ## Message Types
 
