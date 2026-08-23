@@ -198,6 +198,17 @@ for one. Best-effort only: it survives session teardown, not a poller restart.
 re-invokes *this* session, so after teardown nothing is delivered (the command may keep running,
 unobserved). Anything someone is waiting on → `background-task` or `create_scheduled_message`.
 
+**Separate trap, inside a single turn:** the poller's idle watchdog kills the session after
+`IDLE_WATCHDOG_KILL_MS` (default 10 min) of stdout silence, and it tracks liveness purely via
+complete `stream-json` lines — a single foreground *blocking* Bash call (long build, `codex exec`,
+a slow scrape run correctly in the foreground, not via manual `&`/`nohup`) produces none of those
+until it returns. Past ~10 min this is indistinguishable from a hang to the poller: SIGTERM→SIGKILL
+lands mid-work (exit 137), even though the call never crossed a session/event boundary. This is a
+known platform gap (`teamvibeai/teamvibe.ai#106`), not yet fixed. Stopgap until it ships: for any
+single call you expect to run close to or past ~8 minutes, use `Bash(run_in_background: true)` and
+poll/`Monitor` it instead of blocking — that keeps stream-json activity flowing and resets the
+watchdog clock.
+
 ## Message Types
 
 - Standard message — respond normally
