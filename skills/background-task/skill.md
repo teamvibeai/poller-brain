@@ -22,6 +22,25 @@ node "$CLAUDE_CONFIG_DIR/skills/background-task/scripts/bg-task.mjs" \
 Then **end your turn.** Tell the user the task is running and that you'll report back.
 Do not poll, do not `sleep`, do not keep the session alive waiting.
 
+## Also the fix for one slow call, not just multi-step jobs
+
+The poller's idle watchdog kills your session after `IDLE_WATCHDOG_KILL_MS` (default 10 min) of
+stdout silence, tracked via complete stream-json lines only. A single foreground *blocking* call
+(a slow build, `codex exec`, anything with no natural progress output) produces none of those
+until it returns — past the window this looks exactly like a hang and gets killed mid-work
+(exit 137), even if you never meant for it to survive a teardown. Same trap as above, just less
+obvious for one call: run it as a background task instead of inventing your own polling loop.
+
+**If you genuinely can't end the turn** — later steps in this same reply depend on the result — a
+background task doesn't fit, since a wake is always a *new* session, never a resume. Fall back to
+`Bash(run_in_background: true)` and poll it manually, but each poll must be its own separate tool
+call: a `sleep`/loop wrapped inside one Bash invocation (`for i in 1..6; do sleep 40; check; done`)
+is just as atomic and silent to the poller as the original blocking call, and trips the watchdog
+just the same. Use the `Monitor` tool (streams each output line as its own notification) or
+repeated, separate Bash calls spaced out over the turn — never a `sleep`/loop inside a single
+call, even when the intent is "polling." Known platform gap behind this whole trap, not yet fixed:
+`teamvibeai/teamvibe.ai#106`.
+
 ## What you get back
 
 All output goes to **this thread by default** — the one the poller stamped as

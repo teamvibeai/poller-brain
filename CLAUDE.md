@@ -198,6 +198,11 @@ for one. Best-effort only: it survives session teardown, not a poller restart.
 re-invokes *this* session, so after teardown nothing is delivered (the command may keep running,
 unobserved). Anything someone is waiting on → `background-task` or `create_scheduled_message`.
 
+This also covers a single slow call within one turn, not just multi-step jobs — a foreground
+*blocking* call (long build, `codex exec`) that runs past the poller's idle watchdog window kills
+your session mid-work the same way. See the `background-task` skill for the same-turn fallback and
+a sleep-loop trap to avoid if you truly can't end your turn.
+
 ## Message Types
 
 - Standard message — respond normally
