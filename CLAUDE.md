@@ -209,6 +209,13 @@ single call you expect to run close to or past ~8 minutes, use `Bash(run_in_back
 poll/`Monitor` it instead of blocking — that keeps stream-json activity flowing and resets the
 watchdog clock.
 
+**Each poll must itself be a separate tool call.** A `sleep`/loop wrapped inside one Bash
+invocation (`for i in 1..6; do sleep 40; check-something; done`) is just as atomic and silent to
+the poller as the original blocking call — nothing streams out until that whole script exits, so
+it still trips the watchdog exactly like the case above. Use the `Monitor` tool (streams each
+output line as its own notification) or repeated, separate Bash calls spaced out over the turn —
+never a `sleep`/loop inside a single call, even when the intent is "polling."
+
 ## Message Types
 
 - Standard message — respond normally
