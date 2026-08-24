@@ -275,6 +275,9 @@ fires by default.
 - `--notify-on` still works exactly as before if you also pass it — a pattern match still
   flushes an immediate checkpoint. Combine both flags when only a specific line (a
   device-auth URL, an error marker) is worth an interim wake and everything else is noise.
+  **This combination is exactly where `--notify-on`'s known limitation above is easiest to
+  hit** — nothing else flushes to reset its peek window — so it's a good fit only when the
+  matching line is expected to be followed by a small amount of output, not a large burst.
 - Without `--notify-on`, `--quiet-checkpoints` alone means **zero interim checkpoints** —
   only the one terminal message when the command ends. This is the built-in equivalent of
   the old manual workaround (redirecting the command's output outside bg-task's capture,
