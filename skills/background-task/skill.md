@@ -87,7 +87,7 @@ describe a timeout as a success.
 | `--note TEXT` | — | Why you launched it and what to do with the answer. Carried into every drop. **Write one for anything you intend to continue** — see below. |
 | `--notify-on REGEX` | — | Flush a checkpoint immediately when new output matches, instead of waiting for the next debounce interval. For output that can't wait — a device-auth URL, a confirmation prompt. |
 | `--quiet-checkpoints` | off | Suppress the quiet-period and ceiling checkpoint triggers entirely — see *Interim output*. Mutually exclusive with `--checkpoint-interval`. |
-| `--checkpoint-interval SECONDS` | — | Replace both checkpoint triggers with a single "flush no more often than every N seconds" rule — see *Interim output*. Must be a positive integer no larger than `--ttl`. Mutually exclusive with `--quiet-checkpoints`. |
+| `--checkpoint-interval SECONDS` | — | Replace both checkpoint triggers with a single "flush no more often than every N seconds" rule — see *Interim output*. Must be a positive integer strictly less than `--ttl`. Mutually exclusive with `--quiet-checkpoints`. |
 | `--dry-run` | off | Runs the command for real but writes drops to `inbox-drops.jsonl` in the task dir instead of `.inbox/` — nothing lands in Slack. |
 | `-- <command…>` | required | Everything after `--` is the command. Not a shell string — no pipes or redirects unless you wrap it in `bash -c "…"`. |
 | `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the terminal drop was written. Needs no environment beyond `TEAMVIBE_CHANNEL_ID`. |
@@ -254,6 +254,16 @@ command that interleaves the important line with other chatter and never actuall
 quiet. It's checked on the same short poll that drives the debounce; a match flushes
 immediately.
 
+**Known limitation:** the check is a single peek at the last ~1500 bytes of unflushed
+output, not a search over everything since the last flush. A match can be pushed out of
+that window by enough output arriving right after it before anything flushes — normally
+rare, since the quiet-debounce or ceiling flushes regularly and resets the window, but
+combining `--notify-on` with `--quiet-checkpoints` (or a long `--checkpoint-interval`)
+removes those resets, so it's easier to hit there. This is the same limitation
+`--notify-on` already has on its own today, just newly reachable through these two flags
+too. See [poller-brain#405](https://github.com/teamvibeai/poller-brain/issues/405) if you
+need this hardened — not done here to keep this change simple.
+
 ### Suppressing checkpoints entirely: `--quiet-checkpoints`
 
 A command that produces frequent, low-value output (a line every few seconds, none of it
@@ -288,9 +298,9 @@ unflushed (same "nothing new → nothing sent" rule as above). Use it for someth
 long `codex exec` run where periodic status every minute is useful but a wake per output
 line is not.
 
-- Must be a positive integer, and no larger than `--ttl` — an interval that can't
-  possibly elapse before the task is killed isn't a periodic trigger, it's a confusing way
-  to spell `--quiet-checkpoints`.
+- Must be a positive integer, and strictly less than `--ttl` — an interval that can only
+  fire at or after the TTL kill isn't a periodic trigger, it's a confusing way to spell
+  `--quiet-checkpoints`.
 - `--notify-on` still bypasses it exactly as before — a pattern match flushes immediately
   regardless of how much of the interval has elapsed.
 - The terminal drop is unaffected, as always.
