@@ -86,6 +86,7 @@ describe a timeout as a success.
 | `--ttl SECONDS` | `900` | 30–21600 (6 h). The task is **killed** at this limit — set it above the realistic worst case. Also sets the checkpoint cadence — see *Interim output*. |
 | `--note TEXT` | — | Why you launched it and what to do with the answer. Carried into every drop. **Write one for anything you intend to continue** — see below. |
 | `--notify-on REGEX` | — | Flush a checkpoint immediately when new output matches, instead of waiting for the next debounce interval. For output that can't wait — a device-auth URL, a confirmation prompt. |
+| `--quiet-checkpoints` | off | Suppress the quiet-period and ceiling checkpoint triggers entirely — see *Interim output*. |
 | `--dry-run` | off | Runs the command for real but writes drops to `inbox-drops.jsonl` in the task dir instead of `.inbox/` — nothing lands in Slack. |
 | `-- <command…>` | required | Everything after `--` is the command. Not a shell string — no pipes or redirects unless you wrap it in `bash -c "…"`. |
 | `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the terminal drop was written. Needs no environment beyond `TEAMVIBE_CHANNEL_ID`. |
@@ -251,6 +252,28 @@ these comes first, and never for nothing:
 command that interleaves the important line with other chatter and never actually goes
 quiet. It's checked on the same short poll that drives the debounce; a match flushes
 immediately.
+
+### Suppressing checkpoints entirely: `--quiet-checkpoints`
+
+A command that produces frequent, low-value output (a line every few seconds, none of it
+worth a wake) gets a checkpoint for basically every burst — the quiet-period trigger fires
+on almost every pause. `--quiet-checkpoints` opts a known-chatty task out of that: it gates
+the quiet-period and ceiling triggers off entirely, so nothing but the **terminal drop**
+fires by default.
+
+- `--notify-on` still works exactly as before if you also pass it — a pattern match still
+  flushes an immediate checkpoint. Combine both flags when only a specific line (a
+  device-auth URL, an error marker) is worth an interim wake and everything else is noise.
+- Without `--notify-on`, `--quiet-checkpoints` alone means **zero interim checkpoints** —
+  only the one terminal message when the command ends. This is the built-in equivalent of
+  the old manual workaround (redirecting the command's output outside bg-task's capture,
+  e.g. `bash -c 'cmd > /tmp/log 2>&1'`), without losing the full `output.log` record.
+- The terminal drop is never affected by this flag — a finished or timed-out task always
+  gets its one final message, checkpoints suppressed or not.
+
+Use it for anything with predictable, high-frequency, low-value output — a chatty build
+step, a polling loop, a progress bar — where only completion (or a specific pattern via
+`--notify-on`) actually needs a wake ([poller-brain#403](https://github.com/teamvibeai/poller-brain/issues/403)).
 
 Each checkpoint carries only what's new since the last one (capped like the terminal
 tail — truncated from the middle, announced when it happens), not the whole log again, so

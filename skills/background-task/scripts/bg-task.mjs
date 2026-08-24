@@ -23,7 +23,7 @@ const TTL_MAX = 21600
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--note TEXT] [--notify-on REGEX] ' +
-  '[--dry-run] -- <command...>\n' +
+  '[--quiet-checkpoints] [--dry-run] -- <command...>\n' +
   '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
@@ -46,6 +46,11 @@ export function parseArgs(argv, env = {}) {
     dryRun: env.BG_TASK_DRY === '1',
     notifyOn: '',
     note: '',
+    // Suppresses the quiet-period and ceiling checkpoint triggers (see bg-task-runner.mjs)
+    // — opt-in, because losing interim visibility is a real cost, right for a known
+    // high-frequency-output task where only completion (or a --notify-on match) matters.
+    // See poller-brain#403.
+    quietCheckpoints: false,
     cmd: [],
   }
   let i = 0
@@ -60,6 +65,7 @@ export function parseArgs(argv, env = {}) {
       case '--ttl': opts.ttl = argv[++i]; break
       case '--note': opts.note = argv[++i]; break
       case '--notify-on': opts.notifyOn = argv[++i]; break
+      case '--quiet-checkpoints': opts.quietCheckpoints = true; break
       case '--dry-run': opts.dryRun = true; break
       case '-h': case '--help': return { help: true }
       default: return { error: `unknown argument: ${a}` }
@@ -293,7 +299,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const child = spawn(
     process.execPath,
     [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
-      opts.notifyOn, '--', ...opts.cmd],
+      opts.notifyOn, opts.quietCheckpoints ? '1' : '0', '--', ...opts.cmd],
     { detached: true, stdio: ['ignore', out, out] },
   )
   child.unref()

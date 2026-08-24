@@ -91,6 +91,8 @@ console.log('parseArgs')
   eq('threadId defaults from INBOX_THREAD_ID', opts.threadId, THREAD_ID)
   eq('notifyOn defaults empty', opts.notifyOn, '')
   eq('--notify-on is carried through', parseArgs(['--notify-on', 'auth-url', '--', 'true'], ENV).opts.notifyOn, 'auth-url')
+  eq('quietCheckpoints defaults false', opts.quietCheckpoints, false)
+  eq('--quiet-checkpoints sets the flag', parseArgs(['--quiet-checkpoints', '--', 'true'], ENV).opts.quietCheckpoints, true)
   eq('-- separates flags from a command that has its own flags',
     JSON.stringify(parseArgs(['--', 'ls', '--color'], ENV).opts.cmd), JSON.stringify(['ls', '--color']))
 }
@@ -352,11 +354,13 @@ console.log('countRunningSiblings')
 
 console.log('parseRunnerArgs')
 {
-  const r = parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', 'auth-url', '--', 'echo', '--weird'])
+  const r = parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', 'auth-url', '1', '--', 'echo', '--weird'])
   eq('command after -- survives, including its own flags', JSON.stringify(r.cmd), JSON.stringify(['echo', '--weird']))
   eq('threadId carried through', r.threadId, THREAD_ID)
   eq('notifyOn carried through', r.notifyOn, 'auth-url')
-  eq('empty notifyOn stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '--', 'true']).notifyOn, '')
+  eq('quietCheckpoints carried through', r.quietCheckpoints, '1')
+  eq('empty notifyOn stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '0', '--', 'true']).notifyOn, '')
+  eq('empty quietCheckpoints stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '--', 'true']).quietCheckpoints, '')
   eq('ttl coerced', r.ttl, 60)
 }
 
@@ -654,6 +658,57 @@ console.log('--notify-on bypasses the debounce')
   }
   ok('a notify-on match flushed a checkpoint well before quiet or ceiling would have',
     sawMatch, dropTexts(dir))
+}
+
+console.log('--quiet-checkpoints suppresses the quiet/ceiling triggers entirely (poller-brain#403)')
+{
+  // Same shape as the ceiling test above (BG_TASK_MAX_FLUSH_SEC well inside the runtime),
+  // deliberately configured so that WITHOUT the flag this would force several checkpoints —
+  // proving --quiet-checkpoints is what's suppressing them, not an env that happens to
+  // never trigger.
+  const cmd = ['sh', '-c', 'i=0; while [ $i -lt 8 ]; do echo "tick-$i"; sleep 0.1; i=$((i+1)); done']
+  const r = launch(['--name', 'unit-quiet-checkpoints', '--ttl', '30', '--quiet-checkpoints', '--', ...cmd], {
+    BG_TASK_QUIET_MS: '50',
+    BG_TASK_CHECK_INTERVAL_MS: '30',
+    BG_TASK_MAX_FLUSH_SEC: '0.2',
+    BG_TASK_MIN_FLUSH_SEC: '0.2',
+  })
+  eq('launch exits 0', r.code, 0)
+  const dir = latestDir()
+  const status = await waitDone(dir)
+  has('runner reached a terminal state', status || '', 'terminal_drop=')
+  has('quiet_checkpoints=1 recorded in status', status || '', 'quiet_checkpoints=1')
+  const drops = dropTexts(dir)
+  eq('zero interim checkpoints — only the terminal drop', drops.length, 1)
+  has('the terminal drop still carries the finished verdict', drops[0], 'has finished with exit code 0')
+  has('the terminal drop still carries the full tail regardless of suppressed checkpoints', drops[0], 'tick-7')
+}
+
+console.log('--quiet-checkpoints + --notify-on: notify-on still fires, quiet/ceiling stay suppressed')
+{
+  const cmd = ['sh', '-c', 'echo plain-line; sleep 0.05; echo AUTH-URL-abc123; sleep 5']
+  const r = launch(
+    ['--name', 'unit-quiet-notify', '--ttl', '30', '--quiet-checkpoints', '--notify-on', 'AUTH-URL', '--', ...cmd],
+    {
+      BG_TASK_QUIET_MS: '9000',   // would not fire before the test's own timeout
+      BG_TASK_CHECK_INTERVAL_MS: '50',
+      BG_TASK_MAX_FLUSH_SEC: '9', // ceiling also would not fire in time
+      BG_TASK_MIN_FLUSH_SEC: '9',
+    },
+  )
+  eq('launch exits 0', r.code, 0)
+  const dir = latestDir()
+  let sawMatch = false
+  for (let i = 0; i < 40; i++) {
+    if (dropTexts(dir).some((t) => t.includes('AUTH-URL-abc123'))) { sawMatch = true; break }
+    await sleep(150)
+  }
+  ok('a notify-on match still flushes an immediate checkpoint even with --quiet-checkpoints on',
+    sawMatch, dropTexts(dir))
+  await waitDone(dir)
+  const drops = dropTexts(dir)
+  eq('exactly one interim checkpoint (the notify-on match) plus the terminal drop — no others leaked in',
+    drops.length, 2)
 }
 
 if (process.env.BG_TASK_TEST_SLOW === '1') {
