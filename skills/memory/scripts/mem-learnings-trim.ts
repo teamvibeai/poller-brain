@@ -77,6 +77,19 @@ const DEST_DIRS = ["semantic", "episodic", "procedural"];
 const LEARNINGS_CAP_BYTES = 5000;
 const HAS_MEM_KEY_RE = /\bMEM-\d+\b/;
 
+// episodic/archive/mistakes-*.md holds relocated, dead history from Step 9f
+// — a key cited there is evidence it USED to live somewhere, not that it's
+// currently promoted. Scanning it as a destination lets a trim rewrite a
+// live entry into a pointer at the archive instead of its actual current
+// home. poller-brain#328 review round 1 (DevGuru): measured this happening
+// for real via the new mistakes archive this same PR introduces. Scoped to
+// mistakes-*.md specifically (round 2 fix) — excluding the whole
+// episodic/archive/ directory also dropped episodic/archive/learnings-*.md
+// (Step 5c's own archive) as a destination, breaking 4 already-live
+// reduction paths on a real 261KB over-cap MEM_REGISTRY.md (measured:
+// 26 -> 22 candidates on the DevGuru brain).
+const MISTAKES_ARCHIVE_RE = /^episodic\/archive\/mistakes-.*\.md$/;
+
 function walk(absDir: string, relDir: string, out: DestinationFile[]): void {
   if (!fs.existsSync(absDir)) return;
   for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
@@ -85,6 +98,7 @@ function walk(absDir: string, relDir: string, out: DestinationFile[]): void {
     if (entry.isDirectory()) {
       walk(absPath, relPath, out);
     } else if (entry.name.endsWith(".md")) {
+      if (MISTAKES_ARCHIVE_RE.test(relPath)) continue;
       out.push({ file: relPath, text: fs.readFileSync(absPath, "utf-8") });
     }
   }
