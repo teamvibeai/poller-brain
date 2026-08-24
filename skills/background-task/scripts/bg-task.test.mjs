@@ -93,6 +93,22 @@ console.log('parseArgs')
   eq('--notify-on is carried through', parseArgs(['--notify-on', 'auth-url', '--', 'true'], ENV).opts.notifyOn, 'auth-url')
   eq('quietCheckpoints defaults false', opts.quietCheckpoints, false)
   eq('--quiet-checkpoints sets the flag', parseArgs(['--quiet-checkpoints', '--', 'true'], ENV).opts.quietCheckpoints, true)
+
+  eq('checkpointInterval defaults to 0 (not set)', opts.checkpointInterval, 0)
+  eq('checkpointInterval carried through when valid',
+    parseArgs(['--checkpoint-interval', '45', '--ttl', '60', '--', 'true'], ENV).opts.checkpointInterval, 45)
+  has('--checkpoint-interval 0 is rejected',
+    parseArgs(['--checkpoint-interval', '0', '--', 'true'], ENV).error, 'positive integer')
+  has('--checkpoint-interval negative is rejected',
+    parseArgs(['--checkpoint-interval', '-5', '--', 'true'], ENV).error, 'positive integer')
+  has('--checkpoint-interval non-numeric is rejected',
+    parseArgs(['--checkpoint-interval', 'abc', '--', 'true'], ENV).error, 'positive integer')
+  has('--checkpoint-interval above --ttl is rejected',
+    parseArgs(['--checkpoint-interval', '100', '--ttl', '60', '--', 'true'], ENV).error, 'must not exceed --ttl')
+  has('--quiet-checkpoints + --checkpoint-interval together is a usage error, not silently resolved',
+    parseArgs(['--quiet-checkpoints', '--checkpoint-interval', '30', '--ttl', '60', '--', 'true'], ENV).error,
+    'mutually exclusive')
+
   eq('-- separates flags from a command that has its own flags',
     JSON.stringify(parseArgs(['--', 'ls', '--color'], ENV).opts.cmd), JSON.stringify(['ls', '--color']))
 }
@@ -354,13 +370,17 @@ console.log('countRunningSiblings')
 
 console.log('parseRunnerArgs')
 {
-  const r = parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', 'auth-url', '1', '--', 'echo', '--weird'])
+  const r = parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', 'auth-url', '1', '45', '--', 'echo', '--weird'])
   eq('command after -- survives, including its own flags', JSON.stringify(r.cmd), JSON.stringify(['echo', '--weird']))
   eq('threadId carried through', r.threadId, THREAD_ID)
   eq('notifyOn carried through', r.notifyOn, 'auth-url')
   eq('quietCheckpoints carried through', r.quietCheckpoints, '1')
-  eq('empty notifyOn stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '0', '--', 'true']).notifyOn, '')
-  eq('empty quietCheckpoints stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '--', 'true']).quietCheckpoints, '')
+  eq('checkpointInterval carried through', r.checkpointInterval, '45')
+  eq('empty notifyOn stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '0', '', '--', 'true']).notifyOn, '')
+  eq('empty quietCheckpoints stays empty',
+    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '--', 'true']).quietCheckpoints, '')
+  eq('empty checkpointInterval stays empty',
+    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '--', 'true']).checkpointInterval, '')
   eq('ttl coerced', r.ttl, 60)
 }
 
@@ -709,6 +729,65 @@ console.log('--quiet-checkpoints + --notify-on: notify-on still fires, quiet/cei
   const drops = dropTexts(dir)
   eq('exactly one interim checkpoint (the notify-on match) plus the terminal drop — no others leaked in',
     drops.length, 2)
+}
+
+console.log('--checkpoint-interval spaces checkpoints ~N seconds apart, not eagerly per gap (poller-brain#403 round 2)')
+{
+  // Short gaps between lines (0.15s) — well under QUIET_MS, so without this flag the
+  // debounce would checkpoint almost every line (this exact env would, per the ceiling/
+  // quiet-period tests above). --checkpoint-interval 1 should instead flush no more often
+  // than once a second, regardless of how choppy the output actually is.
+  const cmd = ['sh', '-c', 'i=0; while [ $i -lt 14 ]; do echo "tick-$i"; sleep 0.15; i=$((i+1)); done']
+  const r = launch(['--name', 'unit-interval', '--ttl', '30', '--checkpoint-interval', '1', '--', ...cmd], {
+    BG_TASK_QUIET_MS: '150',      // would fire almost every gap without the flag
+    BG_TASK_CHECK_INTERVAL_MS: '50',
+  })
+  eq('launch exits 0', r.code, 0)
+  const dir = latestDir()
+  const status = await waitDone(dir)
+  has('runner reached a terminal state', status || '', 'terminal_drop=')
+  has('checkpoint_interval=1s recorded in status', status || '', 'checkpoint_interval=1s')
+
+  const drops = dropTexts(dir)
+  const checkpoints = drops.slice(0, -1)
+  // 14 lines * 0.15s ≈ 2.1s runtime, so a 1s interval should produce roughly 2 checkpoints —
+  // nowhere near 14 (one per line, what the bare debounce would have produced).
+  ok('far fewer checkpoints than output lines, proving the interval — not the per-line gap — drives flushing',
+    checkpoints.length > 0 && checkpoints.length <= 4,
+    `${checkpoints.length} checkpoint(s) for 14 lines: ${JSON.stringify(checkpoints.map((c) => c.slice(0, 60)))}`)
+
+  // Pull the checkpoint timestamps straight out of the status file and check consecutive
+  // gaps land close to the 1s interval, not the ~0.15s line spacing.
+  const times = [...(status || '').matchAll(/^checkpoint=\d+ at=(.+)$/gm)].map((m) => Date.parse(m[1]))
+  for (let i = 1; i < times.length; i++) {
+    const gapSec = (times[i] - times[i - 1]) / 1000
+    ok(`checkpoint ${i} lands ~1s after the previous one, not ~0.15s`, gapSec >= 0.8, `gap was ${gapSec}s`)
+  }
+}
+
+console.log('--checkpoint-interval + --notify-on: notify-on still fires immediately')
+{
+  const cmd = ['sh', '-c', 'echo plain-line; sleep 0.05; echo AUTH-URL-abc123; sleep 5']
+  const r = launch(
+    ['--name', 'unit-interval-notify', '--ttl', '30', '--checkpoint-interval', '10', '--notify-on', 'AUTH-URL', '--', ...cmd],
+    { BG_TASK_CHECK_INTERVAL_MS: '50' },
+  )
+  eq('launch exits 0', r.code, 0)
+  const dir = latestDir()
+  let sawMatch = false
+  for (let i = 0; i < 40; i++) {
+    if (dropTexts(dir).some((t) => t.includes('AUTH-URL-abc123'))) { sawMatch = true; break }
+    await sleep(150)
+  }
+  ok('a notify-on match still flushes immediately even with a 10s checkpoint interval set',
+    sawMatch, dropTexts(dir))
+}
+
+console.log('--checkpoint-interval and --quiet-checkpoints together is a launch-time usage error')
+{
+  const r = launch(['--quiet-checkpoints', '--checkpoint-interval', '30', '--ttl', '60', '--', 'true'])
+  eq('exits with a usage error, does not silently pick one', r.code, 2)
+  has('error names the conflict', r.stderr, 'mutually exclusive')
 }
 
 if (process.env.BG_TASK_TEST_SLOW === '1') {

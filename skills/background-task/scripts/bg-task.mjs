@@ -23,7 +23,7 @@ const TTL_MAX = 21600
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--note TEXT] [--notify-on REGEX] ' +
-  '[--quiet-checkpoints] [--dry-run] -- <command...>\n' +
+  '[--quiet-checkpoints | --checkpoint-interval SECONDS] [--dry-run] -- <command...>\n' +
   '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
@@ -51,6 +51,12 @@ export function parseArgs(argv, env = {}) {
     // high-frequency-output task where only completion (or a --notify-on match) matters.
     // See poller-brain#403.
     quietCheckpoints: false,
+    // Replaces BOTH the quiet-debounce and the ttl-derived ceiling with a single "flush no
+    // more often than every N seconds" trigger — for a task with predictable short gaps
+    // between lines (the debounce always wins there, long before the ceiling could), where
+    // periodic status beats either the 1.5s-eager default or --quiet-checkpoints' total
+    // silence. 0 means "not set". See poller-brain#403 (round 2, Jakub).
+    checkpointInterval: 0,
     cmd: [],
   }
   let i = 0
@@ -58,7 +64,7 @@ export function parseArgs(argv, env = {}) {
     const a = argv[i]
     if (a === '--') { i++; break }
     if (a === '--list') return { list: true }
-    const needsValue = ['--name', '--ttl', '--note', '--notify-on'].includes(a)
+    const needsValue = ['--name', '--ttl', '--note', '--notify-on', '--checkpoint-interval'].includes(a)
     if (needsValue && i + 1 >= argv.length) return { error: `${a} needs a value` }
     switch (a) {
       case '--name': opts.name = argv[++i]; break
@@ -66,6 +72,7 @@ export function parseArgs(argv, env = {}) {
       case '--note': opts.note = argv[++i]; break
       case '--notify-on': opts.notifyOn = argv[++i]; break
       case '--quiet-checkpoints': opts.quietCheckpoints = true; break
+      case '--checkpoint-interval': opts.checkpointInterval = argv[++i]; break
       case '--dry-run': opts.dryRun = true; break
       case '-h': case '--help': return { help: true }
       default: return { error: `unknown argument: ${a}` }
@@ -89,6 +96,29 @@ export function parseArgs(argv, env = {}) {
     try { new RegExp(opts.notifyOn) } catch (e) {
       return { error: `--notify-on is not a valid regex: ${e.message}` }
     }
+  }
+  // Same integer-string check as --ttl above, for consistency. 0 and negative are rejected
+  // outright (a "flush every 0 seconds" interval is not a periodic trigger, it's the eager
+  // behavior this flag exists to replace); above --ttl is rejected too, since a trigger that
+  // can only fire after the task would already have been killed is not a periodic trigger
+  // at all, just a confusing way to spell "never" — --quiet-checkpoints says that honestly.
+  if (opts.checkpointInterval) {
+    if (!/^\d+$/.test(String(opts.checkpointInterval)) || Number(opts.checkpointInterval) <= 0) {
+      return { error: '--checkpoint-interval must be a positive integer number of seconds' }
+    }
+    opts.checkpointInterval = Number(opts.checkpointInterval)
+    if (opts.checkpointInterval > opts.ttl) {
+      return {
+        error: `--checkpoint-interval (${opts.checkpointInterval}s) must not exceed --ttl (${opts.ttl}s)` +
+          ' — it would never fire before the terminal drop; use --quiet-checkpoints if you want no interim checkpoints at all',
+      }
+    }
+  }
+  // Ambiguous combination, not silently resolved: "suppress everything" and "flush every N
+  // seconds" answer different questions about the same triggers, and picking one for the
+  // caller risks masking a copy-paste mistake in an unattended background task.
+  if (opts.quietCheckpoints && opts.checkpointInterval) {
+    return { error: '--quiet-checkpoints and --checkpoint-interval are mutually exclusive — pick one' }
   }
   return { opts }
 }
@@ -299,7 +329,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const child = spawn(
     process.execPath,
     [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
-      opts.notifyOn, opts.quietCheckpoints ? '1' : '0', '--', ...opts.cmd],
+      opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
+      '--', ...opts.cmd],
     { detached: true, stdio: ['ignore', out, out] },
   )
   child.unref()
