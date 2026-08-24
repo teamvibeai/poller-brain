@@ -2,7 +2,7 @@
 // bg-task-runner.mjs — the detached half of bg-task. Never invoke directly; bg-task.mjs
 // spawns it with `detached: true` so it outlives the agent session.
 //
-//   bg-task-runner.mjs <dir> <ttl> <name> <threadId> <dry> <notifyOn> -- <command...>
+//   bg-task-runner.mjs <dir> <ttl> <name> <threadId> <dry> <notifyOn> <quietCheckpoints> <checkpointInterval> -- <command...>
 //
 // Contract: run the command with a TTL, coalescing its output into interim checkpoints
 // dropped into the launching thread's .inbox/, then drop exactly one terminal message when
@@ -58,8 +58,8 @@ export function flushIntervalSec(ttl) {
 // Everything argv- and filesystem-related lives inside main() so this file can be
 // imported by the tests without side effects.
 export function parseRunnerArgs(argv) {
-  const [dir, ttlArg, name, threadId, dry, notifyOn] = argv.slice(0, 6)
-  const sep = argv.indexOf('--', 6)
+  const [dir, ttlArg, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval] = argv.slice(0, 8)
+  const sep = argv.indexOf('--', 8)
   return {
     dir,
     ttl: Number(ttlArg),
@@ -67,6 +67,8 @@ export function parseRunnerArgs(argv) {
     threadId: threadId || '',
     dry,
     notifyOn: notifyOn || '',
+    quietCheckpoints: quietCheckpoints || '',
+    checkpointInterval: checkpointInterval || '',
     cmd: sep === -1 ? [] : argv.slice(sep + 1),
   }
 }
@@ -303,15 +305,23 @@ export function writeInboxMessage(threadId, text, dir, dry) {
 }
 
 async function main() {
-  const { dir, ttl, name, threadId, dry, notifyOn, cmd } = parseRunnerArgs(process.argv.slice(2))
+  const { dir, ttl, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, cmd } =
+    parseRunnerArgs(process.argv.slice(2))
   const statusPath = join(dir, 'status')
   const logPath = join(dir, 'output.log')
   const note = (lines) => appendFileSync(statusPath, lines.map((l) => `${l}\n`).join(''))
   const notifyRe = notifyOn ? new RegExp(notifyOn) : null
+  const quietCheckpointsOn = quietCheckpoints === '1'
+  // --checkpoint-interval (poller-brain#403, round 2): 0/'' means "not set". Validated as
+  // positive and <= ttl already in bg-task.mjs's arg parsing — nothing left to reject here.
+  const checkpointIntervalSec = Number(checkpointInterval) || 0
+  const checkpointIntervalMs = checkpointIntervalSec > 0 ? checkpointIntervalSec * 1000 : 0
 
   const startedAt = Date.now()
   note([`started=${stamp()}`, `pid=${process.pid}`, `sid=${sessionId()}`, `ttl=${ttl}s`])
   if (dry === '1') note(['dry_run=1'])
+  if (quietCheckpointsOn) note(['quiet_checkpoints=1'])
+  if (checkpointIntervalMs > 0) note([`checkpoint_interval=${checkpointIntervalSec}s`])
 
   const out = openSync(logPath, 'a')
   // detached so the command gets its own process group: on TTL we can then kill the
@@ -354,11 +364,34 @@ async function main() {
     if (size <= lastFlushOffset) return // nothing unflushed — nothing to decide
 
     // --notify-on bypasses both triggers below for output that can't wait — a peek here
-    // costs one read(), it does not consume the offset unless it actually flushes.
+    // costs one read(), it does not consume the offset unless it actually flushes. This
+    // stays live even under --quiet-checkpoints: suppressing the debounce/ceiling is about
+    // dropping low-value noise, not about silencing a pattern the launcher explicitly
+    // asked to hear about immediately.
     if (notifyRe) {
       const { text } = deltaOf(logPath, lastFlushOffset)
       if (text && notifyRe.test(text)) { flush(); return }
     }
+
+    // --checkpoint-interval (poller-brain#403, round 2): the SOLE periodic trigger when
+    // set, replacing BOTH the quiet-debounce and the ttl-derived ceiling below — flush no
+    // more often than every N seconds, and only when there's something unflushed (the
+    // "nothing new → nothing sent" rule above already covers that). For output with short
+    // gaps (the normal case), the quiet-debounce would otherwise always win long before the
+    // ceiling could ever fire, which is exactly the flood --checkpoint-interval exists to
+    // avoid. Mutually exclusive with --quiet-checkpoints — bg-task.mjs's arg parsing
+    // rejects both being set, so this never has to arbitrate between them.
+    if (checkpointIntervalMs > 0) {
+      if (Date.now() - lastFlushAt >= checkpointIntervalMs) flush()
+      return
+    }
+
+    // --quiet-checkpoints (poller-brain#403): gate ONLY the quiet/ceiling triggers, not
+    // flush() itself and not the terminal drop below (that path is entirely separate).
+    // A command with frequent low-value output otherwise gets a checkpoint per burst —
+    // this opts out of that, leaving --notify-on (if given) and the terminal drop as the
+    // only wake sources.
+    if (quietCheckpointsOn) return
 
     const quiet = Date.now() - lastWriteAt >= QUIET_MS
     const overCeiling = Date.now() - lastFlushAt >= forceFlushMs

@@ -86,6 +86,8 @@ describe a timeout as a success.
 | `--ttl SECONDS` | `900` | 30–21600 (6 h). The task is **killed** at this limit — set it above the realistic worst case. Also sets the checkpoint cadence — see *Interim output*. |
 | `--note TEXT` | — | Why you launched it and what to do with the answer. Carried into every drop. **Write one for anything you intend to continue** — see below. |
 | `--notify-on REGEX` | — | Flush a checkpoint immediately when new output matches, instead of waiting for the next debounce interval. For output that can't wait — a device-auth URL, a confirmation prompt. |
+| `--quiet-checkpoints` | off | Suppress the quiet-period and ceiling checkpoint triggers entirely — see *Interim output*. Mutually exclusive with `--checkpoint-interval`. |
+| `--checkpoint-interval SECONDS` | — | Replace both checkpoint triggers with a single "flush no more often than every N seconds" rule — see *Interim output*. Must be a positive integer strictly less than `--ttl`. Mutually exclusive with `--quiet-checkpoints`. |
 | `--dry-run` | off | Runs the command for real but writes drops to `inbox-drops.jsonl` in the task dir instead of `.inbox/` — nothing lands in Slack. |
 | `-- <command…>` | required | Everything after `--` is the command. Not a shell string — no pipes or redirects unless you wrap it in `bash -c "…"`. |
 | `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the terminal drop was written. Needs no environment beyond `TEAMVIBE_CHANNEL_ID`. |
@@ -251,6 +253,68 @@ these comes first, and never for nothing:
 command that interleaves the important line with other chatter and never actually goes
 quiet. It's checked on the same short poll that drives the debounce; a match flushes
 immediately.
+
+**Known limitation:** the check is a single peek at the last ~1500 bytes of unflushed
+output, not a search over everything since the last flush. A match can be pushed out of
+that window by enough output arriving right after it before anything flushes — normally
+rare, since the quiet-debounce or ceiling flushes regularly and resets the window, but
+combining `--notify-on` with `--quiet-checkpoints` (or a long `--checkpoint-interval`)
+removes those resets, so it's easier to hit there. This is the same limitation
+`--notify-on` already has on its own today, just newly reachable through these two flags
+too. See [poller-brain#405](https://github.com/teamvibeai/poller-brain/issues/405) if you
+need this hardened — not done here to keep this change simple.
+
+### Suppressing checkpoints entirely: `--quiet-checkpoints`
+
+A command that produces frequent, low-value output (a line every few seconds, none of it
+worth a wake) gets a checkpoint for basically every burst — the quiet-period trigger fires
+on almost every pause. `--quiet-checkpoints` opts a known-chatty task out of that: it gates
+the quiet-period and ceiling triggers off entirely, so nothing but the **terminal drop**
+fires by default.
+
+- `--notify-on` still works exactly as before if you also pass it — a pattern match still
+  flushes an immediate checkpoint. Combine both flags when only a specific line (a
+  device-auth URL, an error marker) is worth an interim wake and everything else is noise.
+  **This combination is exactly where `--notify-on`'s known limitation above is easiest to
+  hit** — nothing else flushes to reset its peek window — so it's a good fit only when the
+  matching line is expected to be followed by a small amount of output, not a large burst.
+- Without `--notify-on`, `--quiet-checkpoints` alone means **zero interim checkpoints** —
+  only the one terminal message when the command ends. This is the built-in equivalent of
+  the old manual workaround (redirecting the command's output outside bg-task's capture,
+  e.g. `bash -c 'cmd > /tmp/log 2>&1'`), without losing the full `output.log` record.
+- The terminal drop is never affected by this flag — a finished or timed-out task always
+  gets its one final message, checkpoints suppressed or not.
+
+Use it for anything with predictable, high-frequency, low-value output — a chatty build
+step, a polling loop, a progress bar — where only completion (or a specific pattern via
+`--notify-on`) actually needs a wake ([poller-brain#403](https://github.com/teamvibeai/poller-brain/issues/403)).
+
+### Periodic status instead of eager or silent: `--checkpoint-interval SECONDS`
+
+For output with short gaps (a line every few seconds, the normal case), the quiet-period
+trigger above always wins — it fires as soon as ~1.5 s pass, long before the TTL-derived
+ceiling could ever have a turn. That's either the eager 1.5 s-debounce flood or, with
+`--quiet-checkpoints`, total silence until the end. `--checkpoint-interval N` is the
+middle ground: **the sole periodic trigger**, replacing both the quiet-debounce and the
+ceiling — flush no more often than every N seconds, and only when there's something
+unflushed (same "nothing new → nothing sent" rule as above). Use it for something like a
+long `codex exec` run where periodic status every minute is useful but a wake per output
+line is not.
+
+- Must be a positive integer, and strictly less than `--ttl` — an interval that can only
+  fire at or after the TTL kill isn't a periodic trigger, it's a confusing way to spell
+  `--quiet-checkpoints`.
+- `--notify-on` still bypasses it exactly as before — a pattern match flushes immediately
+  regardless of how much of the interval has elapsed.
+- The terminal drop is unaffected, as always.
+- **Mutually exclusive with `--quiet-checkpoints`.** Passing both is a usage error at
+  launch time (non-zero exit, clear message) rather than silently picking one — "suppress
+  everything" and "flush every N seconds" answer different questions, and guessing which
+  one you meant risks masking a copy-paste mistake in a task nobody is watching live.
+
+```bash
+node bg-task.mjs --name codex-run --ttl 3600 --checkpoint-interval 60 -- codex exec "…"
+```
 
 Each checkpoint carries only what's new since the last one (capped like the terminal
 tail — truncated from the middle, announced when it happens), not the whole log again, so
