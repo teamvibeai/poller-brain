@@ -45,6 +45,33 @@ const QUIET_MS = Number(process.env.BG_TASK_QUIET_MS || 1500)
 // well under it — a few hundred ms of slack against a 1.5s quiet window.
 const CHECK_INTERVAL_MS = Number(process.env.BG_TASK_CHECK_INTERVAL_MS || 300)
 
+// --notify-on's per-tick scan window (poller-brain#403 round 3, DevGuru): bounded so one
+// tick's read cost stays fixed regardless of how much unflushed output has piled up — a
+// burst far bigger than this gets covered incrementally across several ticks instead of
+// all at once. Reuses TAIL_BYTES rather than inventing a new size: same "how much is
+// worth reading in one go" judgment already made for the tail/delta reads above.
+const NOTIFY_CHUNK_BYTES = Number(process.env.BG_TASK_NOTIFY_CHUNK_BYTES || TAIL_BYTES)
+// Kept from the previous chunk's tail so a match straddling two ticks' chunk boundary is
+// still seen whole in at least one of them: as long as the matched string is no longer
+// than this many bytes, a boundary split can never hide it (the next read's window starts
+// this far before where the previous one ended, so the two halves are always re-joined in
+// at least one read). 200 bytes covers any realistic --notify-on pattern — a short marker
+// line, a URL, an error token — comfortably; a caller matching something longer than that
+// is an extreme case this flag isn't really meant for, not worth a much bigger constant.
+const NOTIFY_OVERLAP_BYTES = Number(process.env.BG_TASK_NOTIFY_OVERLAP_BYTES || 200)
+
+// Explicit decision (poller-brain#403 round 3, DevGuru #3) on what happens when the
+// unflushed backlog grows faster than the bounded per-tick scan can cover — e.g. a burst
+// several MB in size landing between two ticks: we do NOT read the whole backlog in one
+// go (that reintroduces the unbounded-read problem NOTIFY_CHUNK_BYTES exists to avoid, and
+// could stall the runner's single-threaded event loop for a long time), and we do NOT skip
+// ahead either — notifySearchedOffset only ever advances by exactly what was actually
+// read, so no byte range is ever silently left unscanned. The real trade-off is DELAY, not
+// loss: catching up to a huge backlog just takes proportionally more ticks. That delay
+// must still be visible rather than silent, so once the unscanned backlog crosses this
+// threshold we note it to `status` once (not every tick) — see notifyLagNoted below.
+const NOTIFY_LAG_WARN_BYTES = Number(process.env.BG_TASK_NOTIFY_LAG_WARN_BYTES || 1_000_000)
+
 // The ceiling for a command that never goes quiet — continuous output would otherwise
 // starve the debounce above forever. clamp(ttl/8, 60s, 10min): a 2-minute task gets no
 // forced checkpoint at all (only the terminal drop), an hour-long task gets ~8 regardless
@@ -124,6 +151,48 @@ export function deltaOf(path, fromOffset, cap = TAIL_BYTES) {
   } finally {
     if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ }
   }
+}
+
+// Bounded FORWARD read from a cursor — unlike deltaOf/tailOf (both anchored to the file's
+// current END, always returning the most recent bytes), this returns up to `maxBytes`
+// starting AT `fromOffset` regardless of how much more data follows. That's the point: a
+// --notify-on scan needs to advance a cursor incrementally through a large unflushed
+// region tick by tick, and an end-anchored read of a growing file would just keep showing
+// the tail forever, never advancing toward wherever the cursor actually is (poller-
+// brain#403 round 3 — the exact bug this replaces deltaOf's end-anchored peek for).
+// `end` is the absolute byte offset reached (fromOffset + bytes actually read) — returned
+// explicitly rather than left for the caller to re-derive from text.length, since a lossy
+// UTF-8 decode of a chunk that starts or ends mid-codepoint does not necessarily have the
+// same length as the bytes it came from.
+export function readChunkAt(path, fromOffset, maxBytes) {
+  let fd
+  try {
+    const size = statSync(path).size
+    if (size <= fromOffset) return { text: '', end: fromOffset }
+    const end = Math.min(size, fromOffset + maxBytes)
+    const buf = Buffer.alloc(end - fromOffset)
+    fd = openSync(path, 'r')
+    readSync(fd, buf, 0, buf.length, fromOffset)
+    return { text: buf.toString('utf8'), end }
+  } catch {
+    return { text: '', end: fromOffset }
+  } finally {
+    if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ }
+  }
+}
+
+// One step of the --notify-on incremental scan (poller-brain#403 round 3, DevGuru):
+// reads ONE bounded chunk forward from `searchFrom` and tests it against `notifyRe`.
+// Extracted as its own pure function — instead of leaving this inline in the checkTimer
+// closure — specifically so the chunk-boundary/overlap invariant can be tested
+// deterministically, without racing real timers: `searchFrom` already has the overlap
+// baked in by the caller (`max(lastFlushOffset, cursor - NOTIFY_OVERLAP_BYTES)`), so a
+// match that straddles two chunk reads is still caught whole as long as its length does
+// not exceed the overlap — a test can assert that directly with two successive calls
+// instead of trying to land a live process's tick at the exact right moment.
+export function notifyScanStep(path, notifyRe, searchFrom, chunkBytes) {
+  const { text, end } = readChunkAt(path, searchFrom, chunkBytes)
+  return { matched: !!(text && notifyRe.test(text)), end }
 }
 
 // Count sibling task dirs whose runner is still alive, so the woken agent knows whether
@@ -337,6 +406,17 @@ async function main() {
   let lastSeenSize = 0
   let checkpoints = 0
   const forceFlushMs = flushIntervalSec(ttl) * 1000
+  // --notify-on's own incremental scan cursor (poller-brain#403 round 3) — deliberately
+  // NOT the same variable as lastFlushOffset, even though both start at 0 and both track
+  // "how far we've consumed". lastFlushOffset only advances on an actual flush; this
+  // advances on every tick's scan regardless of whether anything matched, so a big
+  // unflushed burst still gets scanned incrementally even when nothing has flushed in a
+  // while (exactly the --quiet-checkpoints combination that exposed the bug).
+  let notifySearchedOffset = 0
+  // Set once the first time the notify-on scan's unread backlog crosses
+  // NOTIFY_LAG_WARN_BYTES — see that constant's comment. One line in `status`, not one per
+  // tick: the point is visibility that a delay is happening, not a log flood of its own.
+  let notifyLagNoted = false
 
   const flush = () => {
     const { text: chunk, truncated, size } = deltaOf(logPath, lastFlushOffset)
@@ -353,6 +433,10 @@ async function main() {
       fence: `bg-task-output-${randomBytes(4).toString('hex')}`,
     }), dir, dry)
     lastFlushOffset = size
+    // A flush — from ANY trigger, not just a notify-on match — "catches up" the whole log:
+    // everything up to `size` is now reported, so the next notify-on scan should start
+    // fresh from there too, not resume mid-way through a region that's already been sent.
+    notifySearchedOffset = size
     lastFlushAt = Date.now()
     note([`checkpoint=${checkpoints} at=${stamp()}`])
   }
@@ -363,14 +447,41 @@ async function main() {
     if (size > lastSeenSize) { lastWriteAt = Date.now(); lastSeenSize = size }
     if (size <= lastFlushOffset) return // nothing unflushed — nothing to decide
 
-    // --notify-on bypasses both triggers below for output that can't wait — a peek here
-    // costs one read(), it does not consume the offset unless it actually flushes. This
-    // stays live even under --quiet-checkpoints: suppressing the debounce/ceiling is about
-    // dropping low-value noise, not about silencing a pattern the launcher explicitly
-    // asked to hear about immediately.
-    if (notifyRe) {
-      const { text } = deltaOf(logPath, lastFlushOffset)
-      if (text && notifyRe.test(text)) { flush(); return }
+    // --notify-on bypasses both triggers below for output that can't wait. This stays live
+    // even under --quiet-checkpoints: suppressing the debounce/ceiling is about dropping
+    // low-value noise, not about silencing a pattern the launcher explicitly asked to hear
+    // about immediately.
+    //
+    // Scans via its OWN cursor (notifySearchedOffset), not lastFlushOffset — a bounded,
+    // end-anchored peek (deltaOf's default 1500-byte cap) used to be the only check here,
+    // which is fine as long as something flushes regularly to reset the window. Under
+    // --quiet-checkpoints nothing else ever flushes, so a match immediately followed by a
+    // burst bigger than the cap would slide permanently out of every future peek's window —
+    // the match happened, but every peek from then on only ever sees bytes newer than it
+    // (poller-brain#403 round 3, DevGuru repro: --quiet-checkpoints --notify-on with a
+    // 200KB burst right after the match line → zero checkpoints, ever). Reading forward
+    // from a cursor instead means the scan advances toward wherever the match actually is,
+    // bounded per tick (NOTIFY_CHUNK_BYTES) so one huge burst can't make a single tick do
+    // an unbounded read — it just takes a few more ticks to fully cover it.
+    if (notifyRe && size > notifySearchedOffset) {
+      // Visibility, not silence, when the backlog outpaces the bounded per-tick scan (see
+      // NOTIFY_LAG_WARN_BYTES above) — checked before the read, using the offset from the
+      // END of what's already been searched, i.e. what's left to cover right now.
+      const backlog = size - notifySearchedOffset
+      if (backlog > NOTIFY_LAG_WARN_BYTES && !notifyLagNoted) {
+        notifyLagNoted = true
+        note([`notify_scan_lag_bytes=${backlog} at=${stamp()}`])
+      }
+      // Re-read the last NOTIFY_OVERLAP_BYTES of what was already scanned so a match
+      // straddling this chunk and the previous one is still seen whole.
+      const searchFrom = Math.max(lastFlushOffset, notifySearchedOffset - NOTIFY_OVERLAP_BYTES)
+      const { matched, end } = notifyScanStep(logPath, notifyRe, searchFrom, NOTIFY_CHUNK_BYTES)
+      if (matched) { flush(); return }
+      // No match in this chunk — advance the cursor to the end of what was just read (NOT
+      // reduced by the overlap again here; the overlap is re-applied on the next tick's
+      // searchFrom instead, so it isn't compounded tick over tick). Never further than what
+      // was actually read: this is the "no silent skip" half of the round-3 decision above.
+      notifySearchedOffset = end
     }
 
     // --checkpoint-interval (poller-brain#403, round 2): the SOLE periodic trigger when

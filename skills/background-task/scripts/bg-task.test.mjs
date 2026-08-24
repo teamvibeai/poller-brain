@@ -16,7 +16,7 @@ const LAUNCHER = join(HERE, 'bg-task.mjs')
 const { parseArgs, taskId, taskRoot, taskRow, listTasks, formatTaskList, parseStatus } =
   await import(join(HERE, 'bg-task.mjs'))
 const {
-  buildPrompt, buildCheckpointPrompt, tailOf, deltaOf, countRunningSiblings,
+  buildPrompt, buildCheckpointPrompt, tailOf, deltaOf, readChunkAt, notifyScanStep, countRunningSiblings,
   parseRunnerArgs, noteOf, writeInboxMessage, flushIntervalSec,
 } = await import(join(HERE, 'bg-task-runner.mjs'))
 
@@ -104,10 +104,29 @@ console.log('parseArgs')
   has('--checkpoint-interval non-numeric is rejected',
     parseArgs(['--checkpoint-interval', 'abc', '--', 'true'], ENV).error, 'positive integer')
   has('--checkpoint-interval above --ttl is rejected',
-    parseArgs(['--checkpoint-interval', '100', '--ttl', '60', '--', 'true'], ENV).error, 'must not exceed --ttl')
+    parseArgs(['--checkpoint-interval', '100', '--ttl', '60', '--', 'true'], ENV).error, 'must be less than --ttl')
   has('--quiet-checkpoints + --checkpoint-interval together is a usage error, not silently resolved',
     parseArgs(['--quiet-checkpoints', '--checkpoint-interval', '30', '--ttl', '60', '--', 'true'], ENV).error,
     'mutually exclusive')
+
+  // poller-brain#403 round 3 (DevGuru bug #2): an explicitly-passed EMPTY value must not
+  // be silently read as "not set" — `--checkpoint-interval ""` (e.g. from an unset shell
+  // var `--checkpoint-interval "$INTERVAL"`) still consumes the flag, so it must still hit
+  // real validation instead of falling through to the eager default with no indication
+  // anything was wrong.
+  has('--checkpoint-interval "" (explicitly empty) is rejected, not silently treated as unset',
+    parseArgs(['--checkpoint-interval', '', '--ttl', '60', '--', 'true'], ENV).error, 'positive integer')
+  has('--quiet-checkpoints + --checkpoint-interval "" is still rejected as mutually exclusive, not silently resolved to quiet-checkpoints-only',
+    parseArgs(['--quiet-checkpoints', '--checkpoint-interval', '', '--ttl', '60', '--', 'true'], ENV).error,
+    'mutually exclusive')
+
+  // poller-brain#403 round 3 (DevGuru nit #3): equal to --ttl is rejected too (>=, not >) —
+  // at N == ttl the flush would race the kill and could produce at most one checkpoint
+  // duplicating the terminal drop, not a real periodic trigger.
+  has('--checkpoint-interval equal to --ttl is rejected',
+    parseArgs(['--checkpoint-interval', '60', '--ttl', '60', '--', 'true'], ENV).error, 'must be less than --ttl')
+  eq('--checkpoint-interval one second under --ttl is accepted',
+    !!parseArgs(['--checkpoint-interval', '59', '--ttl', '60', '--', 'true'], ENV).error, false)
 
   eq('-- separates flags from a command that has its own flags',
     JSON.stringify(parseArgs(['--', 'ls', '--color'], ENV).opts.cmd), JSON.stringify(['ls', '--color']))
@@ -407,6 +426,82 @@ console.log('deltaOf — new-since-last-checkpoint, not the whole tail')
   eq('truncation is flagged', capped.truncated, true)
 
   eq('missing file → empty, no throw', deltaOf(join(WORK, 'nope.txt'), 0).text, '')
+}
+
+console.log('readChunkAt — bounded FORWARD read from a cursor (poller-brain#403 round 3)')
+{
+  // Unlike deltaOf/tailOf (both anchored to the file's current END), this must walk
+  // FORWARD from `fromOffset` and stay put regardless of how much MORE data follows —
+  // that's the whole reason it exists: a --notify-on scan advancing through a huge
+  // unflushed region needs a cursor that doesn't get dragged toward the tail every time
+  // the file grows.
+  const f = join(WORK, 'chunk.txt')
+  writeFileSync(f, 'AAAAABBBBBCCCCCDDDDD') // 5-byte blocks for easy offset math
+  const first = readChunkAt(f, 0, 10)
+  eq('reads only the first maxBytes, not anchored to the end', first.text, 'AAAAABBBBB')
+  eq('end is fromOffset + bytes actually read', first.end, 10)
+
+  const mid = readChunkAt(f, 10, 5)
+  eq('reads forward from a non-zero cursor', mid.text, 'CCCCC')
+  eq('end reflects the new cursor position', mid.end, 15)
+
+  // The load-bearing property: appending far more data afterward must NOT change what an
+  // earlier cursor position reads — a tail-anchored read (deltaOf/tailOf) would.
+  writeFileSync(f, 'AAAAABBBBBCCCCCDDDDD' + 'Z'.repeat(50000))
+  const stillMid = readChunkAt(f, 10, 5)
+  eq('a 50KB append afterward does not change an earlier cursor\'s read', stillMid.text, 'CCCCC')
+
+  const past = readChunkAt(f, 100000, 10)
+  eq('a cursor past the current size reads nothing', past.text, '')
+  eq('end does not advance past what is actually there', past.end, 100000)
+
+  const short = join(WORK, 'chunk-short.txt')
+  writeFileSync(short, 'tiny')
+  const wholeShort = readChunkAt(short, 0, 100)
+  eq('maxBytes bigger than the file just returns the whole file', wholeShort.text, 'tiny')
+  eq('end stops at the real size, not the requested maxBytes', wholeShort.end, 4)
+
+  eq('missing file → empty, no throw', readChunkAt(join(WORK, 'nope.txt'), 0, 10).text, '')
+}
+
+console.log('notifyScanStep — a match straddling two chunk-read boundaries is still caught (poller-brain#403 round 3, DevGuru #2)')
+{
+  // Deterministic, not timing-based: simulate exactly two ticks of the real checkTimer
+  // loop's own math (searchFrom = max(0, cursor - overlap)) directly against a file where
+  // the match is DELIBERATELY positioned to be split across the first chunk's boundary —
+  // "AUTH-" ends the first chunk, "URL-abc123" starts only in the file's later bytes.
+  const f = join(WORK, 'boundary.txt')
+  const CHUNK = 20
+  const OVERLAP = 8
+  // Bytes 0-19: filler + "AUTH-" ends exactly at byte 20 (the first chunk's boundary).
+  // Bytes 20+: "URL-abc123" continues right after — split exactly at the worst possible
+  // point for a naive non-overlapping chunk read.
+  const content = `${'f'.repeat(15)}AUTH-URL-abc123${'g'.repeat(50)}`
+  writeFileSync(f, content)
+  eq('the match really does straddle byte offset 20 (sanity check on the fixture itself)',
+    content.slice(15, 20), 'AUTH-')
+
+  const notifyRe = /AUTH-URL/
+  // Tick 1: cursor starts at 0, no overlap to subtract yet.
+  const tick1 = notifyScanStep(f, notifyRe, 0, CHUNK)
+  ok('a chunk ending mid-match does NOT match on its own — proves this fixture actually tests the boundary, not a lucky single read',
+    !tick1.matched, tick1)
+  eq('cursor advances to the end of what was read', tick1.end, CHUNK)
+
+  // Tick 2: caller applies the same overlap math the real checkTimer uses.
+  const searchFrom2 = Math.max(0, tick1.end - OVERLAP)
+  const tick2 = notifyScanStep(f, notifyRe, searchFrom2, CHUNK)
+  ok('the overlap re-reads enough of the previous chunk\'s tail that the full match is now caught',
+    tick2.matched, { searchFrom2, tick2 })
+
+  // Negative control: an overlap SMALLER than the split (the match's first half is more
+  // than OVERLAP bytes before the boundary) genuinely can still miss it — this isn't a
+  // magic guarantee, it's bounded by NOTIFY_OVERLAP_BYTES >= match length, exactly as
+  // documented on that constant. Proves the test fixture is meaningful, not a tautology.
+  const tinyOverlaySearchFrom = Math.max(0, tick1.end - 2) // way less overlap than the 20-byte match
+  const tinyOverlapTick = notifyScanStep(f, notifyRe, tinyOverlaySearchFrom, CHUNK)
+  ok('an overlap shorter than the match length can still miss it — confirms the fix is the overlap, not luck',
+    !tinyOverlapTick.matched, tinyOverlapTick)
 }
 
 console.log('tailOf')
@@ -729,6 +824,172 @@ console.log('--quiet-checkpoints + --notify-on: notify-on still fires, quiet/cei
   const drops = dropTexts(dir)
   eq('exactly one interim checkpoint (the notify-on match) plus the terminal drop — no others leaked in',
     drops.length, 2)
+}
+
+console.log('--quiet-checkpoints + --notify-on: match survives a burst far bigger than the old peek cap (poller-brain#403 round 3, DevGuru)')
+{
+  // DevGuru's exact repro: under --quiet-checkpoints (so NOTHING else can ever trigger a
+  // checkpoint — no quiet-debounce, no ceiling), a match immediately followed by a burst
+  // bigger than the old 1500-byte end-anchored peek made the match PERMANENTLY invisible —
+  // every future peek's window was anchored to the ever-growing tail, never to where the
+  // match actually was. Zero checkpoints, ever, even though the pattern matched.
+  //
+  // Reproduced here with: a ~600-byte non-matching lead-in (forces the incremental scanner
+  // to take several ticks to even reach the match — proving it genuinely walks forward,
+  // not just "happens to" cover offset 0 in one big default-sized read), then the match
+  // line, then a ~100KB burst written in small chunks with short sleeps between them (not
+  // synchronously — so the burst actually spans several check-interval ticks while the
+  // scanner is working, exercising the incremental path for real).
+  //
+  // NOTIFY_CHUNK_BYTES/OVERLAP are shrunk far below the default (1500/200) purely to keep
+  // the "several ticks to reach the match" property on a lead-in this test can afford to
+  // write in a fast unit test — production defaults are exercised by the existing
+  // --notify-on tests above (small bursts, no override).
+  const cmd = ['sh', '-c', [
+    'head -c 600 /dev/zero | tr "\\0" "L"', // ~600 bytes of non-matching filler before the match
+    'echo',
+    'echo AUTH-URL-abc123',                 // the match line
+    'i=0',
+    'while [ $i -lt 50 ]; do',               // 50 * 2000 bytes = ~100KB, comfortably over the old 1500-byte cap
+    '  head -c 2000 /dev/zero | tr "\\0" "X"',
+    '  sleep 0.02',
+    '  i=$((i+1))',
+    'done',
+  ].join('\n')]
+  const r = launch(
+    ['--name', 'unit-quiet-notify-burst', '--ttl', '30', '--quiet-checkpoints', '--notify-on', 'AUTH-URL', '--', ...cmd],
+    {
+      BG_TASK_CHECK_INTERVAL_MS: '20',
+      BG_TASK_NOTIFY_CHUNK_BYTES: '100',
+      BG_TASK_NOTIFY_OVERLAP_BYTES: '20',
+    },
+  )
+  eq('launch exits 0', r.code, 0)
+  const dir = latestDir()
+  const status = await waitDone(dir, 300)
+  has('runner reached a terminal state', status || '', 'terminal_drop=')
+
+  const logSize = statSync(join(dir, 'output.log')).size
+  ok('the burst really did exceed the old 1500-byte peek cap by a wide margin — this is not a small-burst case',
+    logSize > 50_000, `output.log was only ${logSize} bytes`)
+
+  // Under --quiet-checkpoints, NOTHING but a --notify-on match can produce an interim
+  // checkpoint — no quiet-debounce, no ceiling. So any checkpoint at all here is
+  // structural proof the match was found, not a coincidence of some other trigger.
+  const checkpointLines = (status || '').match(/^checkpoint=\d+ at=.+$/gm) || []
+  ok('the notify-on match produced a real interim checkpoint (the exact case DevGuru found producing zero)',
+    checkpointLines.length >= 1, `status:\n${status}`)
+
+  // It must have been caught DURING the run, not only recovered by luck right at the end —
+  // the old bug's failure mode was "never", so catching it promptly (well before the
+  // terminal drop) is the meaningful proof, not just "eventually something happened".
+  const startedAt = Date.parse(/^started=(.+)$/m.exec(status || '')?.[1] || '')
+  const endedAt = Date.parse(/^ended=(.+)$/m.exec(status || '')?.[1] || '')
+  const firstCheckpointAt = Date.parse(/^checkpoint=1 at=(.+)$/m.exec(status || '')?.[1] || '')
+  if (Number.isFinite(startedAt) && Number.isFinite(endedAt) && Number.isFinite(firstCheckpointAt)) {
+    const totalMs = endedAt - startedAt
+    const foundAfterMs = firstCheckpointAt - startedAt
+    ok('the match was found well before the run finished, not just barely recovered at the end',
+      foundAfterMs < totalMs * 0.9, `found at +${foundAfterMs}ms of a ${totalMs}ms run`)
+  }
+}
+
+console.log('--quiet-checkpoints + --notify-on: match + entire 200KB burst land in a SINGLE check-interval window (poller-brain#403 round 3, DevGuru #4)')
+{
+  // DevGuru's literal ask: this must work even when the whole burst lands in ONE tick, not
+  // spread across many with sleeps (the test above already covers the spread-out case).
+  // Nothing here is spread out — the match line and the entire ~200KB burst are written
+  // synchronously, back to back, all landing on disk well before the runner's very first
+  // checkTimer tick has a chance to run. A trailing `sleep` keeps the process alive long
+  // enough for that first tick to actually fire (otherwise the child could exit before
+  // ANY tick runs at all, which would test nothing). Production defaults throughout — no
+  // NOTIFY_CHUNK_BYTES/OVERLAP/CHECK_INTERVAL_MS override — because the forward-scanning
+  // cursor only cares that the match sits within the first scan window counted from where
+  // it starts (offset 0 here), never how much trails behind it in the file, so this must
+  // succeed on tick one regardless of the burst's total size.
+  const cmd = ['sh', '-c', 'echo AUTH-URL-abc123; head -c 200000 /dev/zero | tr "\\0" "X"; sleep 2']
+  const r = launch(
+    ['--name', 'unit-quiet-notify-onewindow', '--ttl', '30', '--quiet-checkpoints', '--notify-on', 'AUTH-URL', '--', ...cmd],
+  )
+  eq('launch exits 0', r.code, 0)
+  const dir = latestDir()
+  const status = await waitDone(dir, 300)
+  has('runner reached a terminal state', status || '', 'terminal_drop=')
+
+  const logSize = statSync(join(dir, 'output.log')).size
+  ok('the whole burst really did land in one go — genuinely single-window, not accidentally spread out',
+    logSize > 150_000, `output.log was only ${logSize} bytes`)
+
+  // Same structural argument as the spread-out test above: under --quiet-checkpoints,
+  // NOTHING but a --notify-on match can produce an interim checkpoint.
+  const checkpointLines = (status || '').match(/^checkpoint=\d+ at=.+$/gm) || []
+  ok('the match was still caught even with the entire 200KB already on disk by the very first tick',
+    checkpointLines.length >= 1, `status:\n${status}`)
+}
+
+console.log('--notify-on on the DEFAULT path (no --quiet-checkpoints, no --checkpoint-interval): the new cursor scan changes shared behavior too (poller-brain#403 round 3, DevGuru #1)')
+{
+  // The incremental notify-on scan (round 3) replaced a code path used by EVERY
+  // --notify-on task, not just ones also passing --quiet-checkpoints or
+  // --checkpoint-interval — this is the plain default-mode case, where the quiet-debounce
+  // and ceiling triggers are both still fully active. Two things must both still hold:
+  //  - a non-matching quiet gap still produces its own normal debounce checkpoint (the
+  //    cursor bookkeeping added purely for notify-on must not interfere with the
+  //    pre-existing triggers it now shares this closure with)
+  //  - the eventual match still bypasses the debounce immediately, exactly as prompt as
+  //    before the round-3 rewrite (see '--notify-on bypasses the debounce' above, which is
+  //    unchanged and still green — this test adds the "AND normal checkpoints still work
+  //    alongside it" half that test doesn't cover)
+  const cmd = ['sh', '-c', 'echo quiet-burst-one; sleep 0.6; echo AUTH-URL-abc123; sleep 5']
+  const r = launch(['--name', 'unit-notify-default', '--ttl', '30', '--notify-on', 'AUTH-URL', '--', ...cmd], {
+    BG_TASK_QUIET_MS: '150',
+    BG_TASK_CHECK_INTERVAL_MS: '50',
+    BG_TASK_MIN_FLUSH_SEC: '30', // ceiling never fires in this test's runtime — isolate the debounce
+  })
+  eq('launch exits 0', r.code, 0)
+  const dir = latestDir()
+  let sawMatch = false
+  for (let i = 0; i < 40; i++) {
+    if (dropTexts(dir).some((t) => t.includes('AUTH-URL-abc123'))) { sawMatch = true; break }
+    await sleep(150)
+  }
+  ok('the eventual match is still caught promptly on the default path', sawMatch, dropTexts(dir))
+  const drops = dropTexts(dir)
+  ok('the earlier quiet gap ALSO produced its own normal debounce checkpoint — the notify cursor bookkeeping did not swallow or block it',
+    drops.some((t) => t.includes('interim checkpoint') && t.includes('quiet-burst-one') && !t.includes('AUTH-URL')),
+    drops)
+}
+
+console.log('--notify-on scan lag is made visible, not silent, when the backlog outpaces the bounded per-tick scan (poller-brain#403 round 3, DevGuru #3)')
+{
+  // Explicit decision (see NOTIFY_LAG_WARN_BYTES in bg-task-runner.mjs): the scanner never
+  // reads the whole backlog in one unbounded go, and never skips a byte range either — it
+  // just takes proportionally more ticks to fully cover a very large burst. That's a DELAY,
+  // not a loss, but the delay must still be visible. Here the backlog is pushed well past a
+  // tiny, test-only lag threshold, with a pattern that never matches (so the scan never gets
+  // to reset via a flush) — proving the lag note fires once the threshold is crossed.
+  const cmd = ['sh', '-c', 'head -c 20000 /dev/zero | tr "\\0" "N"; sleep 2'] // 20000 bytes of filler, never matches the pattern below
+  const r = launch(
+    ['--name', 'unit-notify-lag', '--ttl', '30', '--quiet-checkpoints', '--notify-on', 'NEVER-MATCHES-THIS', '--', ...cmd],
+    {
+      BG_TASK_CHECK_INTERVAL_MS: '20',
+      BG_TASK_NOTIFY_CHUNK_BYTES: '50',   // tiny chunk so 20000 bytes is a large multiple of it
+      BG_TASK_NOTIFY_OVERLAP_BYTES: '10',
+      BG_TASK_NOTIFY_LAG_WARN_BYTES: '2000', // low threshold — 20000 bytes of backlog crosses it immediately
+    },
+  )
+  eq('launch exits 0', r.code, 0)
+  const dir = latestDir()
+  // Poll status directly rather than waiting for the terminal drop — the whole point is to
+  // observe the lag note appear WHILE the scan is still working through the backlog.
+  let sawLagNote = false
+  for (let i = 0; i < 60; i++) {
+    const status = existsSync(join(dir, 'status')) ? readFileSync(join(dir, 'status'), 'utf8') : ''
+    if (/^notify_scan_lag_bytes=\d+ at=/m.test(status)) { sawLagNote = true; break }
+    await sleep(100)
+  }
+  ok('a large unscanned backlog is noted explicitly, not silently absorbed', sawLagNote)
+  await waitDone(dir)
 }
 
 console.log('--checkpoint-interval spaces checkpoints ~N seconds apart, not eagerly per gap (poller-brain#403 round 2)')
