@@ -339,6 +339,18 @@ accepts. There is no override: the whole reason `--channel` used to exist (redir
 reply elsewhere) doesn't apply anymore, since a drop can only ever land in the thread it's
 written into.
 
+## Diagnosing a session that vanished without a trace
+
+This skill's own machinery at least leaves a `status` file behind for a task that ran — a
+whole *session* that goes silent (no error, no final message, no drop) leaves nothing until
+you inspect its own transcript. If you need to root-cause one — scheduled/background
+sessions are the most common case, e.g. something waiting on `ScheduleWakeup` that never
+resumed — see
+`$CLAUDE_CONFIG_DIR/skills/background-task/references/diagnosing-silent-sessions.md` for
+the local-transcript-inspection technique. Advanced/opt-in: reach for it only when a
+session's expected output never arrived and you need the actual last-known-state, not a
+guess.
+
 ## Self-test
 
 ```bash
