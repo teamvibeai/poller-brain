@@ -28,8 +28,9 @@ first (a currently-running session's own transcript is the reliable reference) r
 assuming a path from this doc — it can differ from container to container.
 
 Filter to a narrow window around the suspected failure time (GNU find/coreutils — the `-f`
-form of `stat` is BSD/macOS-only and fails *silently* on Linux: it prints filesystem info
-instead of mtime and still exits 0, easy to mistake for real output):
+form of `stat` is BSD/macOS-only and fails on Linux: it prints filesystem info instead of
+mtime. `stat` itself exits 1 on that failure, but `find -exec` discards the child's exit
+code, so the pipeline still exits 0 — easy to mistake the garbage for real output):
 
 ```bash
 find /data/base-brain/projects/<encoded-cwd> -maxdepth 1 -name '*.jsonl' \
@@ -48,14 +49,26 @@ this isn't a live trap, but don't assume that fleet-wide.)
 ## 2. Identify which candidate matches which command/skill
 
 The reliable signal — present in every session, not just skill-invoking ones — is the first
-non-sidechain `type: "user"` record: it carries the message that triggered the session,
-including the `**From:**` header and, for scheduled/maintenance sessions (the primary
-audience for this technique), the full triggering prompt text:
+non-sidechain `type: "user"` record whose `message.content` is a plain string (not an array):
+it carries the message that triggered the session, including the `**From:**` header and, for
+scheduled/maintenance sessions (the primary audience for this technique), the full triggering
+prompt text. The string-content check matters because most `type: "user"` records in a
+transcript are tool-result echoes, not the trigger message — `.message.content` is an array
+of `tool_result` blocks for those, and without filtering on it you get the trigger message
+plus a `null` per tool-result turn mixed into the output:
 
 ```bash
-jq -rs '[.[] | select(.type=="user" and (.isSidechain|not))][0].message.content
-  | if type=="array" then .[0].text else . end' <file>.jsonl
+jq -rn 'first(inputs
+  | select(.type=="user" and (.isSidechain|not) and (.message.content|type)=="string"))
+  | .message.content' <file>.jsonl
 ```
+
+Use `inputs`/`first` (streams and stops at the first match), not `-s`/slurp: slurp mode has
+to parse the *entire* file into one array before it emits anything, so a transcript truncated
+by a session getting killed mid-write — exactly the file you came here to read — fails with a
+parse error and empty stdout, in a pipe with exit 0, looking exactly like "nothing here."
+`first(inputs | select(...))` finds the trigger message (always near the top) and stops
+before jq ever reaches the truncated tail.
 
 If the session used a `Skill` tool, `grep -o '"skill": *"[^"]*"' <file>.jsonl` narrows it
 further — but treat this as a **supplement, not the primary signal**: on a sampled brain,
@@ -68,7 +81,12 @@ maintenance sessions, the main audience for this whole technique, never call it.
 Raw JSONL is not practically readable line-by-line. A short script that extracts `type`,
 timestamp, and a truncated content preview per line is enough to see exactly where the
 transcript ends and what the last recorded action was — e.g. a `ScheduleWakeup` call that
-got a "scheduled" confirmation and then nothing.
+got a "scheduled" confirmation and then nothing. **Filter the script to `user`/`assistant`
+records** — the file's tail is almost always bookkeeping written *after* the last real turn
+(`last-prompt`, `mode`, and similar internal record types), not the action itself, so an
+unfiltered script reads the wrong line as "the last thing that happened." The same caveat
+applies to the mtime filter in step 1: file mtime reflects the last bookkeeping write, not
+the last actual action, which can matter at minute-scale windows.
 
 ## 4. Cross-check against a known-good run of the same skill/command
 
