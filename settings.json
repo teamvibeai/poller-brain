@@ -14,5 +14,18 @@
       "mcp__slack__*",
       "mcp__teamvibe-api__*"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx $CLAUDE_CONFIG_DIR/hooks/bash-deny-list.ts"
+          }
+        ]
+      }
+    ]
   }
 }
