@@ -208,6 +208,17 @@ This also covers a single slow call within one turn, not just multi-step jobs �
 your session mid-work the same way. See the `background-task` skill for the same-turn fallback and
 a sleep-loop trap to avoid if you truly can't end your turn.
 
+**Scheduled/maintenance-origin sessions can't be woken — plan around it, don't try to stay
+synchronous.** A session whose `INBOX_THREAD_ID` isn't Slack-shaped (3 colon-separated segments,
+2nd/3rd non-empty, `botId !== 'scheduled'` — e.g. `scheduled:<id>:<ts>` from a
+`create_scheduled_message` firing, or `maintenance_<brainId>_<ts>` from a maintenance/heartbeat
+run) will never be picked back up: the idle watchdog above kills it exactly the same as any other
+session, but there is no thread for a later session to reconnect to. `bg-task.mjs` refuses to
+launch against one of these threadIds unless you pass `--no-wake` (poller-brain#384/#385) — with
+it, the task still runs, but you must read the result back yourself later via `--list` or the
+task dir, and schedule any follow-up explicitly with `create_scheduled_message`. See the
+`background-task` skill's *Reliability bar* section for the exact shape check.
+
 ## Message Types
 
 - Standard message — respond normally
