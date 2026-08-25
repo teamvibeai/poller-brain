@@ -38,6 +38,8 @@ Reviewers are empowered to block a base-brain PR on missing or GitHub-enumeratio
 
 Run the Bash backgrounding hook regression tests with `node hooks/__tests__/block-background-escapes.test.mjs` (no dependencies).
 
+Use dependency-free Node (`.mjs`) for JavaScript hook entrypoints and libraries. Put hook tests in `hooks/__tests__/*.test.mjs`; CI selects only `*/__tests__/*.test.mjs` under `mcp`, `hooks`, `skills`, and `scripts`. Run telemetry checks with `node hooks/__tests__/bash-telemetry.test.mjs` and `node hooks/__tests__/bash-telemetry-redact.test.mjs`. Telemetry fails open silently, limits stdin to 256 KiB and command text to 64 KiB, and bounds network I/O to 2 seconds (2.5 seconds for the whole process, including stdin). Unsupported shell syntax is recorded as a redaction marker.
+
 ## Why this guide is here, not in `CLAUDE.md`
 
 `CLAUDE.md` is loaded as system prompt for **every agent session** across the fleet. Per-conversation token cost. This contribution guide is read only when someone authors a PR — that's where it belongs.
