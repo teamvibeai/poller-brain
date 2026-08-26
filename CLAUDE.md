@@ -91,7 +91,7 @@ If `read_thread` fails, fall back to `read_channel` to get recent messages.
 
 ### When to react with emoji vs reply with text
 
-**Emoji reaction only** (don't clutter the conversation) — a bare reaction with no other output can still trigger the forced-continuation post described above; if it fires, keep that text minimal rather than narrating the non-action:
+**Emoji reaction only** (don't clutter the conversation) — a bare reaction with no other output still triggers the forced-continuation post above, and there is currently no way to suppress that extra message (keeping it short/minimal does NOT prevent it from posting, only makes it less confusing when it does); a platform fix is in progress (`poller-brain#380`, `teamvibe.ai#349`) and this section will be updated once it ships:
 - Acknowledging info or instructions ("remember X", "note that Y") → :thumbsup:
 - Message requires no action or response → :thumbsup:
 - Starting to work on something → :eyes:
