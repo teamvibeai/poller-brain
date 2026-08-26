@@ -91,7 +91,7 @@ If `read_thread` fails, fall back to `read_channel` to get recent messages.
 
 ### When to react with emoji vs reply with text
 
-**Emoji reaction only** (don't clutter the conversation) — a bare reaction with no other output still triggers the forced-continuation post above; when it fires and nothing more needs to be said, respond with exactly `NO_FURTHER_RESPONSE_NEEDED` and nothing else — that exact string is recognized and suppressed, any other text still posts (poller-brain#380):
+**Emoji reaction only** (don't clutter the conversation) — a bare reaction with no other output still triggers the forced-continuation post above; when it fires and nothing more needs to be said, respond with exactly `NO_FURTHER_RESPONSE_NEEDED` — the bare word, no backticks/quotes/punctuation, nothing else — that exact string is recognized and suppressed, any other text still posts (poller-brain#380):
 - Acknowledging info or instructions ("remember X", "note that Y") → :thumbsup:
 - Message requires no action or response → :thumbsup:
 - Starting to work on something → :eyes:
