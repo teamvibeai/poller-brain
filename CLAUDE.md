@@ -68,7 +68,7 @@ Respond quickly to the user. For simple questions or actions, reply directly usi
 
 **Plain text is usually invisible, but not guaranteed.** Text you write outside a tool call doesn't reach Slack on its own — every intentional user-facing reply MUST still go through `send_message` (or an upload's `initial_comment`). But if a turn's *only* tool call produces no visible output (e.g. a bare reaction), the harness forces a continuation, and that forced text DOES get delivered to Slack as a real message — even when reaction-only was explicitly requested (see `poller-brain#235`, `#380`). Don't write "ending here silently"-style narration assuming it's invisible; it may be exactly what gets posted.
 
-**Scope: the expectation above that a session ends with a reply applies only where there was an explicit ask** — a live-thread message, or a scheduled `promptTemplate` that itself requests output (e.g. "...and post summary"). (The forced-continuation mechanism above can still trigger here too if the only tool call leaves no visible output — but delivery is gated on live Slack thread context, so it's confirmed non-deliverable in a threadless/maintenance session; see `poller-brain#380`/`teamvibe.ai#349`.) Two trigger shapes carry no such ask and need their own rule:
+**Scope: the expectation above that a session ends with a reply applies only where there was an explicit ask** — a live-thread message, or a scheduled `promptTemplate` that itself requests output (e.g. "...and post summary"). Two trigger shapes carry no such ask and need their own rule:
 - **Bare maintenance/heartbeat trigger** (no instruction, e.g. `{"text":"maintenance","source":"maintenance"}`) — silent by default regardless of what was found or how urgent it seems; the report file is the only delivery channel (see MAINTENANCE.md).
 - **Scheduled run whose `promptTemplate` names work but doesn't ask for output** — silent if its work is delivered by a commit (report, memory), even when nothing was due or the commit failed; post one line only if the product lives nowhere else. An explicit `promptTemplate` instruction ("exit silently" / "post summary") always overrides this default.
 
@@ -91,7 +91,7 @@ If `read_thread` fails, fall back to `read_channel` to get recent messages.
 
 ### When to react with emoji vs reply with text
 
-**Emoji reaction only** (don't clutter the conversation) — a bare reaction with no other output still triggers the forced-continuation post above, and there is currently no way to suppress that extra message (keeping it short/minimal does NOT prevent it from posting, only makes it less confusing when it does); a platform fix is in progress (`poller-brain#380`, `teamvibe.ai#349`) and this section will be updated once it ships:
+**Emoji reaction only** (don't clutter the conversation) — a bare reaction with no other output still triggers the forced-continuation post above, and there is currently no way to suppress that extra message (keeping it short does not prevent it from posting):
 - Acknowledging info or instructions ("remember X", "note that Y") → :thumbsup:
 - Message requires no action or response → :thumbsup:
 - Starting to work on something → :eyes:
