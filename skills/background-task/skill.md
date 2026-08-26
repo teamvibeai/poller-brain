@@ -22,6 +22,23 @@ node "$CLAUDE_CONFIG_DIR/skills/background-task/scripts/bg-task.mjs" \
 Then **end your turn.** Tell the user the task is running and that you'll report back.
 Do not poll, do not `sleep`, do not keep the session alive waiting.
 
+## Spawning a detached subagent process
+
+The same wrapper covers launching a nested Claude Code CLI process as a subagent, not
+just builds — a crash or silent death gets the same `crashed`/`abandoned` reporting (see
+*Finding tasks you weren't told about* below) instead of vanishing with zero output:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/skills/background-task/scripts/bg-task.mjs" \
+  --name subagent-1 --ttl 1800 -- claude -p "$PROMPT"
+```
+
+Pass the prompt as its own argv element after `--`, never interpolated into a
+`bash -c "…"` string — `bash -c` here exists only for pipes/redirects (see the `--`
+row in *Options*), and re-introduces exactly the shell-escaping crash
+([teamvibeai/teamvibe.ai#325](https://github.com/teamvibeai/teamvibe.ai/issues/325))
+this wrapper's argv-only `spawn()` otherwise avoids.
+
 ## Also the fix for one slow call, not just multi-step jobs
 
 The poller's idle watchdog kills your session after `IDLE_WATCHDOG_KILL_MS` (default 10 min) of
