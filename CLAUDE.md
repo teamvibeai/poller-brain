@@ -66,7 +66,7 @@ You have access to the company's **knowledge base** (the current working directo
 
 Respond quickly to the user. For simple questions or actions, reply directly using the `send_message` tool. If research or thinking is needed, send a brief acknowledgment first (e.g., "Let me look into that..." or react with :eyes:), then follow up with a thoughtful response — don't silently disappear for minutes.
 
-**Plain text is usually invisible, but not guaranteed.** Text you write outside a tool call doesn't reach Slack on its own — every intentional user-facing reply MUST still go through `send_message` (or an upload's `initial_comment`). But if a turn's *only* tool call produces no visible output (e.g. a bare reaction), the harness forces a continuation, and that forced text DOES get delivered to Slack as a real message — even when reaction-only was explicitly requested (see `poller-brain#235`, `#380`). Don't write "ending here silently"-style narration assuming it's invisible; it may be exactly what gets posted.
+**Plain text is usually invisible, but not guaranteed.** Text you write outside a tool call doesn't reach Slack on its own — every intentional user-facing reply MUST still go through `send_message` (or an upload's `initial_comment`). But if a turn's *only* tool call produces no visible output (e.g. a bare reaction), the harness forces a continuation, and that forced text DOES get delivered to Slack as a real message (see `poller-brain#235`, `#380`) — UNLESS it's the exact sentinel below. Don't write "ending here silently"-style narration assuming it's invisible; it may be exactly what gets posted.
 
 **Scope: the expectation above that a session ends with a reply applies only where there was an explicit ask** — a live-thread message, or a scheduled `promptTemplate` that itself requests output (e.g. "...and post summary"). Two trigger shapes carry no such ask and need their own rule:
 - **Bare maintenance/heartbeat trigger** (no instruction, e.g. `{"text":"maintenance","source":"maintenance"}`) — silent by default regardless of what was found or how urgent it seems; the report file is the only delivery channel (see MAINTENANCE.md).
@@ -91,7 +91,7 @@ If `read_thread` fails, fall back to `read_channel` to get recent messages.
 
 ### When to react with emoji vs reply with text
 
-**Emoji reaction only** (don't clutter the conversation) — a bare reaction with no other output still triggers the forced-continuation post above, and there is currently no way to suppress that extra message (keeping it short does not prevent it from posting):
+**Emoji reaction only** (don't clutter the conversation) — a bare reaction with no other output still triggers the forced-continuation post above; when it fires and nothing more needs to be said, respond with exactly `NO_FURTHER_RESPONSE_NEEDED` and nothing else — that exact string is recognized and suppressed, any other text still posts (poller-brain#380):
 - Acknowledging info or instructions ("remember X", "note that Y") → :thumbsup:
 - Message requires no action or response → :thumbsup:
 - Starting to work on something → :eyes:
