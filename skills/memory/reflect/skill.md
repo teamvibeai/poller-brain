@@ -82,7 +82,7 @@ Review memory files for bloat:
 
 **Action:** Split, prune, or archive as needed.
 
-**`MEM_REGISTRY.md` inline policy prose:** if the registry carries inline policy-prose sections (e.g. a HOLD-lifecycle rule) rather than just `[MEM-NNN]` rows, that is live content, not the dead REMOVED rows the automated archival (Step 9d in `consolidate/skill.md`, poller-brain#217) relocates — deciding whether/where to move it is a manual reflection judgment. Relocate such prose verbatim to `memory/procedural/{topic}.md` and leave a one-line pointer in the registry (e.g. `> 📖 [section names] relocated to [procedural/{topic}.md](procedural/{topic}.md)`). Do not fold this into the automated consolidate step (poller-brain#218).
+**`MEM_REGISTRY.md` inline policy prose:** if the registry carries inline policy-prose sections (e.g. a HOLD-lifecycle rule) rather than just `[MEM-NNN]` rows, that is live content, not the dead REMOVED rows the automated archival (Step 9d in `consolidate/skill.md`, poller-brain#217) relocates — deciding whether/where to move it is a manual reflection judgment. Relocate such prose verbatim to `memory/procedural/{topic}.md` and leave a one-line pointer in the registry (e.g. `> 📖 [section names] relocated to [procedural/{topic}.md](procedural/{topic}.md)`). Do not fold this into the automated consolidate step (poller-brain#217).
 
 ## Output
 
