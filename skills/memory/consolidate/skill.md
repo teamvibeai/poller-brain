@@ -633,6 +633,8 @@ Create both a markdown and JSON report:
 - **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, and `## Memory Metrics` from Step 9b)
 - **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` and `mem-integrity-check` keys in `selfAssessment`, and the `[self-critique]` entry from Step 11 in `processImprovements`)
 
+**Post-write existence check (required, added per pb#257):** After writing the JSON report, run `ls reports/YYYY-MM-DD-memory-consolidation.json` and confirm it exists on disk. This step is easy to drop silently on unusually busy sessions (many interleaved threads) — and when it's dropped, the poller's guard-file hook (`teamvibe.ai#128`) has nothing to POST, so `.last_consolidation` never updates even though real consolidation content landed. The next `maintenance-guard.sh` run then reports a false-overdue signal despite consolidation having actually happened. Do not end the session (final commit made, TODAY.md archived) without this file present — if the check fails, stop and produce the report now rather than closing the session first.
+
 For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log was actively processed this run — either (a) Step 7 deleted one or more log files, OR (b) Steps 2–4 extracted content from at least one log and produced at least one ADD or UPDATE action. Set to `false` if no logs were processed (e.g., no logs in range, all NOOP). **Always include daily log files whose content was extracted in `filesChanged`**, even if they were not deleted — listing source logs gives the evaluator the evidence of log file activity it needs to verify this criterion.
 
 ## Scoring Guidance
@@ -644,6 +646,8 @@ When deciding what to promote, weigh:
 - **Impact** — does this affect how you should behave in future sessions?
 
 ## Commit
+
+Before committing, confirm both `reports/YYYY-MM-DD-memory-consolidation.md` and `.json` exist on disk (`ls reports/YYYY-MM-DD-memory-consolidation.*`) — see Step 12's post-write existence check.
 
 After consolidation, commit all changes (including reports):
 ```
