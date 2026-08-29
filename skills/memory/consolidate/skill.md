@@ -565,7 +565,11 @@ An entry the script cannot find cited anywhere (or only ever cited ambiguously, 
 
 ### 9g. Checkpoint Commit (crash-safety)
 
-**Commit again now, before continuing to Step 10.** Second of the two intermediate checkpoints added by `teamvibeai/poller-brain#436` (see Step 6a for the full rationale) — protects the heartbeat sweep, MEM audit, and size-reduction work from Steps 7-9 the same way Step 6a protected Steps 0-6.
+**Commit again now, before continuing to Step 10 — unless an unresolved integrity alarm fired in Steps 7-9.** Second of the two intermediate checkpoints added by `teamvibeai/poller-brain#436` (see Step 6a for the full rationale) — protects the heartbeat sweep, MEM audit, and size-reduction work from Steps 7-9 the same way Step 6a protected Steps 0-6.
+
+**Exception — do not run this checkpoint if Step 9d's integrity-alarm condition fired and is still unresolved.** Step 9d already instructs: "On non-zero exit, treat it as an integrity alarm: do NOT commit a partial state, and record the failure in the report. Investigate before retrying." That instruction takes precedence over this checkpoint — committing here would silently override it. If Step 9d (or any other Step 7-9 sub-step) raised an unresolved alarm, stop and investigate per that step's own guidance instead of running the commit below; do not proceed to Step 10 with an unresolved alarm either.
+
+If no unresolved alarm is pending:
 
 ```
 git add -A
