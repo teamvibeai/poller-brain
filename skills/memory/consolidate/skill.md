@@ -339,6 +339,17 @@ Pick the trim target **by property, not by section name** — SUMMARY structure 
 
 The 9000 B cap is a soft bound that keeps the always-in-context SUMMARY.md from crowding the working context. Encoding the trigger here removes the prior reliance on reflection-cycle recommendation chaining, where the same trim was re-proposed across cycles without ever landing (`teamvibeai/poller-brain#186`).
 
+### 6a. Checkpoint Commit (crash-safety)
+
+**Commit now, before continuing to Step 7.** `teamvibeai/poller-brain#436`: this skill previously committed exactly once, at the very end (Step 12). A session that dies anywhere in Steps 0-11 — idle-watchdog kill, session-lock force-steal, or any other mid-run termination — left the entire cycle's writes sitting uncommitted with no report, recoverable only by luck if a later wake happened to notice the dirty working tree before anything else touched it. Intermediate checkpoints bound the blast radius of a mid-run death to "since the last checkpoint" instead of "the whole cycle." SUMMARY.md is the highest-value tier write to protect first, since it's always in context.
+
+```
+git add -A
+git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — steps 0-6"
+```
+
+If the working tree is empty at this point (a zero-promotion cycle with no file changes yet), skip silently — there is nothing to checkpoint. If the commit fails because the working tree already carries unexpected local changes from a prior interrupted run, do not discard them — inspect and reconcile first, per the base-brain git-safety protocol, before proceeding.
+
 ### 7. Archive Old Daily Logs
 
 This 30-day figure is also restated in base-brain `CLAUDE.md`'s memory-persistence rules (always in context, unlike this skill, which only loads during consolidation) — if this threshold ever changes, update that mention too so the two don't drift apart the way `MAINTENANCE.md` and this file did (`teamvibeai/poller-brain#318`).
@@ -552,6 +563,21 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-mistakes-trim.ts"
 
 An entry the script cannot find cited anywhere (or only ever cited ambiguously, or bundles multiple keys) is left with its full narrative — that's expected, not a failure.
 
+### 9g. Checkpoint Commit (crash-safety)
+
+**Commit again now, before continuing to Step 10 — unless an unresolved integrity alarm fired in Steps 7-9.** Second of the two intermediate checkpoints added by `teamvibeai/poller-brain#436` (see Step 6a for the full rationale) — protects the heartbeat sweep, MEM audit, and size-reduction work from Steps 7-9 the same way Step 6a protected Steps 0-6.
+
+**Exception — do not run this checkpoint if Step 9d's integrity-alarm condition fired and is still unresolved.** Step 9d already instructs: "On non-zero exit, treat it as an integrity alarm: do NOT commit a partial state, and record the failure in the report. Investigate before retrying." That instruction takes precedence over this checkpoint — committing here would silently override it. If Step 9d (or any other Step 7-9 sub-step) raised an unresolved alarm, stop and investigate per that step's own guidance instead of running the commit below; do not proceed to Step 10 with an unresolved alarm either.
+
+If no unresolved alarm is pending:
+
+```
+git add -A
+git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — steps 7-9"
+```
+
+Skip silently if the working tree is empty (nothing changed since the Step 6a checkpoint).
+
 ### 10. Assess Daily Log Compliance
 
 Before self-critique, run observable checks on the daily log scratchpad and record the outcome in both reports.
@@ -645,7 +671,9 @@ When deciding what to promote, weigh:
 
 ## Commit
 
-After consolidation, commit all changes (including reports):
+After consolidation, commit all remaining changes (including reports). This is the final checkpoint — it covers Steps 10-12 on top of the two intermediate checkpoints already committed at Step 6a and Step 9g (`teamvibeai/poller-brain#436`):
 ```
 chore: consolidate memory (YYYY-MM-DD)
 ```
+
+If Steps 6a/9g already committed everything and nothing changed since the last checkpoint, this final commit only needs to add the reports produced in Step 12.
