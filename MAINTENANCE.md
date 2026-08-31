@@ -7,6 +7,8 @@ Execute them during scheduled maintenance sessions. (Legacy: heartbeat sessions 
 
 Every background maintenance operation MUST produce a report file. This gives users visibility into what the agent did without digging through git history. **The report file + git commit is the delivery channel — not Slack.** A bare maintenance/heartbeat trigger carries no explicit ask (see CLAUDE.md "CRITICAL: How to Respond" scope note), so do not additionally write to Slack in any form (`send_message`, file/snippet upload, `update_message`) as a summary, even when the run surfaced something noteworthy, blocked, or worth escalating (`poller-brain#327`) — it is silent because there was no ask, regardless of what the run produced. The only reason to post is if the *triggering* message itself explicitly asked for it — e.g. a `create_scheduled_message` run whose `promptTemplate` says "...and post summary" — in which case that instruction is the ask, and follow it.
 
+The `owner-decision-digest` skill (`skills/memory/owner-decision-digest/skill.md`, `poller-brain#388`) is an instance of that same ask-based rule, not an exception to it — a separate scheduled run whose own `promptTemplate` explicitly asks for exactly this check. It never fires from a bare maintenance/heartbeat trigger; consolidation only ever writes candidate items to the markdown report for it to read later.
+
 ### Report location
 
 `reports/YYYY-MM-DD-{operation-name}.md`
@@ -184,6 +186,8 @@ assumed. Do not write new entries to `PENDING_ISSUES.md`.
 
 - **Memory migration**: If `memory/core/` directory does not exist, run the migration described in the `memory` skill. This splits the old monolithic MEMORY.md into the tiered structure. Only needed once per brain.
 - **`PENDING_ISSUES.md` migration**: If this file exists with `status: pending` entries, submit each one via `mcp__teamvibe-api__submit_feedback` — infer `type`/`priority` from the entry's content (the old format didn't have them) and include the original `repo` in `context` — then delete the file. Only needed once per brain.
+
+Note: the `owner-decision-digest` schedule is deliberately **not** in this list — bootstrapping it requires real Slack channel context to pass as an explicit `origin` (see that skill's Setup section), which a bare maintenance session doesn't have (`response_context: {}`) and would silently freeze the schedule's delivery target to the wrong place (`poller-brain#124`). Consolidation instead flags a missing schedule via `[blocked]` in `processImprovements`; a human or a live-thread session with real channel context does the actual bootstrap.
 
 ## Daily
 
