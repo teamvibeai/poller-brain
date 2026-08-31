@@ -58,8 +58,8 @@ export function flushIntervalSec(ttl) {
 // Everything argv- and filesystem-related lives inside main() so this file can be
 // imported by the tests without side effects.
 export function parseRunnerArgs(argv) {
-  const [dir, ttlArg, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval] = argv.slice(0, 8)
-  const sep = argv.indexOf('--', 8)
+  const [dir, ttlArg, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, noWake] = argv.slice(0, 9)
+  const sep = argv.indexOf('--', 9)
   return {
     dir,
     ttl: Number(ttlArg),
@@ -69,6 +69,7 @@ export function parseRunnerArgs(argv) {
     notifyOn: notifyOn || '',
     quietCheckpoints: quietCheckpoints || '',
     checkpointInterval: checkpointInterval || '',
+    noWake: noWake || '',
     cmd: sep === -1 ? [] : argv.slice(sep + 1),
   }
 }
@@ -279,8 +280,18 @@ function inboxEnvelope(text) {
 // --dry-run: the point is that NOTHING observable happens outside the task dir, so drops
 // go to a local file instead of the real inbox — same content, same order, just not
 // somewhere a running poller would ever see it.
-export function writeInboxMessage(threadId, text, dir, dry) {
+//
+// --no-wake: threadId is known non-Slack-shaped (poller-brain#384/#385) — the watcher
+// would silently discard a real write anyway, leaving an unread, unprunable directory
+// behind (measured: pruneEmptyInboxDirs only removes EMPTY thread dirs, and this write
+// makes it non-empty forever). Divert the same way --dry-run does instead of writing
+// somewhere nobody will ever read it.
+export function writeInboxMessage(threadId, text, dir, dry, noWake) {
   const payload = inboxEnvelope(text)
+  if (noWake === '1') {
+    appendFileSync(join(dir, 'inbox-drops.jsonl'), `${payload}\n`)
+    return { ok: true, dryRun: true, diverted: 'no-wake' }
+  }
   if (dry === '1') {
     appendFileSync(join(dir, 'inbox-drops.jsonl'), `${payload}\n`)
     return { ok: true, dryRun: true }
@@ -305,7 +316,7 @@ export function writeInboxMessage(threadId, text, dir, dry) {
 }
 
 async function main() {
-  const { dir, ttl, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, cmd } =
+  const { dir, ttl, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, noWake, cmd } =
     parseRunnerArgs(process.argv.slice(2))
   const statusPath = join(dir, 'status')
   const logPath = join(dir, 'output.log')
@@ -320,6 +331,7 @@ async function main() {
   const startedAt = Date.now()
   note([`started=${stamp()}`, `pid=${process.pid}`, `sid=${sessionId()}`, `ttl=${ttl}s`])
   if (dry === '1') note(['dry_run=1'])
+  if (noWake === '1') note(['no_wake=1'])
   if (quietCheckpointsOn) note(['quiet_checkpoints=1'])
   if (checkpointIntervalMs > 0) note([`checkpoint_interval=${checkpointIntervalSec}s`])
 
@@ -351,7 +363,7 @@ async function main() {
       ttl,
       note: noteOf(dir),
       fence: `bg-task-output-${randomBytes(4).toString('hex')}`,
-    }), dir, dry)
+    }), dir, dry, noWake)
     lastFlushOffset = size
     lastFlushAt = Date.now()
     note([`checkpoint=${checkpoints} at=${stamp()}`])
@@ -465,9 +477,9 @@ async function main() {
     childRc,
   })
 
-  const result = writeInboxMessage(threadId, finalPrompt, dir, dry)
+  const result = writeInboxMessage(threadId, finalPrompt, dir, dry, noWake)
   note([
-    `terminal_drop=${result.ok ? (result.dryRun ? 'diverted' : 'ok') : `FAILED:${result.error}`}`,
+    `terminal_drop=${result.ok ? (result.diverted === 'no-wake' ? 'diverted:no-wake' : result.dryRun ? 'diverted' : 'ok') : `FAILED:${result.error}`}`,
     `dropped_at=${stamp()}`,
   ])
 }

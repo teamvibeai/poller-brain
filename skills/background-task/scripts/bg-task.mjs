@@ -23,13 +23,32 @@ const TTL_MAX = 21600
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--note TEXT] [--notify-on REGEX] ' +
-  '[--quiet-checkpoints | --checkpoint-interval SECONDS] [--dry-run] -- <command...>\n' +
+  '[--quiet-checkpoints | --checkpoint-interval SECONDS] [--dry-run] [--no-wake] -- <command...>\n' +
   '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
   console.error(`bg-task: ${msg}`)
   if (code === 2) console.error(USAGE)
   process.exit(code)
+}
+
+// Mirrors parseSlackThreadId in teamvibe.ai's packages/poller/src/inbox-watcher.ts — the
+// only threadId shape the inbox watcher will ever pick back up. Can't import it across
+// repos, so keep this in sync by hand if that function's rule changes (differential-fuzzed
+// against the platform original, DevGuru, 2026-08-25 — 200k+ inputs, 0 mismatches).
+// 3 colon-separated segments, 2nd and 3rd non-empty, 1st (botId) != 'scheduled' — the
+// FIRST segment is allowed to be empty (`:C0:1.2` is valid), only the other two are not.
+// Catching a non-Slack-shaped INBOX_THREAD_ID here (Scheduler(system)- or maintenance-
+// origin sessions, e.g. `scheduled:<id>:<ts>` or `maintenance_<brainId>_<ts>`) turns a
+// permanent, silent drop-into-the-void (poller-brain#384/#385) into a loud failure the
+// launching session can still act on.
+export function isSlackShapedThreadId(threadId) {
+  const parts = threadId.split(':')
+  if (parts.length !== 3) return false
+  const [botId, channel, threadTs] = parts
+  if (botId === 'scheduled') return false
+  if (!channel || !threadTs) return false
+  return true
 }
 
 // --- argv -------------------------------------------------------------------------
@@ -64,6 +83,10 @@ export function parseArgs(argv, env = {}) {
     // the validation below and the mutual-exclusion check, and fall through to the runner
     // as "not set", reverting to the eager default with zero indication anything was wrong.
     checkpointIntervalGiven: false,
+    // Bypasses the Slack-shaped-threadId check below — for a session that knows it can't
+    // be woken (Scheduler/maintenance-origin) but wants the task to run anyway, reading
+    // the result back later via --list/the task dir instead of a delivered drop.
+    noWake: false,
     cmd: [],
   }
   let i = 0
@@ -81,6 +104,7 @@ export function parseArgs(argv, env = {}) {
       case '--quiet-checkpoints': opts.quietCheckpoints = true; break
       case '--checkpoint-interval': opts.checkpointInterval = argv[++i]; opts.checkpointIntervalGiven = true; break
       case '--dry-run': opts.dryRun = true; break
+      case '--no-wake': opts.noWake = true; break
       case '-h': case '--help': return { help: true }
       default: return { error: `unknown argument: ${a}` }
     }
@@ -98,6 +122,14 @@ export function parseArgs(argv, env = {}) {
   }
   if (!opts.threadId) {
     return { error: 'no thread to report back to — INBOX_THREAD_ID is not set in this session\'s environment' }
+  }
+  if (!isSlackShapedThreadId(opts.threadId) && !opts.noWake) {
+    return {
+      error: `INBOX_THREAD_ID (${opts.threadId}) is not a Slack-shaped thread — the inbox ` +
+        'watcher will never pick up a drop here (poller-brain#384/#385), so this task cannot ' +
+        'wake a new session once this one ends its turn. Pass --no-wake to launch it anyway ' +
+        'and read the result back yourself later via --list or the task dir.',
+    }
   }
   if (opts.notifyOn) {
     try { new RegExp(opts.notifyOn) } catch (e) {
@@ -216,6 +248,8 @@ export function lifecycleOf(kv, { now = Date.now(), alive = pidAlive } = {}) {
 //             before writing a verdict — a poller restart, the documented non-durability
 //             edge. Both are "never", not "not yet".
 //   dry-run   --dry-run: nothing was written to the real inbox.
+//   no-wake   --no-wake: diverted to the task dir on purpose (poller-brain#384) — read it
+//             back with --list, not a delivery failure even though terminal_drop isn't 'ok'.
 //
 // A synchronous fs write collapses the old FAILED/UNKNOWN split from the HTTP-based
 // design (teamvibe.ai#250 removed the network hop entirely): there is no transport that
@@ -224,6 +258,7 @@ const DROP_IN_FLIGHT_MS = 5000
 
 function wakeStateOf(kv, state, now) {
   if (kv.dry_run) return 'dry-run'
+  if (kv.no_wake) return 'no-wake'
   if (kv.runner_crashed) return 'FAILED'
   const verdict = kv.terminal_drop
   if (verdict) return verdict === 'ok' ? 'dropped' : 'FAILED'
@@ -344,6 +379,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.execPath,
     [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
       opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
+      opts.noWake ? '1' : '0',
       '--', ...opts.cmd],
     { detached: true, stdio: ['ignore', out, out] },
   )
@@ -351,5 +387,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   console.log(`bg-task launched: name=${opts.name} id=${id} ttl=${opts.ttl}s`)
   console.log(`dir=${dir} (status, output.log, cmd)`)
-  console.log('You will get interim checkpoints and a final result in this thread. Do not poll — end your turn.')
+  // Must mirror the runner's own divert decision (writeInboxMessage: noWake === '1' diverts
+  // unconditionally, independent of thread shape) — checking isSlackShapedThreadId() alone
+  // here claimed delivery would happen even when --no-wake forces a divert on a perfectly
+  // valid thread, printing a promise the runner had no intention of keeping (poller-brain#384
+  // round 4, DevGuru).
+  const willDeliver = isSlackShapedThreadId(opts.threadId) && !opts.noWake
+  if (willDeliver) {
+    console.log('You will get interim checkpoints and a final result in this thread. Do not poll — end your turn.')
+  } else {
+    console.log(
+      `No delivery in this session type (--no-wake) — nothing will land in this thread. ` +
+        `Read the result back later with: node bg-task.mjs --list (look for name=${opts.name}).`,
+    )
+  }
 }
