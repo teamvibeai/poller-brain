@@ -20,23 +20,14 @@ const prelude = src.split('// --- stdio transport ---')[0]
 const exports = '\nexport { needsFormEncoding, encodeFormBody }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { needsFormEncoding, encodeFormBody } = mod
+const slackMethods = [...new Set([...src.matchAll(/slackApi\('([\w.]+)'/g)].map((m) => m[1]))]
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
 
 // 1) the 9 confirmed-safe methods on the JSON branch stay there (zero regression)
 {
-  const jsonSafe = [
-    'auth.test',
-    'chat.postMessage',
-    'chat.update',
-    'reactions.add',
-    'reactions.remove',
-    'pins.add',
-    'pins.remove',
-    'bookmarks.list',
-    'assistant.threads.setStatus',
-  ]
+  const jsonSafe = slackMethods.filter((m) => !needsFormEncoding(m))
   for (const m of jsonSafe) ok(`1 ${m} → JSON (needsFormEncoding=false)`, needsFormEncoding(m) === false)
 }
 
@@ -53,7 +44,7 @@ const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++;
 // 4) previously form-encoded methods stay on form (zero regression), plus
 //    users.info newly moved to form in poller-brain#349
 {
-  const formMethods = ['conversations.info', 'conversations.replies', 'conversations.history', 'files.getUploadURLExternal', 'chat.getPermalink', 'pins.list', 'users.info']
+  const formMethods = slackMethods.filter((m) => needsFormEncoding(m))
   for (const m of formMethods) ok(`4 ${m} → form`, needsFormEncoding(m) === true)
 }
 
