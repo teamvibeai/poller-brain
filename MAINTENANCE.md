@@ -291,6 +291,10 @@ branches:
    }
    ```
 
+   `<timestamp>` is **unix seconds** (not milliseconds) — matches how
+   `teamvibeai/teamvibe.ai#247`'s `pushRescueRef` names the ref on the
+   platform side, so `oldestAgeDays` derivation agrees on both ends.
+
 3. **Detection only.** Do not merge, cherry-pick, fast-forward, or delete a
    rescue branch's content as part of this step. Automated resolution is an
    explicit non-goal here — agreed too risky (silent behavior-drift
