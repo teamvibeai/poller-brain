@@ -887,7 +887,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         types: { type: 'string', description: 'Comma-separated Slack conversation types to include (default: "public_channel,private_channel,mpim,im")' },
-        limit: { type: 'number', description: 'Max channels to return (default: 200, capped at 1000)' },
+        limit: { type: 'number', minimum: 1, description: 'Max channels to return (default: 200, capped at 1000)' },
       },
     },
   },
@@ -898,7 +898,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Substring to match against name/display name/real name/email' },
-        limit: { type: 'number', description: 'Max results to return (default: 20)' },
+        limit: { type: 'number', minimum: 1, description: 'Max results to return (default: 20)' },
       },
       required: ['query'],
     },
@@ -1375,7 +1375,9 @@ async function handleTool(name, args) {
       // explicit is_member === false (public/private channel not yet invited)
       // is filtered out (poller-brain#448).
       const types = args.types || 'public_channel,private_channel,mpim,im'
-      const limit = Math.min(Number(args.limit) || 200, 1000)
+      const rawLimit = args.limit === undefined ? 200 : Number(args.limit)
+      if (!Number.isFinite(rawLimit) || rawLimit <= 0) throw new Error('limit must be a positive number')
+      const limit = Math.min(rawLimit, 1000)
       const channels = []
       let cursor
       do {
@@ -1409,7 +1411,9 @@ async function handleTool(name, args) {
       // legitimate search targets, e.g. for handoff/escalation lookups).
       const query = (args.query || '').trim().toLowerCase()
       if (!query) throw new Error('query required')
-      const limit = Math.min(Number(args.limit) || 20, 1000)
+      const rawLimit = args.limit === undefined ? 20 : Number(args.limit)
+      if (!Number.isFinite(rawLimit) || rawLimit <= 0) throw new Error('limit must be a positive number')
+      const limit = Math.min(rawLimit, 1000)
       const matches = []
       let cursor
       do {

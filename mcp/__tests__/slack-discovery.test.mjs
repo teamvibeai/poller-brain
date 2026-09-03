@@ -138,6 +138,21 @@ async function withMockedResponses(responses, fn) {
   ok('5 does not fetch a second page once limit is met', calls.length === 1)
 }
 
+// 5b) limit: 0 and negative limits must throw, not silently fall back to the
+//     default (poller-brain#449 review: `Number(args.limit) || 200` treated 0
+//     as falsy and any negative number as a valid-but-nonsensical limit)
+{
+  for (const bad of [0, -1, -200, NaN, 'not-a-number']) {
+    let threw = false
+    try {
+      await handleTool('list_channels', { limit: bad })
+    } catch {
+      threw = true
+    }
+    ok(`5b list_channels limit=${bad} throws`, threw)
+  }
+}
+
 // --- search_users ---
 
 // 6) empty/missing query throws
@@ -211,6 +226,20 @@ async function withMockedResponses(responses, fn) {
   const page = { ok: true, members: [{ id: 'B2', name: 'helper-bot', deleted: false, is_bot: true, real_name: 'Helper Bot', profile: {} }] }
   const { result } = await withMockedResponses([page], () => handleTool('search_users', { query: 'helper' }))
   ok('10 bot user returned with is_bot true', result.users.length === 1 && result.users[0].is_bot === true)
+}
+
+// 11) limit: 0 and negative limits must throw, not silently fall back to the
+//     default (poller-brain#449 review: same falsy-zero bug as list_channels)
+{
+  for (const bad of [0, -1, -20, NaN, 'not-a-number']) {
+    let threw = false
+    try {
+      await handleTool('search_users', { query: 'x', limit: bad })
+    } catch {
+      threw = true
+    }
+    ok(`11 search_users limit=${bad} throws`, threw)
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
