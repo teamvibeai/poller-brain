@@ -881,6 +881,29 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_channels',
+    description: 'List Slack conversations this bot is a member of — i.e. the channels/DMs actually provisioned for it (public channels, private channels, group DMs, 1:1 DMs), not the whole workspace. Use to resolve a name like "#integration-team" to a channel ID, or to see what this bot can read/post to.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        types: { type: 'string', description: 'Comma-separated Slack conversation types to include (default: "public_channel,private_channel,mpim,im")' },
+        limit: { type: 'number', description: 'Max channels to return (default: 200, capped at 1000)' },
+      },
+    },
+  },
+  {
+    name: 'search_users',
+    description: 'Search workspace users by a case-insensitive substring match on display name, real name, username, or email. Slack has no server-side user-search API, so this lists all workspace users and filters client-side — unlike `list_channels`, this is necessarily workspace-wide (Slack has no concept of "users visible to a bot"), not scoped to this bot\'s channels.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Substring to match against name/display name/real name/email' },
+        limit: { type: 'number', description: 'Max results to return (default: 20)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'set_expected_duration',
     description: 'Tell the platform roughly how long the work you are about to do will take, so the user gets proactive progress updates if it runs long (0-5 min: no update needed, 5-10 min: one update, 10-15 min: two updates, 15+ min: three updates). Call this once, early, when you can already tell a task will take a while (e.g. a large multi-file refactor or deep research) — not required for normal quick replies. This does not affect timeouts or safety limits, only how often the user hears from you.',
     inputSchema: {
@@ -1341,6 +1364,78 @@ async function handleTool(name, args) {
         status: args.text,
       })
       return { ok: true }
+    }
+
+    case 'list_channels': {
+      // conversations.list has no server-side "channels this bot is a member of"
+      // filter — it returns is_member per-channel (for public/private channels)
+      // and we filter client-side. im/mpim conversations don't reliably carry
+      // is_member (the bot is inherently a participant in any DM/group-DM it can
+      // see at all), so those are never excluded by this check — only an
+      // explicit is_member === false (public/private channel not yet invited)
+      // is filtered out (poller-brain#448).
+      const types = args.types || 'public_channel,private_channel,mpim,im'
+      const limit = Math.min(Number(args.limit) || 200, 1000)
+      const channels = []
+      let cursor
+      do {
+        const result = await slackApi('conversations.list', {
+          types,
+          exclude_archived: true,
+          limit: 200,
+          ...(cursor && { cursor }),
+        })
+        for (const ch of result.channels || []) {
+          if (ch.is_member === false) continue
+          channels.push({
+            id: ch.id,
+            name: ch.name || (ch.is_im ? `dm:${ch.user}` : undefined),
+            is_private: Boolean(ch.is_private),
+            is_im: Boolean(ch.is_im),
+            is_mpim: Boolean(ch.is_mpim),
+            num_members: ch.num_members,
+          })
+          if (channels.length >= limit) break
+        }
+        cursor = result.response_metadata?.next_cursor || null
+      } while (cursor && channels.length < limit)
+      return { ok: true, channels }
+    }
+
+    case 'search_users': {
+      // No users.search endpoint in the Slack Web API — users.list + client-side
+      // substring filter is the only option (poller-brain#448). Deactivated
+      // accounts are dropped; bots are kept (some TeamVibe agent bots are
+      // legitimate search targets, e.g. for handoff/escalation lookups).
+      const query = (args.query || '').trim().toLowerCase()
+      if (!query) throw new Error('query required')
+      const limit = Math.min(Number(args.limit) || 20, 1000)
+      const matches = []
+      let cursor
+      do {
+        const result = await slackApi('users.list', {
+          limit: 200,
+          ...(cursor && { cursor }),
+        })
+        for (const u of result.members || []) {
+          if (u.deleted) continue
+          const haystacks = [u.profile?.display_name, u.profile?.real_name, u.real_name, u.name, u.profile?.email]
+            .filter(Boolean)
+            .map((s) => s.toLowerCase())
+          if (!haystacks.some((s) => s.includes(query))) continue
+          matches.push({
+            id: u.id,
+            name: u.name,
+            display_name: u.profile?.display_name || u.real_name || u.name,
+            real_name: u.real_name,
+            email: u.profile?.email,
+            is_bot: Boolean(u.is_bot),
+          })
+          if (matches.length >= limit) break
+        }
+        cursor = result.response_metadata?.next_cursor || null
+      } while (cursor && matches.length < limit)
+      return { ok: true, users: matches }
     }
 
     case 'set_expected_duration': {
