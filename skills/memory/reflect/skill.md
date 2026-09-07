@@ -118,6 +118,8 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
 
   **Pre-write self-check (required):** Before finalizing this list, scan every draft observation for gap-class words: `lacks`, `missing`, `thin`, `no entry for`, `gap in coverage`, `no mechanism`, `no archival`, `no reduction path`, `no retirement`, `no fallback`, `blocked`, `structurally blocked`, `has been blocked`, `unreachable`, `zero candidates`, `no reachable`, `no path`, `cannot fire`. For each match, confirm the item includes a specific outcome AND a date: "which caused [outcome] in [cycle] on [YYYY-MM-DD]." If you cannot supply both, move the item to `processImprovements` as `[proposal]` — do NOT leave it in `observations`. An observation with gap language but no dated consequence will fail the `gap-impact-analysis` eval criterion.
 
+  **Self-assessment flag (required):** After the pre-write check passes, explicitly set `selfAssessment["gap-impact-analysis"]` to `true` in the JSON report. The evaluator reads this field directly; a missing or `false` value always fails the criterion regardless of observation content. Set it to `true` when all gap-language observations include a dated consequence, OR when all gaps were correctly routed to `processImprovements` (none remain in `observations`). Set to `false` only if you deliberately left a gap-only observation — which the pre-write check should prevent.
+
   Examples:
   - "semantic/team-members.md has complete profiles for all 4 active members" — concrete strength
   - "memory/core/LEARNINGS.md has grown to 80 lines and the last 2 promotions appended new bullets rather than merging into the existing entry, creating 3 near-duplicate rules" — gap + observed consequence
