@@ -145,3 +145,13 @@ After reflection, commit all changes (memory files + both report files) in one c
 ```
 chore: memory reflection (YYYY-MM-DD)
 ```
+
+## After Reflection: Update Parent Consolidation Report
+
+If this reflection ran as part of a consolidation maintenance pass, you MUST update the parent consolidation report before finalizing it:
+
+1. Re-run `bash scripts/reflection-guard.sh` to get the updated `reflectionStatus` (should now show `isOverdue: false` and `lastReflectionDate` set to today).
+2. Replace the stale `reflectionStatus` block in the consolidation JSON report with this new output.
+3. Ensure `memory/episodic/reflection-YYYY-MM-DD.md` appears in the consolidation report's `filesChanged` array.
+
+**Why this matters:** The `reflection-overdue` eval criterion checks the consolidation report's `reflectionStatus.isOverdue` field. If you skip re-running the guard, the consolidation report still shows the pre-reflection stale `isOverdue: true`, and the criterion fails even though reflection did run. The fallback pass condition — `filesChanged` includes a `reflection-*.md` — also requires the file to be listed in the consolidation report.
