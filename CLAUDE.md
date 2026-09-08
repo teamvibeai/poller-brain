@@ -194,6 +194,16 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detai
 
 Use `mcp__teamvibe-api__*` tools (`create_scheduled_message`, `list_scheduled_messages`, `delete_scheduled_message`) for reminders and recurring tasks. See the `teamvibe-api` skill for full parameter reference, examples, and promptTemplate writing guide.
 
+## Polling & Notifications
+
+Each CRON/ONE_TIME firing starts a **new session with no memory of previous runs** — nothing dedupes, counts attempts, or auto-deletes on your behalf. Encode that state as literal text in the `promptTemplate` itself:
+
+1. **Deduplication** — before sending a notification, call `read_channel`/`read_thread` (limit ~10) and check whether you already posted an identical or near-identical message. If yes, don't send again.
+2. **Self-delete on completion** — `promptTemplate` is delivered to the next session verbatim; there is no `{SCHEDULE_ID}`-style substitution. To let a fired session delete its own schedule, embed the *real* `scheduleId` (from the `create_scheduled_message` response, or `list_scheduled_messages`) as plain text — e.g. `"...once done, call delete_scheduled_message with scheduleId: sch_abc123"`. For a brand-new schedule you only learn the ID after creating it, so call `create_scheduled_message` again with that `scheduleId` to rewrite the prompt to reference itself.
+3. **Thread targeting** — status updates (deploy, CI, pipeline) belong in the thread the request came from, not the channel root. Hardcode the literal `thread_ts` in the prompt.
+4. **Retry limit** — track attempts as literal text in the prompt (e.g. "this is attempt 2/5"); the platform doesn't count them for you. After the max, send one final "still not done, stopping" message and delete the schedule.
+5. **Prefer chained ONE_TIME over CRON for polling** — each firing creates the next ONE_TIME only if still needed, so it stops naturally. A CRON keeps firing on its own schedule regardless of task state.
+
 ## Long-Running Commands
 
 A command that outlives your session (build, full test suite, long scrape) must not run in
