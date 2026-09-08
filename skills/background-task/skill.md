@@ -22,6 +22,11 @@ node "$CLAUDE_CONFIG_DIR/skills/background-task/scripts/bg-task.mjs" \
 Then **end your turn.** Tell the user the task is running and that you'll report back.
 Do not poll, do not `sleep`, do not keep the session alive waiting.
 
+**Exception:** if this session's `INBOX_THREAD_ID` isn't Slack-shaped (Scheduler- or
+maintenance-origin sessions), the launcher refuses to run unless you pass `--no-wake` —
+ending your turn would otherwise mean nobody ever picks up the result. See *Reliability
+bar: best-effort* below.
+
 ## Also the fix for one slow call, not just multi-step jobs
 
 The poller's idle watchdog kills your session after `IDLE_WATCHDOG_KILL_MS` (default 10 min) of
@@ -51,7 +56,9 @@ channel it was allowed to post to — [teamvibe.ai#244](https://github.com/teamv
 
 You get two kinds of message, both delivered the same way — a file dropped into
 `.inbox/`, picked up for free by your session if it's still running, or woken into a new
-one if it's gone idle ([teamvibe.ai#250](https://github.com/teamvibeai/teamvibe.ai/issues/250)):
+one if it's gone idle ([teamvibe.ai#250](https://github.com/teamvibeai/teamvibe.ai/issues/250))
+— the "woken into a new one" half only works for a Slack-shaped `INBOX_THREAD_ID`; see
+*Reliability bar: best-effort* below:
 
 - **Interim checkpoints** while the task runs — see *Interim output* below.
 - **One terminal message** when it ends, with the task name, the command, the state, the
@@ -89,6 +96,7 @@ describe a timeout as a success.
 | `--quiet-checkpoints` | off | Suppress the quiet-period and ceiling checkpoint triggers entirely — see *Interim output*. Mutually exclusive with `--checkpoint-interval`. |
 | `--checkpoint-interval SECONDS` | — | Replace both checkpoint triggers with a single "flush no more often than every N seconds" rule — see *Interim output*. Must be a positive integer strictly less than `--ttl`. Mutually exclusive with `--quiet-checkpoints`. |
 | `--dry-run` | off | Runs the command for real but writes drops to `inbox-drops.jsonl` in the task dir instead of `.inbox/` — nothing lands in Slack. |
+| `--no-wake` | off | Required to launch from a session whose `INBOX_THREAD_ID` isn't Slack-shaped (Scheduler/maintenance-origin) — see *Reliability bar*. Also usable on a valid thread to opt out of delivery on purpose. Either way, read the result back via `--list`/the task dir; nothing will be delivered here. |
 | `-- <command…>` | required | Everything after `--` is the command. Not a shell string — no pipes or redirects unless you wrap it in `bash -c "…"`. |
 | `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the terminal drop was written. Needs no environment beyond `TEAMVIBE_CHANNEL_ID`. |
 
@@ -180,6 +188,7 @@ Two reasons to reach for this:
   | `pending` | Terminal state reached, verdict not recorded yet — the write is synchronous, so this is process-scheduling slack, not a network round trip. |
   | `NONE` | The runner is gone and never recorded a verdict — no drop is coming. Not "not yet". Either it vanished mid-command (`STATE=abandoned`), or it recorded the end and died before writing the drop. Read the result out of the task dir. |
   | `dry-run` | `--dry-run`; nothing was written to the real inbox. |
+  | `no-wake` | `--no-wake`; diverted to the task dir on purpose, not a delivery failure — read it back with `--list`. |
 
   The `STATE` column answers a different question — whether the task is still alive:
 
@@ -208,7 +217,25 @@ from any session.
 
 This is **not** a durability guarantee, and you must not describe it to a user as one.
 
-- **Survives** your session ending, including a full teardown of the launching session.
+- **Survives** your session ending, including a full teardown of the launching session —
+  but only when `INBOX_THREAD_ID` is a real Slack-shaped thread: 3 colon-separated
+  segments, `<botId>:<channel>:<threadTs>`, where the *2nd and 3rd* are non-empty and
+  `botId !== 'scheduled'` (`botId` itself may be empty — `:C0:1.2` is valid).
+  **Known limitation:** any threadId that doesn't fit that shape is silently skipped by
+  the inbox watcher's `parseSlackThreadId` (`packages/poller/src/inbox-watcher.ts`,
+  `teamvibe.ai`) — two confirmed examples: `scheduled:<scheduleId>:<timestamp>`
+  (Scheduler(system)-origin, i.e. any session spawned from a `create_scheduled_message`
+  cron/one-time trigger) and `maintenance_<brainId>_<ts>` (`maintenance-cron.ts`, periodic
+  maintenance runs). Both mint a fresh id on every run, so a later firing doesn't reconnect
+  to an old drop either. `bg-task.mjs` refuses to launch against one of these threadIds
+  unless you pass `--no-wake` — better a loud failure at launch than a terminal drop (and
+  any interim checkpoints) written to a thread nobody will ever check
+  ([poller-brain#384](https://github.com/teamvibeai/poller-brain/issues/384)); with
+  `--no-wake`, the task still runs, but you must read the result back yourself later via
+  `--list` or the task dir. Same underlying failure as
+  [poller-brain#385](https://github.com/teamvibeai/poller-brain/issues/385) (`ScheduleWakeup`
+  never resuming these sessions), just via this mechanism instead. Platform fix (making
+  these origins actually resumable) not yet scoped.
 - **Does not survive** a poller restart or redeploy — the task lives in the poller
   container. In-flight tasks are lost and no drop arrives.
 - The terminal drop is a single synchronous file write. If it throws, the command still

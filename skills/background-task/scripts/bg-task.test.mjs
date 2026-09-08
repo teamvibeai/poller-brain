@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LAUNCHER = join(HERE, 'bg-task.mjs')
 
-const { parseArgs, taskId, taskRoot, taskRow, listTasks, formatTaskList, parseStatus } =
+const { parseArgs, taskId, taskRoot, taskRow, listTasks, formatTaskList, parseStatus, isSlackShapedThreadId } =
   await import(join(HERE, 'bg-task.mjs'))
 const {
   buildPrompt, buildCheckpointPrompt, tailOf, deltaOf, countRunningSiblings,
@@ -74,6 +74,20 @@ const dropTexts = (dir) => {
 }
 
 // --- pure units --------------------------------------------------------------------
+console.log('isSlackShapedThreadId')
+{
+  // Mirrors teamvibe.ai's parseSlackThreadId — these guard the mirror against a
+  // plausible-looking simplification silently drifting from the platform original
+  // (poller-brain#384 round 2, DevGuru): each case below fails on at least one mutant
+  // that the earlier scheduled:/maintenance_ cases alone didn't catch.
+  eq('real slack-shaped id passes', isSlackShapedThreadId('B0BOT:C0TEST:100.001'), true)
+  eq('4 segments is rejected, not truncated to 3', isSlackShapedThreadId('B0:C0:100.1:extra'), false)
+  eq('empty 3rd segment is rejected', isSlackShapedThreadId('B0:C0:'), false)
+  eq('empty 2nd segment is rejected', isSlackShapedThreadId('B0::100.1'), false)
+  eq('empty 1st segment (botId) IS valid — only 2nd/3rd are required', isSlackShapedThreadId(':C0:1.2'), true)
+  eq('scheduled: prefix is rejected even with a well-formed shape', isSlackShapedThreadId('scheduled:01ABC:123'), false)
+}
+
 console.log('parseArgs')
 {
   eq('no command → error', !!parseArgs(['--name', 'x'], ENV).error, true)
@@ -83,6 +97,21 @@ console.log('parseArgs')
   has('ttl below floor names the bounds', parseArgs(['--ttl', '10', '--', 'true'], ENV).error, 'between 30 and 21600')
   has('ttl above ceiling names the bounds', parseArgs(['--ttl', '99999', '--', 'true'], ENV).error, 'between 30 and 21600')
   has('no thread names the fix', parseArgs(['--', 'true'], {}).error, 'INBOX_THREAD_ID')
+  has(
+    'scheduled:-shaped thread is rejected',
+    parseArgs(['--', 'true'], { ...ENV, INBOX_THREAD_ID: 'scheduled:01ABC:1787600000000' }).error,
+    'not a Slack-shaped thread',
+  )
+  has(
+    'maintenance_-shaped thread is rejected',
+    parseArgs(['--', 'true'], { ...ENV, INBOX_THREAD_ID: 'maintenance_01BRAIN_1787600000000' }).error,
+    'not a Slack-shaped thread',
+  )
+  eq(
+    '--no-wake bypasses the shape check',
+    !!parseArgs(['--no-wake', '--', 'true'], { ...ENV, INBOX_THREAD_ID: 'scheduled:01ABC:1787600000000' }).error,
+    false,
+  )
   has('invalid --notify-on regex is rejected', parseArgs(['--notify-on', '(unclosed', '--', 'true'], ENV).error, '--notify-on is not a valid regex')
 
   const { opts } = parseArgs(['--name', 'b', '--ttl', '60', '--', 'echo', 'a b'], ENV)
@@ -169,6 +198,12 @@ console.log('--list parsing + rows')
   eq('runner crash counts as a failed drop', crashed.wake, 'FAILED')
   const dry = taskRow('20260728T080102Z-42-x', 'state=finished\nrc=0\ndry_run=1\nterminal_drop=diverted\n')
   eq('dry run is distinguishable from a real write', dry.wake, 'dry-run')
+  // Regression for poller-brain#384 round 4 (DevGuru): terminal_drop=diverted:no-wake
+  // doesn't equal 'ok', so without a dedicated check this read as FAILED — exactly the
+  // screen the docs point a --no-wake session to for reading its result back.
+  const noWakeRow = taskRow('20260728T080102Z-42-x',
+    'state=finished\nrc=0\nno_wake=1\nterminal_drop=diverted:no-wake\n')
+  eq('no-wake divert reads as no-wake, not FAILED', noWakeRow.wake, 'no-wake')
   const stranded = taskRow('20260728T080102Z-42-x', 'state=finished\nrc=0\n')
   eq('terminal state with no drop line yet → pending', stranded.wake, 'pending')
 
@@ -387,19 +422,78 @@ console.log('countRunningSiblings')
     countRunningSiblings(root, join(root, 'b'), ALIVE_ONLY_4242), 1)
 }
 
+console.log('--no-wake: launch message and real delivery are diverted, not silently dropped')
+{
+  // Regression test for poller-brain#384 round 3 (DevGuru): a first cut of --no-wake
+  // bypassed the launch-time shape check but left the RUNNER writing to the real
+  // `.inbox/` anyway, producing exactly the unread, unprunable directory the whole
+  // change exists to prevent. This exercises the real (non-dry) write path end to end,
+  // the same way the "live (non-dry)" test further below does. Placed ahead of the
+  // "writeInboxMessage — dry-run diverts..." section on purpose: that section crashes
+  // (pre-existing, unrelated to this change — reproduces on a clean checkout too) and
+  // halts everything after it in this environment, which would otherwise silently
+  // orphan this test.
+  const noWakeCwd = mkdtempSync(join(tmpdir(), 'bgt-nowake-'))
+  const scheduledThread = 'scheduled:01ABC:1787600000000'
+  const r = launch(
+    ['--no-wake', '--name', 'unit-nowake', '--ttl', '60', '--', 'echo', 'NOWAKE-CANARY'],
+    { BG_TASK_DRY: '0', INBOX_THREAD_ID: scheduledThread },
+    noWakeCwd,
+  )
+  eq('launch exits 0', r.code, 0)
+  has('launch says nothing will be delivered here', r.stdout, 'No delivery in this session type')
+  ok('launch does NOT print the normal wake promise (mutation guard on the branch itself)',
+    !r.stdout.includes('Do not poll'), r.stdout)
+
+  const dir = latestDir()
+  const status = await waitDone(dir)
+  ok('runner reached a terminal state', !!status, 'no terminal_drop= line in status')
+  if (status) {
+    has('no_wake=1 recorded', status, 'no_wake=1')
+    has('terminal drop is diverted as no-wake, not a real write', status, 'terminal_drop=diverted:no-wake')
+    const realInboxDir = join(noWakeCwd, '.inbox', scheduledThread, 'new')
+    ok('nothing is ever written to the real .inbox/ for this threadId', !existsSync(realInboxDir))
+    const drops = dropTexts(dir)
+    eq('the drop still lands in the task dir for later --list/read-back', drops.length, 1)
+    has('the diverted drop carries the command output', drops[0], 'NOWAKE-CANARY')
+  }
+}
+
+console.log('--no-wake on an otherwise-valid Slack thread must not claim delivery')
+{
+  // Regression for poller-brain#384 round 4 (DevGuru): the runner diverts on
+  // noWake === '1' unconditionally, but the launch message used to key off
+  // isSlackShapedThreadId(threadId) alone — so a slack-shaped thread PLUS --no-wake
+  // (habit, copy-paste) printed the normal wake promise while the runner silently
+  // diverted anyway. The two must agree: willDeliver = slack-shaped && !noWake.
+  const noWakeSlackCwd = mkdtempSync(join(tmpdir(), 'bgt-nowake-slack-'))
+  const r = launch(
+    ['--no-wake', '--name', 'unit-nowake-slack', '--ttl', '60', '--', 'echo', 'x'],
+    { BG_TASK_DRY: '0', INBOX_THREAD_ID: THREAD_ID },
+    noWakeSlackCwd,
+  )
+  eq('launch exits 0', r.code, 0)
+  ok('does NOT print the normal wake promise even on a valid thread (mutation guard)',
+    !r.stdout.includes('Do not poll'), r.stdout)
+  has('launch says nothing will be delivered here', r.stdout, 'No delivery in this session type')
+}
+
 console.log('parseRunnerArgs')
 {
-  const r = parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', 'auth-url', '1', '45', '--', 'echo', '--weird'])
+  const r = parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', 'auth-url', '1', '45', '0', '--', 'echo', '--weird'])
   eq('command after -- survives, including its own flags', JSON.stringify(r.cmd), JSON.stringify(['echo', '--weird']))
   eq('threadId carried through', r.threadId, THREAD_ID)
   eq('notifyOn carried through', r.notifyOn, 'auth-url')
   eq('quietCheckpoints carried through', r.quietCheckpoints, '1')
   eq('checkpointInterval carried through', r.checkpointInterval, '45')
-  eq('empty notifyOn stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '0', '', '--', 'true']).notifyOn, '')
+  eq('noWake carried through', r.noWake, '0')
+  eq('empty notifyOn stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '0', '', '0', '--', 'true']).notifyOn, '')
   eq('empty quietCheckpoints stays empty',
-    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '--', 'true']).quietCheckpoints, '')
+    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '0', '--', 'true']).quietCheckpoints, '')
   eq('empty checkpointInterval stays empty',
-    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '--', 'true']).checkpointInterval, '')
+    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '0', '--', 'true']).checkpointInterval, '')
+  eq('empty noWake stays empty',
+    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '', '--', 'true']).noWake, '')
   eq('ttl coerced', r.ttl, 60)
 }
 
