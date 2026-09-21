@@ -14,5 +14,27 @@
       "mcp__slack__*",
       "mcp__teamvibe-api__*"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node $CLAUDE_CONFIG_DIR/scripts/claude-config-guard/sync-baseline.mjs"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node $CLAUDE_CONFIG_DIR/scripts/claude-config-guard/check-bash-diff.mjs"
+          }
+        ]
+      }
+    ]
   }
 }
