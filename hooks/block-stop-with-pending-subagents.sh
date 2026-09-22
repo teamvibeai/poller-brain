@@ -52,8 +52,11 @@ process.stdin.on("end", () => {
     reason: `Unresolved background subagent(s) still running: ${desc}. ` +
       "Do not end this turn yet -- if the session goes idle before they " +
       "finish, delivery is not guaranteed (poller-brain#496). Check on " +
-      "them (e.g. ListAgents) and wait for a result before finishing your " +
-      "response.",
+      "them (e.g. ListAgents); if still running, pace your checks (a " +
+      "short sleep, or other independent work in between) instead of " +
+      "retrying immediately -- this hook fires again on every check " +
+      "until they finish, and --max-turns bounds the worst case, not " +
+      "the cost.",
   }));
 });
 '
