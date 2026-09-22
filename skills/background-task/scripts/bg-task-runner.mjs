@@ -2,7 +2,7 @@
 // bg-task-runner.mjs — the detached half of bg-task. Never invoke directly; bg-task.mjs
 // spawns it with `detached: true` so it outlives the agent session.
 //
-//   bg-task-runner.mjs <dir> <ttl> <name> <threadId> <dry> <notifyOn> <quietCheckpoints> <checkpointInterval> -- <command...>
+//   bg-task-runner.mjs <dir> <ttl> <name> <threadId> <dry> <notifyOn> <quietCheckpoints> <checkpointInterval> <eagerCheckpoints> -- <command...>
 //
 // Contract: run the command with a TTL, coalescing its output into interim checkpoints
 // dropped into the launching thread's .inbox/, then drop exactly one terminal message when
@@ -50,7 +50,8 @@ const CHECK_INTERVAL_MS = Number(process.env.BG_TASK_CHECK_INTERVAL_MS || 300)
 // forced checkpoint at all (only the terminal drop), an hour-long task gets ~8 regardless
 // of how long it actually runs. Derived from --ttl — the one number the launching agent
 // already had to estimate honestly — rather than a constant invented for this feature
-// (poller-brain#231, MEM-182).
+// (poller-brain#231, MEM-182). Reused as the DEFAULT checkpoint cadence as of #489 (via
+// forceFlushMs in main()), not just as --eager-checkpoints' ceiling.
 export function flushIntervalSec(ttl) {
   return Math.min(MAX_FLUSH_SEC, Math.max(MIN_FLUSH_SEC, ttl / 8))
 }
@@ -58,8 +59,9 @@ export function flushIntervalSec(ttl) {
 // Everything argv- and filesystem-related lives inside main() so this file can be
 // imported by the tests without side effects.
 export function parseRunnerArgs(argv) {
-  const [dir, ttlArg, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval] = argv.slice(0, 8)
-  const sep = argv.indexOf('--', 8)
+  const [dir, ttlArg, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, eagerCheckpoints] =
+    argv.slice(0, 9)
+  const sep = argv.indexOf('--', 9)
   return {
     dir,
     ttl: Number(ttlArg),
@@ -69,6 +71,7 @@ export function parseRunnerArgs(argv) {
     notifyOn: notifyOn || '',
     quietCheckpoints: quietCheckpoints || '',
     checkpointInterval: checkpointInterval || '',
+    eagerCheckpoints: eagerCheckpoints || '',
     cmd: sep === -1 ? [] : argv.slice(sep + 1),
   }
 }
@@ -305,13 +308,14 @@ export function writeInboxMessage(threadId, text, dir, dry) {
 }
 
 async function main() {
-  const { dir, ttl, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, cmd } =
+  const { dir, ttl, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, eagerCheckpoints, cmd } =
     parseRunnerArgs(process.argv.slice(2))
   const statusPath = join(dir, 'status')
   const logPath = join(dir, 'output.log')
   const note = (lines) => appendFileSync(statusPath, lines.map((l) => `${l}\n`).join(''))
   const notifyRe = notifyOn ? new RegExp(notifyOn) : null
   const quietCheckpointsOn = quietCheckpoints === '1'
+  const eagerCheckpointsOn = eagerCheckpoints === '1'
   // --checkpoint-interval (poller-brain#403, round 2): 0/'' means "not set". Validated as
   // positive and <= ttl already in bg-task.mjs's arg parsing — nothing left to reject here.
   const checkpointIntervalSec = Number(checkpointInterval) || 0
@@ -322,6 +326,7 @@ async function main() {
   if (dry === '1') note(['dry_run=1'])
   if (quietCheckpointsOn) note(['quiet_checkpoints=1'])
   if (checkpointIntervalMs > 0) note([`checkpoint_interval=${checkpointIntervalSec}s`])
+  if (eagerCheckpointsOn) note(['eager_checkpoints=1'])
 
   const out = openSync(logPath, 'a')
   // detached so the command gets its own process group: on TTL we can then kill the
@@ -386,16 +391,35 @@ async function main() {
       return
     }
 
-    // --quiet-checkpoints (poller-brain#403): gate ONLY the quiet/ceiling triggers, not
-    // flush() itself and not the terminal drop below (that path is entirely separate).
-    // A command with frequent low-value output otherwise gets a checkpoint per burst —
-    // this opts out of that, leaving --notify-on (if given) and the terminal drop as the
-    // only wake sources.
+    // --quiet-checkpoints (poller-brain#403): gate ONLY the quiet/ceiling/default-cadence
+    // triggers below, not flush() itself and not the terminal drop (that path is entirely
+    // separate). A command with frequent low-value output otherwise gets a checkpoint per
+    // burst — this opts out of that, leaving --notify-on (if given) and the terminal drop
+    // as the only wake sources.
     if (quietCheckpointsOn) return
 
-    const quiet = Date.now() - lastWriteAt >= QUIET_MS
-    const overCeiling = Date.now() - lastFlushAt >= forceFlushMs
-    if (quiet || overCeiling) flush()
+    // --eager-checkpoints (poller-brain#489): opt back into the pre-#489 default — flush
+    // on either a quiet period (QUIET_MS of silence) or the ttl-derived ceiling, whichever
+    // comes first. Right for a caller who actually reads along as the task runs. This is
+    // no longer the default because a wrapper script that polls-and-echoes on a steady
+    // short cadence (e.g. every ~20s) never goes quiet long enough for QUIET_MS to matter,
+    // so the ceiling — tuned as a rare backstop, not a cadence — ends up firing on nearly
+    // every burst instead (Jakub, poller-brain#489).
+    if (eagerCheckpointsOn) {
+      const quiet = Date.now() - lastWriteAt >= QUIET_MS
+      const overCeiling = Date.now() - lastFlushAt >= forceFlushMs
+      if (quiet || overCeiling) flush()
+      return
+    }
+
+    // Default as of poller-brain#489: the same ttl-derived cadence --checkpoint-interval
+    // uses explicitly (flushIntervalSec(ttl) via forceFlushMs), just without requiring the
+    // caller to pass the flag. Checkpoints are primarily useful for tasks that surface key
+    // information via stdout mid-run — for the common "just wait until it's done" case,
+    // only the terminal message matters, so a slower periodic cadence beats the old
+    // debounce-on-every-burst behavior. --notify-on above remains the fast-signal escape
+    // hatch for output that can't wait; --eager-checkpoints restores the old default.
+    if (Date.now() - lastFlushAt >= forceFlushMs) flush()
   }, CHECK_INTERVAL_MS)
 
   let timedOut = false
