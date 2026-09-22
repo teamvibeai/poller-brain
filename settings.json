@@ -35,6 +35,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_CONFIG_DIR/hooks/block-stop-with-pending-subagents.sh"
+          }
+        ]
+      }
     ]
   }
 }
