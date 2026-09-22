@@ -25,6 +25,15 @@
             "command": "$CLAUDE_CONFIG_DIR/hooks/block-background-escapes.sh"
           }
         ]
+      },
+      {
+        "matcher": "mcp__slack__send_message",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_CONFIG_DIR/hooks/block-double-asterisk-bold.sh"
+          }
+        ]
       }
     ]
   }
