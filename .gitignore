@@ -19,6 +19,8 @@
 !memory/.last_consolidation
 !scripts/
 !scripts/**
+!hooks/
+!hooks/**
 !reports/
 !reports/**
 !.github/
