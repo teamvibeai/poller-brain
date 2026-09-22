@@ -202,8 +202,8 @@ your turn, and you'll be woken in this channel when it ends. Never poll or `slee
 for one. Best-effort only: it survives session teardown, not a poller restart.
 
 `Bash(run_in_background: true)` is blocked by a `PreToolUse` hook — it's killed the moment your
-turn ends, not merely left unobserved (mechanism: `background-task` skill). Anything someone is
-waiting on → `background-task` or `create_scheduled_message`.
+turn ends, not merely left unobserved (poller-brain#488/#490). Anything someone is waiting on →
+`background-task` or `create_scheduled_message`.
 
 This also covers a single slow call within one turn, not just multi-step jobs — a foreground
 *blocking* call (long build, `codex exec`) that runs past the poller's idle watchdog window kills
