@@ -201,9 +201,9 @@ the foreground — it dies with the session. Launch it via the `background-task`
 your turn, and you'll be woken in this channel when it ends. Never poll or `sleep` waiting
 for one. Best-effort only: it survives session teardown, not a poller restart.
 
-`Bash(run_in_background: true)` counts as session-bound too — its completion notification only
-re-invokes *this* session, so after teardown nothing is delivered (the command may keep running,
-unobserved). Anything someone is waiting on → `background-task` or `create_scheduled_message`.
+`Bash(run_in_background: true)` is blocked by a `PreToolUse` hook — it's killed the moment your
+turn ends, not merely left unobserved (poller-brain#488/#490). Anything someone is waiting on →
+`background-task` or `create_scheduled_message`.
 
 This also covers a single slow call within one turn, not just multi-step jobs — a foreground
 *blocking* call (long build, `codex exec`) that runs past the poller's idle watchdog window kills
