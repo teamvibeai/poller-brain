@@ -32,13 +32,16 @@ until it returns — past the window this looks exactly like a hang and gets kil
 obvious for one call: run it as a background task instead of inventing your own polling loop.
 
 **If you genuinely can't end the turn** — later steps in this same reply depend on the result — a
-background task doesn't fit, since a wake is always a *new* session, never a resume. Fall back to
-`Bash(run_in_background: true)` and poll it manually, but each poll must be its own separate tool
-call: a `sleep`/loop wrapped inside one Bash invocation (`for i in 1..6; do sleep 40; check; done`)
-is just as atomic and silent to the poller as the original blocking call, and trips the watchdog
-just the same. Use the `Monitor` tool (streams each output line as its own notification) or
-repeated, separate Bash calls spaced out over the turn — never a `sleep`/loop inside a single
-call, even when the intent is "polling." Known platform gap behind this whole trap, not yet fixed:
+background task doesn't fit, since a wake is always a *new* session, never a resume. Poll manually
+instead, but each poll must be its own separate tool call: a `sleep`/loop wrapped inside one Bash
+invocation (`for i in 1..6; do sleep 40; check; done`) is just as atomic and silent to the poller
+as a single blocking call, and trips the watchdog just the same. Use the `Monitor` tool (streams
+each output line as its own notification) or repeated, separate Bash calls spaced out over the
+turn — never a `sleep`/loop inside a single call, even when the intent is "polling," and never
+`Bash(run_in_background: true)` either: a `PreToolUse` hook blocks it outright (poller-brain#490)
+because it's killed the moment this turn ends — in production (`--output-format stream-json`)
+synchronously, the instant the model's final turn text has no pending tool_use; polling it "later"
+never happens. Known platform gap behind this whole trap, not yet fixed:
 `teamvibeai/teamvibe.ai#106`.
 
 ## What you get back
