@@ -85,9 +85,10 @@ describe a timeout as a success.
 | `--name NAME` | `task` | Shows up in every drop. Use something you'll recognise. |
 | `--ttl SECONDS` | `900` | 30–21600 (6 h). The task is **killed** at this limit — set it above the realistic worst case. Also sets the checkpoint cadence — see *Interim output*. |
 | `--note TEXT` | — | Why you launched it and what to do with the answer. Carried into every drop. **Write one for anything you intend to continue** — see below. |
-| `--notify-on REGEX` | — | Flush a checkpoint immediately when new output matches, instead of waiting for the next debounce interval. For output that can't wait — a device-auth URL, a confirmation prompt. |
-| `--quiet-checkpoints` | off | Suppress the quiet-period and ceiling checkpoint triggers entirely — see *Interim output*. Mutually exclusive with `--checkpoint-interval`. |
-| `--checkpoint-interval SECONDS` | — | Replace both checkpoint triggers with a single "flush no more often than every N seconds" rule — see *Interim output*. Must be a positive integer strictly less than `--ttl`. Mutually exclusive with `--quiet-checkpoints`. |
+| `--notify-on REGEX` | — | Flush a checkpoint immediately when new output matches, instead of waiting for the next periodic trigger. For output that can't wait — a device-auth URL, a confirmation prompt. |
+| `--quiet-checkpoints` | off | Suppress interim checkpoints entirely (only the terminal drop remains) — see *Interim output*. Mutually exclusive with `--checkpoint-interval` and `--eager-checkpoints`. |
+| `--checkpoint-interval SECONDS` | — | Override the default TTL-derived cadence with your own "flush no more often than every N seconds" — see *Interim output*. Must be a positive integer strictly less than `--ttl`. Mutually exclusive with `--quiet-checkpoints` and `--eager-checkpoints`. |
+| `--eager-checkpoints` | off | Restore the pre-#489 default: flush on a 1.5s quiet period OR the TTL-derived ceiling, whichever comes first — see *Interim output*. Mutually exclusive with `--quiet-checkpoints` and `--checkpoint-interval`. |
 | `--dry-run` | off | Runs the command for real but writes drops to `inbox-drops.jsonl` in the task dir instead of `.inbox/` — nothing lands in Slack. |
 | `-- <command…>` | required | Everything after `--` is the command. Not a shell string — no pipes or redirects unless you wrap it in `bash -c "…"`. |
 | `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the terminal drop was written. Needs no environment beyond `TEAMVIBE_CHANNEL_ID`. |
@@ -234,35 +235,56 @@ running on that poller.
 ## Interim output
 
 While the task runs, new output coalesces into checkpoints dropped into `.inbox/` — same
-mechanism as the terminal drop, just not the final one. A checkpoint fires on whichever of
-these comes first, and never for nothing:
+mechanism as the terminal drop, just not the final one.
+
+**Default trigger (as of [poller-brain#489](https://github.com/teamvibeai/poller-brain/issues/489)): periodic.**
+Flush no more often than every `clamp(--ttl / 8, 60s, 10min)` seconds — the same TTL-derived
+number `--checkpoint-interval` lets you set explicitly, below — and only when there's
+unflushed output (no empty checkpoint just because a timer expired). A 2-minute task gets
+no forced checkpoint at all, only the terminal drop; an hour-long task gets roughly 8
+regardless of how chatty the command actually is.
+
+This default exists because checkpoints are mainly useful for tasks that surface key
+information via stdout mid-run — a device-auth URL, a confirmation prompt, real progress
+data. For the common "just wait until it's done" case, only the terminal message matters,
+and a wrapper script with a steady short polling cadence (echoing status every ~20s, say)
+never goes quiet long enough for a debounce to matter — every burst would otherwise trigger
+its own checkpoint. If your task genuinely benefits from fast interim visibility, use
+`--eager-checkpoints` (below) instead of the default.
+
+`--notify-on <regex>` bypasses the periodic trigger for output that can't wait — for a
+command that interleaves an important line with other chatter you still want signaled
+immediately. It's checked on the same short poll that drives the periodic trigger; a match
+flushes right away.
+
+**Known limitation:** the check is a single peek at the last ~1500 bytes of unflushed
+output, not a search over everything since the last flush. A match can be pushed out of
+that window by enough output arriving right after it before anything flushes — normally
+rare, since the periodic trigger flushes regularly and resets the window, but combining
+`--notify-on` with `--quiet-checkpoints` (or a long `--checkpoint-interval`) removes those
+resets, so it's easier to hit there. This is the same limitation `--notify-on` already has
+on its own today, just newly reachable through these two flags too. See
+[poller-brain#405](https://github.com/teamvibeai/poller-brain/issues/405) if you need this
+hardened — not done here to keep this change simple.
+
+### Fast interim visibility: `--eager-checkpoints`
+
+Restores the pre-#489 default: a checkpoint fires on whichever of these comes first, and
+never for nothing.
 
 - **Quiet period.** Once 1.5 s pass with no new output, whatever accumulated is flushed
   immediately. This is what gets key data out fast — a device-auth URL, a confirmation
   prompt — because a command almost always pauses right after printing something that
   needs a reply.
 - **Ceiling.** A command that never goes quiet would otherwise starve the quiet-period
-  trigger forever, so there's also a hard cap: `clamp(--ttl / 8, 60s, 10min)`, derived
-  from the TTL you already had to estimate honestly for the kill limit. A 2-minute task
-  gets no forced checkpoint at all, only the terminal drop; an hour-long task gets roughly
-  8 regardless of how chatty the command actually is.
-- **Nothing new → nothing sent.** Both triggers only fire when there's unflushed output —
-  no empty checkpoint just because a timer expired.
+  trigger forever, so there's also a hard cap: `clamp(--ttl / 8, 60s, 10min)`, the same
+  number the default periodic trigger uses as its cadence.
+- **Nothing new → nothing sent.** Both triggers only fire when there's unflushed output.
 
-`--notify-on <regex>` bypasses both triggers for output that can't wait even 1.5 s — for a
-command that interleaves the important line with other chatter and never actually goes
-quiet. It's checked on the same short poll that drives the debounce; a match flushes
-immediately.
-
-**Known limitation:** the check is a single peek at the last ~1500 bytes of unflushed
-output, not a search over everything since the last flush. A match can be pushed out of
-that window by enough output arriving right after it before anything flushes — normally
-rare, since the quiet-debounce or ceiling flushes regularly and resets the window, but
-combining `--notify-on` with `--quiet-checkpoints` (or a long `--checkpoint-interval`)
-removes those resets, so it's easier to hit there. This is the same limitation
-`--notify-on` already has on its own today, just newly reachable through these two flags
-too. See [poller-brain#405](https://github.com/teamvibeai/poller-brain/issues/405) if you
-need this hardened — not done here to keep this change simple.
+Use this for a task whose caller actually reads along as it runs and wants the first
+useful line as fast as possible, rather than waiting up to the periodic cadence for it.
+Mutually exclusive with `--quiet-checkpoints` and `--checkpoint-interval` — pick one
+trigger mode.
 
 ### Suppressing checkpoints entirely: `--quiet-checkpoints`
 
@@ -289,17 +311,14 @@ Use it for anything with predictable, high-frequency, low-value output — a cha
 step, a polling loop, a progress bar — where only completion (or a specific pattern via
 `--notify-on`) actually needs a wake ([poller-brain#403](https://github.com/teamvibeai/poller-brain/issues/403)).
 
-### Periodic status instead of eager or silent: `--checkpoint-interval SECONDS`
+### Choosing your own cadence: `--checkpoint-interval SECONDS`
 
-For output with short gaps (a line every few seconds, the normal case), the quiet-period
-trigger above always wins — it fires as soon as ~1.5 s pass, long before the TTL-derived
-ceiling could ever have a turn. That's either the eager 1.5 s-debounce flood or, with
-`--quiet-checkpoints`, total silence until the end. `--checkpoint-interval N` is the
-middle ground: **the sole periodic trigger**, replacing both the quiet-debounce and the
-ceiling — flush no more often than every N seconds, and only when there's something
-unflushed (same "nothing new → nothing sent" rule as above). Use it for something like a
-long `codex exec` run where periodic status every minute is useful but a wake per output
-line is not.
+The default periodic trigger uses an auto-derived cadence (`clamp(--ttl / 8, 60s, 10min)`).
+`--checkpoint-interval N` overrides that with your own: **the sole periodic trigger**, flush
+no more often than every N seconds, and only when there's something unflushed (same
+"nothing new → nothing sent" rule as above). Use it for something like a long `codex exec`
+run where periodic status every minute specifically is useful, rather than whatever the
+TTL-derived default works out to.
 
 - Must be a positive integer, and strictly less than `--ttl` — an interval that can only
   fire at or after the TTL kill isn't a periodic trigger, it's a confusing way to spell
@@ -307,9 +326,10 @@ line is not.
 - `--notify-on` still bypasses it exactly as before — a pattern match flushes immediately
   regardless of how much of the interval has elapsed.
 - The terminal drop is unaffected, as always.
-- **Mutually exclusive with `--quiet-checkpoints`.** Passing both is a usage error at
-  launch time (non-zero exit, clear message) rather than silently picking one — "suppress
-  everything" and "flush every N seconds" answer different questions, and guessing which
+- **Mutually exclusive with `--quiet-checkpoints` and `--eager-checkpoints`.** Passing more
+  than one trigger-mode flag is a usage error at launch time (non-zero exit, clear message)
+  rather than silently picking one — "suppress everything", "flush every N seconds", and
+  "restore the eager debounce+ceiling" each answer a different question, and guessing which
   one you meant risks masking a copy-paste mistake in a task nobody is watching live.
 
 ```bash
