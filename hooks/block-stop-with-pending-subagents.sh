@@ -58,22 +58,6 @@ process.stdin.on("end", () => {
   const safeKey = String(sessionKey).replace(/[^a-zA-Z0-9_.-]/g, "_");
   const stateFile = path.join(os.tmpdir(), `.stop-hook-pending-since-${safeKey}`);
 
-  // Best-effort sweep of stale state files from sessions that never hit
-  // the "tasks empty" cleanup branch below -- e.g. one killed by
-  // --max-turns while still blocking, exactly the case this hint targets
-  // (DevGuru, poller-brain#498 review). Bounds the /tmp leak to ~1h of
-  // junk regardless of how a prior session ended.
-  const STALE_AFTER_MS = 60 * 60 * 1000;
-  try {
-    for (const name of fs.readdirSync(os.tmpdir())) {
-      if (!name.startsWith(".stop-hook-pending-since-")) continue;
-      const full = path.join(os.tmpdir(), name);
-      try {
-        if (Date.now() - fs.statSync(full).mtimeMs > STALE_AFTER_MS) fs.unlinkSync(full);
-      } catch {}
-    }
-  } catch {}
-
   if (tasks.length === 0) {
     try { fs.unlinkSync(stateFile); } catch {}
     process.exit(0);
@@ -84,6 +68,24 @@ process.stdin.on("end", () => {
   try {
     since = parseInt(fs.readFileSync(stateFile, "utf8"), 10) || now;
   } catch {
+    // First block for this session -- the only point at which we are
+    // already touching the filesystem, so also sweep stale state files
+    // left behind by sessions that never reached the "tasks empty"
+    // cleanup above (e.g. one killed by --max-turns while still
+    // blocking, exactly the case this hint targets). Gated to this rare
+    // path rather than every Stop event, fleet-wide, per DevGuru review
+    // on poller-brain#498. Bounds the /tmp leak to ~1h of junk regardless
+    // of how a prior session ended.
+    const STALE_AFTER_MS = 60 * 60 * 1000;
+    try {
+      for (const name of fs.readdirSync(os.tmpdir())) {
+        if (!name.startsWith(".stop-hook-pending-since-")) continue;
+        const full = path.join(os.tmpdir(), name);
+        try {
+          if (Date.now() - fs.statSync(full).mtimeMs > STALE_AFTER_MS) fs.unlinkSync(full);
+        } catch {}
+      }
+    } catch {}
     try { fs.writeFileSync(stateFile, String(now)); } catch {}
   }
   const elapsedSec = Math.round((now - since) / 1000);
