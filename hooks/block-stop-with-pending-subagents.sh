@@ -49,8 +49,30 @@ process.stdin.on("end", () => {
   }
 
   const tasks = Array.isArray(input.background_tasks) ? input.background_tasks : [];
-  const sessionId = typeof input.session_id === "string" && input.session_id ? input.session_id : "unknown";
-  const stateFile = path.join(os.tmpdir(), `.stop-hook-pending-since-${sessionId}`);
+  // transcript_path/cwd are per-session and always present alongside
+  // session_id in practice; falling back to them (instead of a shared
+  // "unknown" literal) keeps two sessions that both somehow lack
+  // session_id from sharing -- and corrupting -- the elapsed-time state
+  // of the other (DevGuru, poller-brain#498 review).
+  const sessionKey = input.session_id || input.transcript_path || input.cwd || "unknown";
+  const safeKey = String(sessionKey).replace(/[^a-zA-Z0-9_.-]/g, "_");
+  const stateFile = path.join(os.tmpdir(), `.stop-hook-pending-since-${safeKey}`);
+
+  // Best-effort sweep of stale state files from sessions that never hit
+  // the "tasks empty" cleanup branch below -- e.g. one killed by
+  // --max-turns while still blocking, exactly the case this hint targets
+  // (DevGuru, poller-brain#498 review). Bounds the /tmp leak to ~1h of
+  // junk regardless of how a prior session ended.
+  const STALE_AFTER_MS = 60 * 60 * 1000;
+  try {
+    for (const name of fs.readdirSync(os.tmpdir())) {
+      if (!name.startsWith(".stop-hook-pending-since-")) continue;
+      const full = path.join(os.tmpdir(), name);
+      try {
+        if (Date.now() - fs.statSync(full).mtimeMs > STALE_AFTER_MS) fs.unlinkSync(full);
+      } catch {}
+    }
+  } catch {}
 
   if (tasks.length === 0) {
     try { fs.unlinkSync(stateFile); } catch {}
