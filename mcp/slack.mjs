@@ -1090,7 +1090,7 @@ async function handleTool(name, args) {
         ts: m.ts,
         is_bot: Boolean(m.bot_id),
         ...(m.reactions?.length && {
-          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users })),
+          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users || [] })),
         }),
         ...(m.blocks?.length && { blocks: m.blocks }),
         ...(m.attachments?.length && { attachments: m.attachments }),
@@ -1158,7 +1158,7 @@ async function handleTool(name, args) {
         thread_ts: m.thread_ts,
         reply_count: m.reply_count,
         ...(m.reactions?.length && {
-          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users })),
+          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users || [] })),
         }),
         ...(m.blocks?.length && { blocks: m.blocks }),
         ...(m.attachments?.length && { attachments: m.attachments }),

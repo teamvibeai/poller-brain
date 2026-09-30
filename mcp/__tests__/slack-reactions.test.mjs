@@ -131,5 +131,16 @@ async function withMockedResponse(response, fn) {
   ok('6 read_channel message carries reactions array', result.messages[0].reactions.length === 1 && result.messages[0].reactions[0].count === 3)
 }
 
+// 7) read_thread/read_channel: missing `users` on a reaction object defaults to
+// [] instead of the key silently dropping — uniform shape with list_reactions
+// (DevGuru review on PR #521)
+{
+  const resp = { ok: true, messages: [{ user: 'U1', text: 'hi', ts: '1.1', reactions: [{ name: 'eyes', count: 1 }] }] }
+  const { result: viaThread } = await withMockedResponse(resp, () => handleTool('read_thread', { channel: 'C1', thread_ts: '1.1' }))
+  ok('7a read_thread defaults missing users to []', Array.isArray(viaThread.messages[0].reactions[0].users) && viaThread.messages[0].reactions[0].users.length === 0)
+  const { result: viaChannel } = await withMockedResponse(resp, () => handleTool('read_channel', { channel: 'C1' }))
+  ok('7b read_channel defaults missing users to []', Array.isArray(viaChannel.messages[0].reactions[0].users) && viaChannel.messages[0].reactions[0].users.length === 0)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
