@@ -694,6 +694,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_reactions',
+    description: 'List the current emoji reactions on a message (name, count, and reacting user IDs). Use this before add_reaction/remove_reaction to see what is already there, instead of guessing blindly or probing candidate emoji one at a time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        timestamp: { type: 'string', description: 'Message timestamp to inspect (default: original message)' },
+      },
+    },
+  },
+  {
     name: 'read_thread',
     description: 'Read message history from the current thread.',
     inputSchema: {
@@ -1048,6 +1059,24 @@ async function handleTool(name, args) {
       return { ok: true }
     }
 
+    // reactions.get, like conversations.replies/history, isn't in JSON_SAFE_METHODS
+    // (poller-brain#348) so it takes the form-encoded branch by default — not
+    // live-probed for JSON safety since the bot token currently lacks the
+    // reactions:read scope this method needs (poller-brain#518/#520).
+    case 'list_reactions': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      const timestamp = args.timestamp || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!timestamp) throw new Error('timestamp required')
+      const result = await slackApi('reactions.get', { channel, timestamp })
+      const reactions = (result.message?.reactions || result.file?.reactions || []).map((r) => ({
+        name: r.name,
+        count: r.count,
+        users: r.users || [],
+      }))
+      return { ok: true, reactions }
+    }
+
     case 'read_thread': {
       const channel = args.channel || DEFAULT_CHANNEL
       const ts = args.thread_ts || DEFAULT_THREAD_TS
@@ -1060,6 +1089,9 @@ async function handleTool(name, args) {
         text: m.text || '',
         ts: m.ts,
         is_bot: Boolean(m.bot_id),
+        ...(m.reactions?.length && {
+          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users || [] })),
+        }),
         ...(m.blocks?.length && { blocks: m.blocks }),
         ...(m.attachments?.length && { attachments: m.attachments }),
         ...(m.files?.length && {
@@ -1125,6 +1157,9 @@ async function handleTool(name, args) {
         is_bot: Boolean(m.bot_id),
         thread_ts: m.thread_ts,
         reply_count: m.reply_count,
+        ...(m.reactions?.length && {
+          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users || [] })),
+        }),
         ...(m.blocks?.length && { blocks: m.blocks }),
         ...(m.attachments?.length && { attachments: m.attachments }),
         ...(m.files?.length && {
