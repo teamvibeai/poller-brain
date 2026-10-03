@@ -167,14 +167,14 @@ Follow these steps when a session produces substantial reference material:
 
 ### Session Capture File Template
 
-Use this recommended structure for `semantic/` files created during session capture:
+Use this structure for `semantic/` files created during session capture:
 
 ```markdown
 # {Topic Name}
 <!-- WIP: topic not concluded -->  ← only if unfinished
 
 ## Context
-Brief description of what this is about and why.
+Brief description of what this is about and why it was captured.
 
 ## Decisions
 - What was agreed and why.
@@ -189,7 +189,7 @@ Brief description of what this is about and why.
 - Links, tools, examples.
 ```
 
-Not all sections are required — use what fits the content.
+**`## Context` is REQUIRED** — every session-capture file must include it with at least one line of text explaining what the file is about and why it was created. Without context, the file becomes opaque after a few weeks. Other sections (`## Decisions`, `## Considered Alternatives`, etc.) are optional — use what fits the content.
 
 ### Naming Convention
 
