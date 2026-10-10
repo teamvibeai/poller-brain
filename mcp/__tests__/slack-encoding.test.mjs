@@ -14,30 +14,24 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { expectedEncoding } from './slack-encoding-expectations.mjs'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
 const exports = '\nexport { needsFormEncoding, encodeFormBody }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { needsFormEncoding, encodeFormBody } = mod
+const slackMethods = [...new Set([...src.matchAll(/slackApi\('([\w.]+)'/g)].map((m) => m[1]))]
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
 
-// 1) the 9 confirmed-safe methods on the JSON branch stay there (zero regression)
+// 1) every discovered call site has an independent encoding expectation.
 {
-  const jsonSafe = [
-    'auth.test',
-    'chat.postMessage',
-    'chat.update',
-    'reactions.add',
-    'reactions.remove',
-    'pins.add',
-    'pins.remove',
-    'bookmarks.list',
-    'assistant.threads.setStatus',
-  ]
-  for (const m of jsonSafe) ok(`1 ${m} → JSON (needsFormEncoding=false)`, needsFormEncoding(m) === false)
+  for (const m of slackMethods) {
+    const expected = expectedEncoding[m]
+    ok(`1 ${m} → ${expected ?? 'MISSING EXPECTATION'}`, (expected === 'form' || expected === 'json') && needsFormEncoding(m) === (expected === 'form'))
+  }
 }
 
 // 2) unknown method in an otherwise JSON-safe namespace → form (no prefix inference)
@@ -48,13 +42,6 @@ const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++;
 // 3) reactions.list (read/list method, sibling of the confirmed-safe reactions.add/remove) → form
 {
   ok('3 reactions.list → form', needsFormEncoding('reactions.list') === true)
-}
-
-// 4) previously form-encoded methods stay on form (zero regression), plus
-//    users.info newly moved to form in poller-brain#349
-{
-  const formMethods = ['conversations.info', 'conversations.replies', 'conversations.history', 'files.getUploadURLExternal', 'chat.getPermalink', 'pins.list', 'users.info']
-  for (const m of formMethods) ok(`4 ${m} → form`, needsFormEncoding(m) === true)
 }
 
 // 5) encodeFormBody drops undefined/null values instead of serializing the literal string
