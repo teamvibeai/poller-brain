@@ -9,12 +9,14 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { expectedEncoding } from './slack-encoding-expectations.mjs'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
 const exports = '\nexport { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi } = mod
+const slackMethods = [...new Set([...src.matchAll(/slackApi\('([\w.]+)'/g)].map((m) => m[1]))]
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
@@ -197,20 +199,21 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
   ok('j prose outside inline code still unescaped', r.effectiveText.includes('a real ping <@U2>'))
 }
 
-// (k) poller-brain#345: every method actually called via slackApi() in this file (from
-// `grep -n "slackApi('" slack.mjs`, kept in sync manually) gets the encoding Slack's live
+// (k) poller-brain#345: every method actually called via slackApi() in slack.mjs (derived
+// directly from its call sites) gets the encoding Slack's live
 // API actually requires for it — not just the two named in the original ticket. DevGuru's
 // live probe (2026-08-19) additionally caught pins.list failing the same way as
 // chat.getPermalink; the pre-fix test suite passed 169/169 while pins.list was broken,
 // because the old asserts only named the ticket's one method instead of every call site.
-// jsonEncoded below = the 9 confirmed-safe methods on the JSON branch (poller-brain#348).
-// users.info moved to formEncoded in poller-brain#349 (live-confirmed to reject JSON
+// The independent expectation table records the 9 confirmed-safe methods on
+// the JSON branch (poller-brain#348).
+// users.info moved to the form branch in poller-brain#349 (live-confirmed to reject JSON
 // bodies with user_not_found).
 {
-  const formEncoded = ['conversations.info', 'conversations.replies', 'conversations.history', 'conversations.setTopic', 'conversations.setPurpose', 'files.getUploadURLExternal', 'files.completeUploadExternal', 'chat.getPermalink', 'pins.list', 'users.info']
-  const jsonEncoded = ['auth.test', 'chat.postMessage', 'chat.update', 'reactions.add', 'reactions.remove', 'bookmarks.list', 'assistant.threads.setStatus', 'pins.add', 'pins.remove']
-  for (const m of formEncoded) ok(`k ${m} form-encoded`, needsFormEncoding(m))
-  for (const m of jsonEncoded) ok(`k ${m} JSON-encoded`, !needsFormEncoding(m))
+  for (const m of slackMethods) {
+    const expected = expectedEncoding[m]
+    ok(`k ${m} ${expected ?? 'MISSING EXPECTATION'}`, (expected === 'form' || expected === 'json') && needsFormEncoding(m) === (expected === 'form'))
+  }
 }
 
 // (l) poller-brain#345 nit: prove slackApi() actually consults the predicate (not just
