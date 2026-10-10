@@ -12,9 +12,9 @@ import { dirname, join } from 'node:path'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
-const exports = '\nexport { buildSendPayload, buildSendResponse }\n'
+const exports = '\nexport { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
-const { buildSendPayload, buildSendResponse } = mod
+const { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi } = mod
 
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
@@ -83,6 +83,51 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
   ok('e agent blocks+table text → passthrough (no double render path)', r.transformed === null)
 }
 
+// (g) poller-brain#225: bold-wrapped bare URL in text -> stripped + echoed,
+// applies even when no table is present (the plain-passthrough case the bug
+// actually reproduces in)
+{
+  const r = buildSendPayload({ text: 'Report: *https://x.io/a* hotovo' })
+  ok('g effectiveText has asterisks stripped', r.effectiveText === 'Report: https://x.io/a hotovo')
+  ok('g no blocks synthesized (still plain passthrough)', r.blocks.length === 0)
+  ok('g transformed echoes the fix', r.transformed?.reason === 'bold_wrapped_url_in_text' && r.transformed.bold_url_stripped === true)
+}
+
+// (h) #225 fix still applies even when the agent supplies its own blocks —
+// `text` still reaches Slack (section-prepended), so the same bug would hit it
+{
+  const own = [{ type: 'divider' }]
+  const r = buildSendPayload({ text: '*https://x.io/a*', blocks: own })
+  ok('h text field fixed even with agent blocks', r.blocks[0].type === 'section' && r.blocks[0].text.text === 'https://x.io/a')
+  ok('h transform still echoed', r.transformed?.bold_url_stripped === true)
+}
+
+// (i) #225 + table combo: both fixes apply, table transform stays primary reason
+{
+  const r = buildSendPayload({ text: `*https://x.io/a*\n\n${TABLE}` })
+  ok('i table transform reason preserved', r.transformed?.reason === 'pipe_table_in_text')
+  ok('i bold_url_stripped flag also present', r.transformed?.bold_url_stripped === true)
+  ok('i prose section carries the stripped URL, no asterisks', r.blocks.find(b => b.type === 'section').text.text.includes('https://x.io/a') && !r.blocks.find(b => b.type === 'section').text.text.includes('*https'))
+}
+
+// (m) poller-brain#322: URL mid-sentence inside a bold span (not the whole
+// span, unlike #225) -> wrapped in `<url>`, sentence stays bold, no stray `*`
+{
+  const r = buildSendPayload({ text: '*testovat můžeš na https://x.io/a*' })
+  ok('m URL wrapped, bold markers kept', r.effectiveText === '*testovat můžeš na <https://x.io/a>*')
+  ok('m no blocks synthesized (still plain passthrough)', r.blocks.length === 0)
+  ok('m transformed echoes the wrap, not the strip', r.transformed?.reason === 'bold_wrapped_url_in_text' && r.transformed.bold_url_wrapped === true && !r.transformed.bold_url_stripped)
+}
+
+// (n) #225 and #322 fixes coexist without double-matching the same URL —
+// solo-span case still strips (not wraps), embedded case still wraps
+{
+  const r = buildSendPayload({ text: 'Report: *https://x.io/a* a *viz https://y.io/b* diky' })
+  ok('n solo-span URL stripped (unchanged #225 behavior)', r.effectiveText.includes('Report: https://x.io/a a'))
+  ok('n embedded URL wrapped (#322)', r.effectiveText.includes('*viz <https://y.io/b>*'))
+  ok('n both flags present', r.transformed?.bold_url_stripped === true && r.transformed?.bold_url_wrapped === true)
+}
+
 // (f) buildSendResponse key order — the poller truncates a logged tool_result at
 // 200 chars, so a code that lands after unbounded prose is invisible to whoever
 // counts warnings in the session log (#108 counting, #184 phase 3).
@@ -106,6 +151,87 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
 
   const two = buildSendResponse({ ts: '1.1', transformed: null, warnings: [warn, { code: 'thread_ts_override_unjustified', detail: 'y'.repeat(450) }] })
   ok('f both codes survive truncation together', truncate(JSON.stringify(two)).includes('thread_ts_override_unjustified'))
+}
+
+// (j) HTML-entity normalization (poller-brain#243): escaped mention/link
+// syntax is unescaped before any table/block processing sees it, in every
+// branch (verbatim passthrough, section-prepend, and inside a synthesized
+// table's surrounding prose).
+{
+  const r = buildSendPayload({ text: 'ping &lt;@U02C5FJFD6E&gt; re: A &amp; B' })
+  ok('j verbatim passthrough unescaped', r.effectiveText === 'ping <@U02C5FJFD6E> re: A & B')
+}
+{
+  const own = [{ type: 'divider' }]
+  const r = buildSendPayload({ text: 'hi &lt;@U1&gt;', blocks: own })
+  ok('j section-prepend branch unescaped', r.blocks[0].text.text === 'hi <@U1>')
+}
+{
+  // &amp;lt; must decode to literal "&lt;", not cascade into "<"
+  const r = buildSendPayload({ text: 'literal &amp;lt; stays escaped-once' })
+  ok('j &amp; decoded last (no cascade)', r.effectiveText === 'literal &lt; stays escaped-once')
+}
+{
+  // table-auto-convert branch: prose surrounding the table carries the
+  // escaped mention — must be unescaped in the actual `blocks` sent to
+  // Slack (not just effectiveText/fallbackText), since blocks is what
+  // renders once present (DevGuru review, poller-brain#243).
+  const r = buildSendPayload({ text: `ping &lt;@U1&gt; hotovo:\n\n${TABLE}` })
+  const proseBlock = r.blocks.find(b => b.type === 'section')
+  ok('j table-branch prose block unescaped', proseBlock?.text?.text === 'ping <@U1> hotovo:')
+  ok('j table-branch fallbackText unescaped', r.effectiveText.includes('ping <@U1> hotovo:'))
+}
+{
+  // a QUOTED escaped mention inside a fenced code block (a bug report citing
+  // the raw syntax, exactly like this review thread) must stay literal —
+  // decoding it would turn a code example into a real ping (DevGuru review,
+  // poller-brain#243).
+  const r = buildSendPayload({ text: 'see example:\n```\nping &lt;@U1&gt;\n```\nreal ping: &lt;@U2&gt;' })
+  ok('j fenced code block left escaped', r.effectiveText.includes('```\nping &lt;@U1&gt;\n```'))
+  ok('j prose outside fence still unescaped', r.effectiveText.includes('real ping: <@U2>'))
+}
+{
+  // same for a single-backtick inline code span
+  const r = buildSendPayload({ text: 'the literal `&lt;@U1&gt;` syntax vs a real ping &lt;@U2&gt;' })
+  ok('j inline code span left escaped', r.effectiveText.includes('`&lt;@U1&gt;`'))
+  ok('j prose outside inline code still unescaped', r.effectiveText.includes('a real ping <@U2>'))
+}
+
+// (k) poller-brain#345: every method actually called via slackApi() in this file (from
+// `grep -n "slackApi('" slack.mjs`, kept in sync manually) gets the encoding Slack's live
+// API actually requires for it — not just the two named in the original ticket. DevGuru's
+// live probe (2026-08-19) additionally caught pins.list failing the same way as
+// chat.getPermalink; the pre-fix test suite passed 169/169 while pins.list was broken,
+// because the old asserts only named the ticket's one method instead of every call site.
+// jsonEncoded below = the 9 confirmed-safe methods on the JSON branch (poller-brain#348).
+// users.info moved to formEncoded in poller-brain#349 (live-confirmed to reject JSON
+// bodies with user_not_found).
+{
+  const formEncoded = ['conversations.info', 'conversations.replies', 'conversations.history', 'conversations.setTopic', 'conversations.setPurpose', 'files.getUploadURLExternal', 'files.completeUploadExternal', 'chat.getPermalink', 'pins.list', 'users.info']
+  const jsonEncoded = ['auth.test', 'chat.postMessage', 'chat.update', 'reactions.add', 'reactions.remove', 'bookmarks.list', 'assistant.threads.setStatus', 'pins.add', 'pins.remove']
+  for (const m of formEncoded) ok(`k ${m} form-encoded`, needsFormEncoding(m))
+  for (const m of jsonEncoded) ok(`k ${m} JSON-encoded`, !needsFormEncoding(m))
+}
+
+// (l) poller-brain#345 nit: prove slackApi() actually consults the predicate (not just
+// that the diff currently wires it in) — mock fetch, call the real slackApi(), and read
+// back the Content-Type/body shape it sent. Would catch a future regression where the
+// condition is inlined again and silently drifts from needsFormEncoding.
+{
+  const calls = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, headers: opts.headers, body: opts.body })
+    return { json: async () => ({ ok: true }) }
+  }
+  await slackApi('chat.getPermalink', { channel: 'C1', message_ts: '1.1' })
+  await slackApi('chat.postMessage', { channel: 'C1', text: 'hi' })
+  globalThis.fetch = realFetch
+
+  ok('l form method sends x-www-form-urlencoded', calls[0].headers['Content-Type'] === 'application/x-www-form-urlencoded')
+  ok('l form method body is urlencoded, not JSON', calls[0].body === 'channel=C1&message_ts=1.1')
+  ok('l json method sends application/json', calls[1].headers['Content-Type'] === 'application/json')
+  ok('l json method body is a JSON string', calls[1].body === JSON.stringify({ channel: 'C1', text: 'hi' }))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

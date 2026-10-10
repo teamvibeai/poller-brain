@@ -58,27 +58,20 @@ function htmlPage(body) {
   }
   @media (prefers-color-scheme: dark) {
     body { background: #1a1a1a; color: #e5e5e5; }
-    input { background: #2a2a2a; color: #e5e5e5; border-color: #444; }
+    textarea { background: #2a2a2a; color: #e5e5e5; border-color: #444; }
     button { background: #6b4fbb; }
     button:hover { background: #7b5fcb; }
-    .toggle { color: #aaa; }
-    .toggle:hover { color: #ccc; }
   }
   h2 { margin: 0 0 8px; }
   p.desc { color: #666; font-size: 14px; margin: 0 0 16px; }
   @media (prefers-color-scheme: dark) { p.desc { color: #999; } }
-  .field { position: relative; margin-bottom: 16px; }
-  input {
-    width: 100%; padding: 12px 44px 12px 12px; font-size: 16px;
+  .field { margin-bottom: 16px; }
+  textarea {
+    width: 100%; padding: 12px; font-size: 16px; font-family: ui-monospace, monospace;
     border: 2px solid #ddd; border-radius: 8px; outline: none;
+    resize: vertical; min-height: 6em;
   }
-  input:focus { border-color: #6b4fbb; }
-  .toggle {
-    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-    background: none; border: none; cursor: pointer; font-size: 18px;
-    color: #666; padding: 4px;
-  }
-  .toggle:hover { color: #333; }
+  textarea:focus { border-color: #6b4fbb; }
   button[type="submit"] {
     background: #6b4fbb; color: white; border: none;
     padding: 12px 32px; font-size: 16px; border-radius: 8px;
@@ -96,13 +89,7 @@ const FORM_HTML = htmlPage(`
   ${DESCRIPTION ? `<p class="desc">${escapeHtml(DESCRIPTION)}</p>` : ''}
   <form method="POST" action="/save">
     <div class="field">
-      <input type="password" id="secret" name="secret" placeholder="Paste secret here..." required autofocus>
-      <button type="button" class="toggle" onclick="
-        const inp = document.getElementById('secret');
-        const isPassword = inp.type === 'password';
-        inp.type = isPassword ? 'text' : 'password';
-        this.textContent = isPassword ? '🙈' : '👁';
-      ">👁</button>
+      <textarea id="secret" name="secret" rows="8" placeholder="Paste secret here..." required autofocus spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
     </div>
     <button type="submit">Submit</button>
   </form>
@@ -127,9 +114,15 @@ const server = http.createServer((req, res) => {
     req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
       const params = new URLSearchParams(body);
-      const secret = params.get('secret')?.trim();
+      // Browsers CRLF-normalize form-urlencoded values on submit (WHATWG late
+      // normalization), so a pasted \n comes back as \r\n here — undo that first.
+      // A multi-line value keeps exactly one trailing LF (many secret formats,
+      // e.g. OpenSSH private keys, are only valid with one); a single-line value
+      // is fully trimmed as before.
+      const raw = (params.get('secret') ?? '').replace(/\r\n/g, '\n');
+      const secret = raw.includes('\n') ? raw.replace(/[ \t\r\n]*$/, '\n') : raw.trim();
 
-      if (!secret) {
+      if (!secret || !secret.trim()) {
         res.writeHead(400, { 'Content-Type': 'text/plain' });
         res.end('Missing secret');
         return;

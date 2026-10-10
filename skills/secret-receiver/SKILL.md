@@ -1,11 +1,11 @@
 # Secret Receiver Skill
 
-Receive secrets (API tokens, credentials) from users securely via a temporary HTTP form tunneled through localtunnel. Submitted values are written to a 0600-mode file the spawning agent can read — **OS-agnostic**, no dependency on macOS Keychain, Linux `secret-tool`, or any other platform-specific store.
+Receive secrets (API tokens, credentials) from users securely via a temporary HTTP form tunneled through `cloudflared`. Submitted values are written to a 0600-mode file the spawning agent can read — **OS-agnostic**, no dependency on macOS Keychain, Linux `secret-tool`, or any other platform-specific store.
 
 ## How It Works
 
 1. Agent starts a local Node.js HTTP server with a simple form
-2. Agent runs `npx localtunnel --port PORT` to create a temporary public HTTPS URL
+2. Agent runs `npx --yes cloudflared tunnel --url http://localhost:PORT` to create a temporary public HTTPS URL
 3. Agent sends the URL to the user (e.g. via Slack)
 4. User opens the URL, enters the secret, and submits
 5. Server writes the secret to a 0600-mode file (path is announced on stdout), prints a `TOKEN_RECEIVED <path>` line, returns the success page, and shuts down 2s later
@@ -31,15 +31,20 @@ node $CLAUDE_CONFIG_DIR/skills/secret-receiver/server.mjs \
 | `--port` | `3456` | Local HTTP server port |
 | `--service` | (required) | Display label shown on the form page (no longer a keychain key) |
 | `--title` | `"Secret"` | Form page title |
-| `--description` | `""` | Help text shown above the input field |
+| `--description` | `""` | Help text shown above the textarea |
 | `--out-file` | random path under `os.tmpdir()` | Where to write the captured value (0600 mode). Override when you want a specific path, e.g. tmpfs |
 
 ### Starting the tunnel
 
 ```bash
-npx --yes localtunnel --port 3456
-# Output: your url is: https://xyz-random.loca.lt
+npx --yes cloudflared tunnel --url http://localhost:3456
+# The public URL is logged to stderr (not stdout), inside a bordered box:
+# ...INF |  https://xyz-random-words.trycloudflare.com                |
 ```
+
+No account or login is required — this is a Cloudflare "Quick Tunnel". Note the URL goes to **stderr**, unlike localtunnel's stdout — redirect `2>&1` when capturing it to a log file for grepping.
+
+If `cloudflared`/`npx` fails to resolve (offline npm registry, corporate proxy blocking the binary download), fall back to `npx --yes localtunnel --port 3456` (`your url is: https://xyz-random.loca.lt` on stdout) — same server, same downstream flow, just a less reliable relay and a "Friendly Reminder" interstitial page on first visit.
 
 ### Discovering the output path
 
@@ -96,23 +101,26 @@ rm /var/folders/.../secret-receiver-ab12cd34.txt
 
 Avoid `value=$(cat <file>)` — that pulls the plaintext into the shell environment and any subsequent `set -x` / `env` / process listing leaks it.
 
+**Never diagnose the captured value by printing any part of its content** (`head -1`, "show me the first line", `wc -c` output piped through something that echoes the body, etc.). That is the one guarantee this skill exists to provide — the plaintext never reaches the agent's stdout or LLM context — and a debugging step that prints even a fragment defeats it. If the value looks wrong (auth fails, a downstream tool rejects it), assert over *derived* properties instead: byte length (`wc -c < <file>`), line count, a regex match (`grep -qE '^-----BEGIN' <file>`), or best of all, whether it actually works (sign something, call the API). If it's genuinely corrupt, ask the user to resubmit — don't inspect the broken value to find out why.
+
 ## Where the captured value can land
 
 This skill only captures the value — it doesn't pick a destination. Decide that *before* you spin the form up:
 
 - **Poller-scope** (e.g. an agent rotating its own GitLab PAT): `PUT $TEAMVIBE_API_URL/secrets` with `scope: "poller"` and `scopeId: $TEAMVIBE_POLLER_ID`. This is the only platform write the REST API accepts from a poller-token Bearer; see [teamvibe.ai#212](https://github.com/teamvibeai/teamvibe.ai/issues/212).
 - **Workspace-scope**: REST is **denied** for poller tokens. The platform UI (`/settings/secrets`, Owner-role only via `withWorkspaceAuth` on the GraphQL `Mutation.putSecret`) is the canonical write path. If you've already captured a value via this skill and the user wants it in workspace scope, surface the file path in a follow-up Slack message so they can `cat <path> | pbcopy` (or equivalent) and paste it into the UI themselves, then `rm` the file.
-- **Channel-scope**: REST accepts the write only if the target Channel row exists and isn't soft-deleted ([teamvibe.ai#213](https://github.com/teamvibeai/teamvibe.ai/issues/213)). If the channel exists, the consumer pattern above with `scope: "channel"`, `scopeId: $TEAMVIBE_WORKSPACE_ID`, `channelId: <id>` works. If it doesn't exist yet, route the user to `/channels/<id>` (UI, Owner-only).
+- **Channel-scope**: REST accepts the write only if the target Channel row exists, isn't soft-deleted, and is served by your own poller (`Channel.pollerId === token.pollerId`, [teamvibe.ai#213](https://github.com/teamvibeai/teamvibe.ai/issues/213) + pb#227) — all three trip reasons return an identical `403 Channel not found`, so the response body alone won't tell you which one hit. If the channel exists (and is yours), the consumer pattern above with `scope: "channel"`, `scopeId: $TEAMVIBE_WORKSPACE_ID`, `channelId: <TeamVibe channelId, not the Slack channel ID — it's a generated ULID>` works. If it doesn't exist yet, route the user to `/channels` (Add Channel) — the row and its id are created there via `putChannel`, which has no `requiredRole`, so any workspace member/API token can provision it, unlike the Owner-gated secret mutations above.
 
 In all cases the platform value is **write-only after save** — no list endpoint or UI surface returns the plaintext later. It only reappears in agent `process.env` via the per-spawn injection.
 
 ## Notes
 
-- **Localtunnel interstitial:** The first visit shows a "Friendly Reminder" page. The user must click "Click to Continue" or enter their IP address to proceed.
+- **No interstitial:** Unlike localtunnel, a `trycloudflare.com` Quick Tunnel has no "Friendly Reminder" / IP-gate page — the form loads on first visit.
 - **Cross-platform:** Works on macOS, Linux, and Windows (Node's `fs` works everywhere; `chmod` is a no-op on Windows but the file still inherits the owner's user ACL).
 - **One-shot:** The server automatically shuts down 2s after receiving a value. The output file persists until the agent deletes it — clean up as soon as the value is consumed.
 - **Concurrent runs:** Default `--out-file` is randomly named, so multiple receiver instances on the same host don't collide on the same path.
 - **Security:** The tunnel URL is random and short-lived. The server only accepts one submission before shutting down. The plaintext is written to a single 0600-mode file and never to the server's stdout.
+- **No input masking:** The form field is a plain `<textarea>`, not a masked `<input type="password">` — a deliberate tradeoff, not an oversight. A single-line `<input>` runs the browser's value-sanitization algorithm on every keystroke/paste, which strips newlines outright — that's what silently corrupted multi-line secrets, not a submission-time encoding quirk; the shoulder-surf protection a masked field gives up is minor next to that data-loss risk. See [pb#326](https://github.com/teamvibeai/poller-brain/issues/326).
 
 ## Typical Agent Workflow
 
@@ -122,10 +130,10 @@ node $CLAUDE_CONFIG_DIR/skills/secret-receiver/server.mjs \
   --service "gitlab.com" --title "GitLab Token" > /tmp/sr.log 2>&1 &
 SR_PID=$!
 
-# 2. Start tunnel
-npx --yes localtunnel --port 3456 > /tmp/lt.log 2>&1 &
+# 2. Start tunnel (cloudflared logs to stderr, hence 2>&1)
+npx --yes cloudflared tunnel --url http://localhost:3456 > /tmp/lt.log 2>&1 &
 LT_PID=$!
-URL=$(timeout 10 grep -o 'https://[^ ]*' <(tail -F /tmp/lt.log) | head -1)
+URL=$(timeout 15 grep -o 'https://[^ ]*trycloudflare.com' <(tail -F /tmp/lt.log) | head -1)
 
 # 3. Send URL to user via Slack (via the slack MCP tool)
 

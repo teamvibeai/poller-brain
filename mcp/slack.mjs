@@ -60,14 +60,47 @@ function textToSections(text, maxLen = 2900) {
   return sections
 }
 
+// Slack's Web API has no clean read/write rule for which content-type a method
+// accepts — some read methods reject JSON outright (chat.getPermalink, pins.list),
+// others don't (bookmarks.list), and some write methods reject JSON too
+// (conversations.setTopic/setPurpose, files.*). Form-encoding is the safer default:
+// per Slack's own docs (docs.slack.dev/apis/web-api), arguments are passed "as GET
+// querystring parameters, POST parameters presented as application/x-www-form-urlencoded,
+// or a mix" — form is the documented universal transport, while JSON is only "Most
+// write methods allow arguments with application/json" (not a guarantee, and not for
+// reads). JSON is therefore a NAMED EXCEPTION, granted per-method only once actually
+// confirmed safe — never inferred from a namespace or verb (poller-brain#348). Before
+// adding a method here, probe it live rather than assuming by analogy.
+const JSON_SAFE_METHODS = new Set([
+  'auth.test',
+  'chat.postMessage',
+  'chat.update',
+  'reactions.add',
+  'reactions.remove',
+  'pins.add',
+  'pins.remove', // pins.add/pins.remove live-probed 2026-08-19 (poller-brain#315, DevGuru): both content types return message_not_found on a bogus timestamp (not invalid_arguments), confirming JSON parses
+  'bookmarks.list',
+  'assistant.threads.setStatus',
+])
+function needsFormEncoding(method) {
+  return !JSON_SAFE_METHODS.has(method)
+}
+
+function encodeFormBody(body) {
+  return new URLSearchParams(
+    Object.entries(body)
+      .filter(([, v]) => v != null) // drops both undefined and null (would otherwise serialize as the literal "undefined"/"null")
+      .map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)]),
+  ).toString()
+}
+
 async function slackApi(method, body) {
-  // Some Slack methods (conversations.replies, conversations.history) require form-urlencoded
-  const useForm = method.startsWith('conversations.') || method.startsWith('files.')
+  const useForm = needsFormEncoding(method)
   const headers = { Authorization: `Bearer ${BOT_TOKEN}` }
   let reqBody
   if (useForm) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    reqBody = new URLSearchParams(Object.entries(body).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)])).toString()
+    reqBody = encodeFormBody(body)
   } else {
     headers['Content-Type'] = 'application/json'
     reqBody = JSON.stringify(body)
@@ -359,6 +392,25 @@ function gfmInlineToMrkdwn(text) {
     .replace(/~~([^~]+?)~~/g, '~$1~')
 }
 
+// Undo HTML-entity escaping (&lt;@U..&gt; etc.) agents sometimes produce after
+// reading HTML-escaped context (e.g. thread history), which otherwise renders
+// as literal text instead of a mention/link and silently drops the ping.
+// Safe in one direction only: Slack's `text` field has its own (different)
+// escaping rules and never relies on these HTML sequences meaning anything.
+// Fenced code blocks and inline code spans are left untouched (same fence
+// convention as computePipeTableWarning) — an escaped mention QUOTED as a
+// code example (e.g. a bug report citing `&lt;@U..&gt;`, like this file's own
+// review thread) must not silently become a live ping. A single alternation
+// pass — rather than three sequential .replace() calls — naturally decodes
+// each occurrence once (leftmost match wins), so "&amp;lt;" resolves to the
+// literal "&lt;" instead of cascading into "<". See teamvibeai/poller-brain#243.
+function normalizeHtmlEntities(text) {
+  return text.replace(/(```[\s\S]*?```|`[^`\n]*`)|(&lt;|&gt;|&amp;)/g, (m, code, entity) => {
+    if (code) return code
+    return entity === '&lt;' ? '<' : entity === '&gt;' ? '>' : '&'
+  })
+}
+
 // Auto-convert (teamvibeai/teamvibe.ai#228, Variant B): split `text` into
 // prose + pipe-table segments IN ORDER, render prose as section(mrkdwn) blocks
 // and each table as a raw `markdown` block. Returns { blocks, fallbackText,
@@ -444,6 +496,62 @@ function buildSendResponse({ ts, transformed, warnings }) {
   return response
 }
 
+// Repairs a bare URL wrapped in single-asterisk bold where the ENTIRE bold
+// span is just the URL (poller-brain#225). Root cause (empirically confirmed
+// against live Slack rendering): Slack's autolinker finds the `http(s)://`
+// start fine, so the leading `*` is stranded as literal text, but it scans
+// forward for the URL's end until whitespace — `*` isn't a stop character, so
+// the trailing `*` gets swallowed into the href and corrupts it. A bare URL
+// (no adjacent markers) already renders correctly, so stripping both
+// asterisks is sufficient — no need to re-wrap as an explicit `<url>` link.
+// Deliberately narrow: only the `*...*` marker (not `_..._`/`~...~`), and only
+// when the bold span contains NOTHING but the URL — a bold sentence that
+// merely mentions a URL (`*see https://x for details*`) is untouched, since
+// there's no evidence that pattern hits the same adjacency bug and it's a far
+// more common, riskier span to alter.
+function stripBoldWrappedUrl(text) {
+  return text.replace(/(^|\s)\*(https?:\/\/[^\s*]+)\*(?=\s|$)/g, '$1$2')
+}
+
+// Repairs the distinct gap from #225 (poller-brain#322): a bare URL sitting
+// mid-sentence inside a `*...*` bold span, immediately before the closing
+// `*`, where the span also contains OTHER text (`*testovat můžeš na
+// https://x*`). Same Slack-autolinker adjacency bug as #225 — `*` isn't a
+// stop character, so it gets swallowed into the href — but here stripping
+// the markers (the #225 fix) would also destroy the sentence's intended bold
+// formatting, which #225 deliberately left alone for exactly this shape. Fix:
+// wrap only the URL itself in explicit `<url>` link syntax, so the character
+// immediately before the closing `*` becomes `>` instead of a URL char — the
+// bold span, the link, and the closing `*` all render correctly this way
+// (empirically verified against live Slack rendering, poller-brain#322
+// thread, same verification bar #225 set).
+// Requires a real opening `(^|\s)\*` anchor (mirrors #225's own anchor) —
+// an earlier draft matched ANY "URL immediately followed by word-boundary
+// `*`", with no requirement that it sit inside an actual bold span. DevGuru
+// measured 3 live false positives from that: a Cloudflare route glob ending
+// `/*` (common in this workspace, already `<url>`-wrapped by the author —
+// the internal `*` isn't a bold marker at all), the same shape inside a
+// ` ``` ` code fence (mutating content meant to be copied/run), and a plain
+// prose URL with a literal trailing `*`. The anchor requires an actual
+// unmatched opening `*` before the URL, which none of those have, so they're
+// no longer touched.
+// Trailing punctuation (`.,;:!?`) is captured separately and placed AFTER
+// the closing `>` rather than inside it — `<url>`'s href isn't heuristically
+// trimmed by Slack's autolinker the way a bare URL's is (DevGuru measured
+// `<https://example.com/y.>` swallowing the period into the href live), so a
+// bold sentence ending "...https://x/a." would otherwise ship a broken link.
+// Runs AFTER stripBoldWrappedUrl so the two never double-match the same span:
+// the solo-url case already has its asterisks removed by the time this runs,
+// so there's no trailing `*` left for this regex to find.
+// Deliberately narrow like #225: only `*` (not `_..._`/`~...~`) — no evidence
+// yet the same adjacency bug hits those markers; extend if/when reported.
+function wrapBoldEmbeddedUrl(text) {
+  return text.replace(
+    /(^|\s)\*([^*\n]*\s)(https?:\/\/[^\s*<>]*[^\s*<>.,;:!?])([.,;:!?]*)\*(?=\s|$)/g,
+    '$1*$2<$3>$4*'
+  )
+}
+
 // Pure payload builder for send_message: decides final blocks / effective text /
 // transform echo BEFORE any network I/O, so the three-way branch (auto-convert
 // vs section-prepend vs verbatim passthrough) is unit-testable without Slack.
@@ -453,24 +561,51 @@ function buildSendResponse({ ts, transformed, warnings }) {
 // table, opt-out/passthrough keeps the #224 warning). No behavior change vs the
 // prior inline logic — this is an extraction to lock the branches regressibly.
 function buildSendPayload(args, { hasModals = false } = {}) {
+  // #225 fix runs first and unconditionally on `text` (not gated behind the
+  // agentSuppliedBlocks opt-out like the table converter): even when the agent
+  // supplies its own blocks, `text` is still sent — either prepended as a
+  // section or as the notification fallback — so the same rendering bug would
+  // reach Slack either way. HTML-entity normalization (#243) runs before it —
+  // order doesn't matter functionally (disjoint patterns) but boldUrlFixed /
+  // boldUrlWrapped below are measured against the entity-normalized text, not
+  // raw, so they only flag actual bold-url repairs. #322's wrap runs after
+  // #225's strip (see wrapBoldEmbeddedUrl comment for why order matters).
+  const rawText = args.text
+  const htmlNormalized = typeof rawText === 'string' ? normalizeHtmlEntities(rawText) : rawText
+  const stripped = typeof htmlNormalized === 'string' ? stripBoldWrappedUrl(htmlNormalized) : htmlNormalized
+  const text = typeof stripped === 'string' ? wrapBoldEmbeddedUrl(stripped) : stripped
+  const boldUrlFixed = stripped !== htmlNormalized
+  const boldUrlWrapped = text !== stripped
+
   const agentBlocks = args.blocks ? [...args.blocks] : []
   const agentSuppliedBlocks = agentBlocks.length > 0
-  const tableWarning = computePipeTableWarning(args.text)
+  const tableWarning = computePipeTableWarning(text)
 
   let blocks = agentBlocks
-  let effectiveText = args.text
+  let effectiveText = text
   let transformed = null
 
   const converted =
-    args.text?.trim() && tableWarning && !agentSuppliedBlocks
-      ? convertPipeTablesToBlocks(args.text)
+    text?.trim() && tableWarning && !agentSuppliedBlocks
+      ? convertPipeTablesToBlocks(text)
       : null
   if (converted) {
     blocks = converted.blocks
     effectiveText = converted.fallbackText
     transformed = converted.transformed
-  } else if (args.text?.trim() && (agentSuppliedBlocks || hasModals)) {
-    blocks = [...textToSections(args.text), ...agentBlocks]
+  } else if (text?.trim() && (agentSuppliedBlocks || hasModals)) {
+    blocks = [...textToSections(text), ...agentBlocks]
+  }
+
+  if (boldUrlFixed) {
+    transformed = transformed
+      ? { ...transformed, bold_url_stripped: true }
+      : { reason: 'bold_wrapped_url_in_text', bold_url_stripped: true }
+  }
+  if (boldUrlWrapped) {
+    transformed = transformed
+      ? { ...transformed, bold_url_wrapped: true }
+      : { reason: 'bold_wrapped_url_in_text', bold_url_wrapped: true }
   }
 
   return { blocks, effectiveText, transformed, tableWarning, agentSuppliedBlocks }
@@ -492,7 +627,11 @@ async function resolveDisplayName(userId) {
       userId
     _userInfoCache.set(userId, name)
     return name
-  } catch {
+  } catch (err) {
+    // Root-caused and fixed in poller-brain#349: users.info was in JSON_SAFE_METHODS but
+    // actually rejects a JSON body (returns user_not_found), same class as pb#345. Kept
+    // logged in case a different failure mode shows up here in the future.
+    console.error(`resolveDisplayName(${userId}) failed: ${err.message}`)
     _userInfoCache.set(userId, userId)
     return userId
   }
@@ -507,7 +646,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback.' },
+        text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback. AUTO-REPAIR: a bare URL wrapped in bold as its own span (`*https://...*`) is auto-stripped to a plain URL — Slack mangles that pattern\'s link (see `transformed.bold_url_stripped`). A bare URL wrapped in bold ALONGSIDE other text (`*see https://...*`) is auto-wrapped as `*see <https://...>*` instead, since stripping would also lose the intended bold (see `transformed.bold_url_wrapped`). Prefer a bare URL or `<url|label>` yourself rather than relying on either repair.' },
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions, or a `markdown` block for tables/GFM). See https://api.slack.com/block-kit. Providing blocks OPTS OUT of table auto-convert — your blocks are sent as-is and `text` is prepended as a visible section block. Omit blocks to let a GFM table in `text` auto-convert.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread). Pass null to send a top-level channel message even when in a thread session.' },
@@ -555,6 +694,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_reactions',
+    description: 'List the current emoji reactions on a message (name, count, and reacting user IDs). Use this before add_reaction/remove_reaction to see what is already there, instead of guessing blindly or probing candidate emoji one at a time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        timestamp: { type: 'string', description: 'Message timestamp to inspect (default: original message)' },
+      },
+    },
+  },
+  {
     name: 'read_thread',
     description: 'Read message history from the current thread.',
     inputSchema: {
@@ -574,6 +724,17 @@ const TOOLS = [
       properties: {
         limit: { type: 'number', description: 'Max messages to return (default: 20)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+    },
+  },
+  {
+    name: 'get_permalink',
+    description: 'Get a clickable Slack permalink URL for a specific message. Use this instead of guessing the workspace subdomain or hand-building an archives/deep-link URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        message_ts: { type: 'string', description: 'Timestamp of the message to link to (default: current thread timestamp, or original message timestamp if not in a thread)' },
       },
     },
   },
@@ -629,6 +790,28 @@ const TOOLS = [
       type: 'object',
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+      },
+    },
+  },
+  {
+    name: 'pin_message',
+    description: 'Pin a message to a channel. Slack surfaces too_many_pins if the channel is at its pin limit, or not_pinnable for message types that cannot be pinned — both bubble up as errors.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        timestamp: { type: 'string', description: 'Message timestamp to pin (default: current thread timestamp, or original message timestamp if not in a thread)' },
+      },
+    },
+  },
+  {
+    name: 'unpin_message',
+    description: 'Unpin a message from a channel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        timestamp: { type: 'string', description: 'Message timestamp to unpin (default: current thread timestamp, or original message timestamp if not in a thread)' },
       },
     },
   },
@@ -706,6 +889,29 @@ const TOOLS = [
         thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
       },
       required: ['text'],
+    },
+  },
+  {
+    name: 'list_channels',
+    description: 'List Slack conversations this bot is a member of — i.e. the channels/DMs actually provisioned for it (public channels, private channels, group DMs, 1:1 DMs), not the whole workspace. Use to resolve a name like "#integration-team" to a channel ID, or to see what this bot can read/post to.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        types: { type: 'string', description: 'Comma-separated Slack conversation types to include (default: "public_channel,private_channel,mpim,im")' },
+        limit: { type: 'number', minimum: 1, description: 'Max channels to return (default: 200, capped at 1000)' },
+      },
+    },
+  },
+  {
+    name: 'search_users',
+    description: 'Search workspace users by a case-insensitive substring match on display name, real name, username, or email. Slack has no server-side user-search API, so this lists all workspace users and filters client-side — unlike `list_channels`, this is necessarily workspace-wide (Slack has no concept of "users visible to a bot"), not scoped to this bot\'s channels.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Substring to match against name/display name/real name/email' },
+        limit: { type: 'number', minimum: 1, description: 'Max results to return (default: 20)' },
+      },
+      required: ['query'],
     },
   },
   {
@@ -853,6 +1059,24 @@ async function handleTool(name, args) {
       return { ok: true }
     }
 
+    // reactions.get, like conversations.replies/history, isn't in JSON_SAFE_METHODS
+    // (poller-brain#348) so it takes the form-encoded branch by default — not
+    // live-probed for JSON safety since the bot token currently lacks the
+    // reactions:read scope this method needs (poller-brain#518/#520).
+    case 'list_reactions': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      const timestamp = args.timestamp || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!timestamp) throw new Error('timestamp required')
+      const result = await slackApi('reactions.get', { channel, timestamp })
+      const reactions = (result.message?.reactions || result.file?.reactions || []).map((r) => ({
+        name: r.name,
+        count: r.count,
+        users: r.users || [],
+      }))
+      return { ok: true, reactions }
+    }
+
     case 'read_thread': {
       const channel = args.channel || DEFAULT_CHANNEL
       const ts = args.thread_ts || DEFAULT_THREAD_TS
@@ -865,6 +1089,9 @@ async function handleTool(name, args) {
         text: m.text || '',
         ts: m.ts,
         is_bot: Boolean(m.bot_id),
+        ...(m.reactions?.length && {
+          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users || [] })),
+        }),
         ...(m.blocks?.length && { blocks: m.blocks }),
         ...(m.attachments?.length && { attachments: m.attachments }),
         ...(m.files?.length && {
@@ -877,6 +1104,15 @@ async function handleTool(name, args) {
         }),
       }))
       return { ok: true, messages }
+    }
+
+    case 'get_permalink': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      const message_ts = args.message_ts || DEFAULT_THREAD_TS || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!message_ts) throw new Error('message_ts required')
+      const result = await slackApi('chat.getPermalink', { channel, message_ts })
+      return { ok: true, permalink: result.permalink }
     }
 
     case 'list_thread_participants': {
@@ -921,6 +1157,9 @@ async function handleTool(name, args) {
         is_bot: Boolean(m.bot_id),
         thread_ts: m.thread_ts,
         reply_count: m.reply_count,
+        ...(m.reactions?.length && {
+          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users || [] })),
+        }),
         ...(m.blocks?.length && { blocks: m.blocks }),
         ...(m.attachments?.length && { attachments: m.attachments }),
         ...(m.files?.length && {
@@ -985,6 +1224,43 @@ async function handleTool(name, args) {
         }),
       }))
       return { ok: true, items }
+    }
+
+    case 'pin_message': {
+      // Default mirrors get_permalink, not add_reaction/remove_reaction: pb#315's use
+      // case is pinning the top-level tracking message, so an omitted timestamp inside
+      // a thread must resolve to the thread root, not the triggering reply.
+      const channel = args.channel || DEFAULT_CHANNEL
+      const timestamp = args.timestamp || DEFAULT_THREAD_TS || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!timestamp) throw new Error('timestamp required')
+      try {
+        await slackApi('pins.add', { channel, timestamp })
+      } catch (e) {
+        // already_pinned confirmed via Slack docs only, not a live probe (DevGuru,
+        // poller-brain#315) — a real pin is a visible channel event, not repeatable
+        // freely in review.
+        if (e.message?.includes('already_pinned')) return { ok: true, already_pinned: true }
+        throw e
+      }
+      return { ok: true }
+    }
+
+    case 'unpin_message': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      const timestamp = args.timestamp || DEFAULT_THREAD_TS || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!timestamp) throw new Error('timestamp required')
+      try {
+        await slackApi('pins.remove', { channel, timestamp })
+      } catch (e) {
+        // no_pin live-verified against a real unpinned message (DevGuru, poller-brain#315).
+        // Slack's docs also list not_pinned for the file-pin variant — this guard only
+        // covers the message-pin error string, not files.
+        if (e.message?.includes('no_pin')) return { ok: true, no_pin: true }
+        throw e
+      }
+      return { ok: true }
     }
 
     case 'list_bookmarks': {
@@ -1123,6 +1399,82 @@ async function handleTool(name, args) {
         status: args.text,
       })
       return { ok: true }
+    }
+
+    case 'list_channels': {
+      // conversations.list has no server-side "channels this bot is a member of"
+      // filter — it returns is_member per-channel (for public/private channels)
+      // and we filter client-side. im/mpim conversations don't reliably carry
+      // is_member (the bot is inherently a participant in any DM/group-DM it can
+      // see at all), so those are never excluded by this check — only an
+      // explicit is_member === false (public/private channel not yet invited)
+      // is filtered out (poller-brain#448).
+      const types = args.types || 'public_channel,private_channel,mpim,im'
+      const rawLimit = args.limit === undefined ? 200 : Number(args.limit)
+      if (!Number.isFinite(rawLimit) || rawLimit <= 0) throw new Error('limit must be a positive number')
+      const limit = Math.min(rawLimit, 1000)
+      const channels = []
+      let cursor
+      do {
+        const result = await slackApi('conversations.list', {
+          types,
+          exclude_archived: true,
+          limit: 200,
+          ...(cursor && { cursor }),
+        })
+        for (const ch of result.channels || []) {
+          if (ch.is_member === false) continue
+          channels.push({
+            id: ch.id,
+            name: ch.name || (ch.is_im ? `dm:${ch.user}` : undefined),
+            is_private: Boolean(ch.is_private),
+            is_im: Boolean(ch.is_im),
+            is_mpim: Boolean(ch.is_mpim),
+            num_members: ch.num_members,
+          })
+          if (channels.length >= limit) break
+        }
+        cursor = result.response_metadata?.next_cursor || null
+      } while (cursor && channels.length < limit)
+      return { ok: true, channels }
+    }
+
+    case 'search_users': {
+      // No users.search endpoint in the Slack Web API — users.list + client-side
+      // substring filter is the only option (poller-brain#448). Deactivated
+      // accounts are dropped; bots are kept (some TeamVibe agent bots are
+      // legitimate search targets, e.g. for handoff/escalation lookups).
+      const query = (args.query || '').trim().toLowerCase()
+      if (!query) throw new Error('query required')
+      const rawLimit = args.limit === undefined ? 20 : Number(args.limit)
+      if (!Number.isFinite(rawLimit) || rawLimit <= 0) throw new Error('limit must be a positive number')
+      const limit = Math.min(rawLimit, 1000)
+      const matches = []
+      let cursor
+      do {
+        const result = await slackApi('users.list', {
+          limit: 200,
+          ...(cursor && { cursor }),
+        })
+        for (const u of result.members || []) {
+          if (u.deleted) continue
+          const haystacks = [u.profile?.display_name, u.profile?.real_name, u.real_name, u.name, u.profile?.email]
+            .filter(Boolean)
+            .map((s) => s.toLowerCase())
+          if (!haystacks.some((s) => s.includes(query))) continue
+          matches.push({
+            id: u.id,
+            name: u.name,
+            display_name: u.profile?.display_name || u.real_name || u.name,
+            real_name: u.real_name,
+            email: u.profile?.email,
+            is_bot: Boolean(u.is_bot),
+          })
+          if (matches.length >= limit) break
+        }
+        cursor = result.response_metadata?.next_cursor || null
+      } while (cursor && matches.length < limit)
+      return { ok: true, users: matches }
     }
 
     case 'set_expected_duration': {
