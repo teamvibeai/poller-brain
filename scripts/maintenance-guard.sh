@@ -29,7 +29,7 @@
 # last run" cannot distinguish a genuinely unproductive brain from a busy
 # one; only the reports' own promotion outcome can). The skill itself
 # intentionally has no partial/lightweight mode (skills/memory/consolidate/
-# skill.md — reinstated 2026-04-29 after skipping steps broke the
+# SKILL.md — reinstated 2026-04-29 after skipping steps broke the
 # summary-md-regenerated eval criterion), so the fix belongs here at the
 # trigger, not inside the run: skip the ENTIRE run (no report) once a streak
 # of recent runs has promoted nothing, never a partial one. Mirrors
@@ -64,7 +64,7 @@ in_window() {
 
 # Returns 0 (true/idle) only when we can positively confirm that the last
 # IDLE_STREAK_MIN consolidation reports each promoted nothing, per their own
-# mandatory `## Tier Coverage` section (skills/memory/consolidate/skill.md
+# mandatory `## Tier Coverage` section (skills/memory/consolidate/SKILL.md
 # Step 12 / MAINTENANCE.md "Tier coverage check" — every report MUST include
 # a 4-line block, one per memory tier, each line either "Updated ..." or a
 # "No new content/significant events/workflows — confirmed" pass line).

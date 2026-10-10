@@ -25,7 +25,7 @@
  * itself (Step 1b/4) — in that case the caller already knows the exact
  * key/file/line with certainty (no scanning/ambiguity involved), so it can
  * pass `--apply --only <that key>` right after verifying, without needing
- * a human review pass. See skill.md Step 9e for both usage patterns.
+ * a human review pass. See SKILL.md Step 9e for both usage patterns.
  *
  * Idempotent: re-running --apply with a key that's already a pointer is a
  * no-op for that key. Count-verified: aborts (exit 1) on any invariant

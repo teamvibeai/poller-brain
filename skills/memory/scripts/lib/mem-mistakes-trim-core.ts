@@ -54,7 +54,7 @@
  * the already-shipped, already-tested LEARNINGS trim path.
  *
  * Heading level is `##` OR `###` — the documented MISTAKES.md convention
- * (`skills/memory/skill.md` "MISTAKES.md Entry Format") is `## YYYY-MM-DD —
+ * (`skills/memory/SKILL.md` "MISTAKES.md Entry Format") is `## YYYY-MM-DD —
  * ...`, but at least one live brain uses `###`, so both are recognized and
  * a matched entry's OWN marker is preserved on its pointer rewrite (never
  * forced to one level). A bullet (`- `) only starts a NEW entry when it is

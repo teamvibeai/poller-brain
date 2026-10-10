@@ -39,7 +39,7 @@ function assert(cond: boolean, msg: string): void {
 
 // ===========================================================================
 // Suite 1: `##`-heading format (documented convention — skills/memory/
-// skill.md "MISTAKES.md Entry Format"). Reproduces the real corruption shape
+// SKILL.md "MISTAKES.md Entry Format"). Reproduces the real corruption shape
 // DevGuru measured on a live 17,977 B brain: a body sub-bullet bears a BARE
 // (no-bracket) mention of another MEM-N key, inside an entry that also
 // cites its OWN key — the old `###`/`-`-only parser split that bullet out
