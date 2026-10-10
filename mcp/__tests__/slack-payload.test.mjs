@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { expectedEncoding } from './slack-encoding-expectations.mjs'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
@@ -204,14 +205,15 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
 // live probe (2026-08-19) additionally caught pins.list failing the same way as
 // chat.getPermalink; the pre-fix test suite passed 169/169 while pins.list was broken,
 // because the old asserts only named the ticket's one method instead of every call site.
-// jsonEncoded below = the 9 confirmed-safe methods on the JSON branch (poller-brain#348).
-// users.info moved to formEncoded in poller-brain#349 (live-confirmed to reject JSON
+// The independent expectation table records the 9 confirmed-safe methods on
+// the JSON branch (poller-brain#348).
+// users.info moved to the form branch in poller-brain#349 (live-confirmed to reject JSON
 // bodies with user_not_found).
 {
-  const formEncoded = slackMethods.filter((m) => needsFormEncoding(m))
-  const jsonEncoded = slackMethods.filter((m) => !needsFormEncoding(m))
-  for (const m of formEncoded) ok(`k ${m} form-encoded`, needsFormEncoding(m))
-  for (const m of jsonEncoded) ok(`k ${m} JSON-encoded`, !needsFormEncoding(m))
+  for (const m of slackMethods) {
+    const expected = expectedEncoding[m]
+    ok(`k ${m} ${expected ?? 'MISSING EXPECTATION'}`, (expected === 'form' || expected === 'json') && needsFormEncoding(m) === (expected === 'form'))
+  }
 }
 
 // (l) poller-brain#345 nit: prove slackApi() actually consults the predicate (not just
