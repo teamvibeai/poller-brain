@@ -139,6 +139,20 @@ User: "In 30 minutes, remind me to call John"
 
 **Important:** `scheduledAt` must always be in UTC. If the user says "at 10:00 Prague time" (CET = UTC+1), convert it: `scheduledAt: "2026-03-15T09:00:00Z"`. Do NOT pass `timezone` for ONE_TIME — it is ignored.
 
+### Polling pattern (deploy/CI monitoring)
+
+Monitoring a deploy or CI run needs dedup, thread targeting, a retry cap, and self-delete — see CLAUDE.md's "Polling & Notifications" rules. Prefer chained `ONE_TIME` over `CRON`:
+
+```json
+{
+  "scheduleType": "ONE_TIME",
+  "scheduledAt": "<now + 3 min UTC>",
+  "promptTemplate": "Check deploy status for PR #33 in repo org/frontend.\n\nRun: gh run list --repo org/frontend --branch feature-branch --limit 3\n\nBefore posting anything, read the last 10 messages in thread 1774264733.819979 (channel C0AH9EL2SUQ) — if a deploy notification for this PR is already there, stop, do nothing.\n\n- If COMPLETED (success): post in that thread: 'Deploy done ✅ https://preview-33.example.com'. Then call delete_scheduled_message with scheduleId: <this schedule's real ID>.\n- If STILL RUNNING and this is attempt < 5 (this is attempt 1/5): call create_scheduled_message for +3min with this same prompt, incrementing the attempt count in the text, then delete this schedule.\n- If STILL RUNNING and this is attempt 5/5: post 'Still not done after 5 checks, stopping.' in the thread and delete this schedule.\n- If FAILED: post failure details in the thread and delete this schedule."
+}
+```
+
+There is no `{SCHEDULE_ID}` template variable — the platform sends `promptTemplate` to the fired session unmodified. Substitute the real `scheduleId` yourself: create the schedule once, read the ID off the response, then call `create_scheduled_message` again with that `scheduleId` to rewrite the prompt so it can reference itself.
+
 ### Updating an existing schedule
 
 User: "Change that PR check to 9am instead"
