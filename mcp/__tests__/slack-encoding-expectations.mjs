@@ -10,6 +10,7 @@ export const expectedEncoding = {
   'chat.update': 'json',
   'conversations.history': 'form',
   'conversations.info': 'form',
+  'conversations.list': 'form',
   'conversations.replies': 'form',
   'conversations.setPurpose': 'form',
   'conversations.setTopic': 'form',
@@ -19,6 +20,8 @@ export const expectedEncoding = {
   'pins.list': 'form',
   'pins.remove': 'json',
   'reactions.add': 'json',
+  'reactions.get': 'form',
   'reactions.remove': 'json',
   'users.info': 'form',
+  'users.list': 'form',
 }
