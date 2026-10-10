@@ -5,7 +5,7 @@
  * See lib/mem-scaled-threshold-core.ts for the rationale
  * (poller-brain#324, poller-brain#300).
  *
- * Read-only — never writes. Used by consolidate skill.md Step 5c (preflight)
+ * Read-only — never writes. Used by consolidate SKILL.md Step 5c (preflight)
  * and Step 9b (Memory Metrics table) in place of the old flat "wc -c vs
  * 5000" check for these two files.
  *

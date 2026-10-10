@@ -67,7 +67,7 @@ const LEARNINGS_PATH = brainPath("memory/core/LEARNINGS.md");
 // candidate for itself. See lib/mem-learnings-trim-core.ts module doc.
 const DEST_DIRS = ["semantic", "episodic", "procedural"];
 
-// Floor of the skill.md Step 5c/5d threshold (poller-brain#324/#300 made it
+// Floor of the SKILL.md Step 5c/5d threshold (poller-brain#324/#300 made it
 // row-count-scaled via mem-scaled-threshold.ts, but scaledThreshold() is
 // `Math.max(5000, ...)` — this floor is never crossed by the scaled value,
 // so "size > 5000" stays a valid (if now conservative) fail-safe on this

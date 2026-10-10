@@ -8,7 +8,7 @@
 // is spawned detached (its own session, via `detached: true` → setsid) and is what
 // actually outlives the session teardown.
 //
-// Reliability bar: BEST-EFFORT (see skill.md). Survives the launching session. Does NOT
+// Reliability bar: BEST-EFFORT (see SKILL.md). Survives the launching session. Does NOT
 // survive a poller restart. Never present it to a user as a durability guarantee.
 import { spawn } from 'node:child_process'
 import { mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -156,7 +156,7 @@ export function parseArgs(argv, env = {}) {
 // Namespaced per channel: a poller can host several brains and they share
 // $PERSISTENT_STORAGE_PATH. Without the namespace, two brains starting a same-named task
 // in the same second collide on one directory. Hygiene, not isolation — every brain on
-// the poller runs as the same user (spelled out in skill.md).
+// the poller runs as the same user (spelled out in SKILL.md).
 export function taskRoot(env) {
   return join(
     env.BG_TASK_ROOT || join(env.PERSISTENT_STORAGE_PATH || '/tmp', 'bg-tasks'),

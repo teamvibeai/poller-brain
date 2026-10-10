@@ -27,7 +27,7 @@
  * PREFERENCES.md deliberately has no scaled-threshold path here: unlike
  * LEARNINGS.md/MEM_REGISTRY.md it has no enforced entry format and no
  * existing parser (no reduction step has ever been built for it — see
- * skill.md Step 9b's "Tracking only for now" note), so there's nothing
+ * SKILL.md Step 9b's "Tracking only for now" note), so there's nothing
  * reliable to count entries against yet. It keeps its flat 5000B
  * tracking-only threshold unchanged; revisit once a real over-threshold
  * brain and an entry-format convention exist to calibrate against.
