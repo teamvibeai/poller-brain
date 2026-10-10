@@ -6,15 +6,21 @@
  * re-discovering the same false-positive shapes.
  *
  * Detection is content-based, not status-based: a citation is only trusted
- * as evidence if its line cites EXACTLY ONE distinct MEM-N key. A line
- * citing 2+ keys (a compact cluster like `MEM-6/98/100` or separate bracket
- * tags like `[MEM-172] ... ([MEM-166])`) is rejected as evidence for ALL
- * keys it mentions — three adversarial DevGuru review rounds on the
- * MEM_REGISTRY.md version (poller-brain#244) found this ambiguity class
+ * as evidence if its line cites EXACTLY ONE distinct MEM-N key, OR cites 2+
+ * keys but exactly one of them sits in the line's leading SUBJECT position
+ * (poller-brain#334: `- **[MEM-53] Title** ... mentions MEM-52 too` is
+ * genuine evidence for MEM-53, not rejected outright, because MEM-53 is
+ * unambiguously this line's subject and MEM-52 is only an incidental
+ * cross-reference later in the sentence — see `subjectPositionKey`). A line
+ * citing 2+ keys with NO single leading-tag subject (a compact cluster like
+ * `MEM-6/98/100`, or a citation buried mid-sentence in "per this rule
+ * (MEM-6/98/100)"-style justification prose) is still rejected as evidence
+ * for ALL keys it mentions — three adversarial DevGuru review rounds on the
+ * MEM_REGISTRY.md version (poller-brain#244) found THAT ambiguity class
  * unrecoverable by regex alone (a single-key line can still be an
- * incidental "per this rule" justification rather than the key's actual
- * condensed content), which is why callers must treat this module's output
- * as *candidates for human review*, never as auto-write evidence.
+ * incidental justification rather than the key's actual condensed content),
+ * which is why callers must treat this module's output as *candidates for
+ * human review*, never as auto-write evidence.
  *
  * Intentionally fs-free — pure string fixtures, unit-testable without a
  * real brain's memory/.
@@ -74,6 +80,9 @@ const TABLE_ROW_RE = /^\s*\|/;
 /** A path/filename pointing at another markdown file (`semantic/foo.md`, `see bar.md`, `kb/x.md`). */
 const FILE_PATH_RE = /\b[\w.-]+(?:\/[\w.-]+)*\.md\b/;
 
+/** A `[[wikilink]]`-style cross-reference token. */
+const WIKILINK_RE = /\[\[[^\]]+\]\]/;
+
 /**
  * Matches a destination line that is itself a pointer/index entry (an
  * `MEM-N → destination` lookup row) rather than condensed narrative prose.
@@ -92,9 +101,39 @@ const FILE_PATH_RE = /\b[\w.-]+(?:\/[\w.-]+)*\.md\b/;
  * (b) it contains a path to another `.md` file — combined, these catch any
  * "key → destination" index table regardless of column layout, without
  * flagging a table row that happens to merely *mention* a key mid-prose.
+ *
+ * poller-brain#334 (DevGuru catch, review round 1, to-fix 2): subject-
+ * position widened evidence into a "Cross-refs"-style bullet that lists
+ * several `[[wikilink]]` targets alongside citations (e.g. `[MEM-71]
+ * [[iam-quota-strategy]] · [MEM-73] (this mechanism) · [[poller-error-
+ * reporting]]`) — a pointer to elsewhere, same as an `.md` path, just
+ * bracket syntax instead of a filename. Round 2 (DevGuru): a bare
+ * `WIKILINK_RE.test(line)` over-fit — it flagged EVERY line that merely
+ * contains a `[[wikilink]]` anywhere, not just a line that IS a list of
+ * links. Measured regression against `main` on 4 brains: +27 wrongly
+ * rejected lines, 3 keys (MEM-124/279/283) lost all citation evidence,
+ * including the exact subject-position narrative shape #334 exists to
+ * unlock (`- **[MEM-124] PLNÁ odpovědnost předána JARVISovi...** (viz
+ * `[[codex-cli-integration]]`)` — one wikilink mid-sentence, not a
+ * pointer row). Narrowed to require the line be MOSTLY link/citation
+ * syntax: strip wikilinks, MEM-N citations, and inline code, then only
+ * flag if under 30 chars of prose remain (calibrated against 133 real
+ * rejection lines across the same 4-brain corpus — a starting point, not
+ * an authoritative constant; DevGuru measured 0 lost keys, +5 correctly
+ * rejected true pointer lines with this threshold).
  */
+function residualProse(line: string): string {
+  return line
+    .replace(/\[\[[^\]]+\]\]/g, "")
+    .replace(/`?\[?MEM-\d+(?:[/,]\d+)*\]?`?/g, "")
+    .replace(/`[^`]*`/g, "")
+    .replace(/[\s\-*#·—–|:;,.()§→>]+/g, " ")
+    .trim();
+}
+
 function isIndexShapedLine(line: string): boolean {
   if (/→\s*see\s|(?:^|\s)see\s+\S+\.md\b/.test(line)) return true;
+  if (WIKILINK_RE.test(line) && residualProse(line).length < 30) return true;
   return TABLE_ROW_RE.test(line) && FILE_PATH_RE.test(line);
 }
 
@@ -136,8 +175,10 @@ function nearestHeading(lines: string[], lineIdx: number): string | null {
 /**
  * First citation location for every MEM-N key found across `destinations`,
  * scanned in file-path order then line order — deterministic so repeated
- * runs pick the same citation (idempotence). Only single-key lines count as
- * evidence; see module doc for why. Index-shaped lines are excluded from
+ * runs pick the same citation (idempotence). A single-key line always
+ * counts as evidence; a 2+-key line counts ONLY for whichever key (if any)
+ * sits in leading subject position — see `subjectPositionKey` and the
+ * module doc (poller-brain#334). Index-shaped lines are excluded from
  * `citations` but reported in `indexRejections`, never silently dropped.
  */
 export function firstCitations(destinations: DestinationFile[]): CitationScan {
@@ -148,8 +189,9 @@ export function firstCitations(destinations: DestinationFile[]): CitationScan {
     const lines = text.split("\n");
     lines.forEach((lineText, idx) => {
       const keysOnLine = distinctCitedKeysInLine(lineText);
-      if (keysOnLine.length !== 1) return; // 0 or 2+ keys — no evidence, or ambiguous cross-reference
-      const key = keysOnLine[0];
+      if (keysOnLine.length === 0) return; // no citation at all
+      const key = keysOnLine.length === 1 ? keysOnLine[0] : subjectPositionKey(lineText);
+      if (key === null) return; // 2+ keys, no unambiguous subject — ambiguous cross-reference
       if (isIndexShapedLine(lineText)) {
         indexRejections.push({ key, file, line: idx + 1, lineText });
         return;
@@ -219,6 +261,46 @@ const TAG_TOKEN_SRC =
 const LEADING_TAGS_RE = new RegExp(`^(?:${TAG_TOKEN_SRC}\\s*)+`);
 /** Same, anchored to the END of the string. */
 const TRAILING_TAGS_RE = new RegExp(`(?:\\s*${TAG_TOKEN_SRC})+$`);
+
+/**
+ * A line's leading citation tag(s), in "subject position" — immediately
+ * after typical list/heading decoration (`- `, `## `, `**`) and before any
+ * other content — if that leading run cites exactly one distinct key.
+ * Returns null when the line has no leading tag, or when the leading run
+ * cites 2+ distinct keys (`[MEM-93/94/122]`, or a RUN of separate tags like
+ * `[MEM-167]/[MEM-170]/[MEM-171]` — several co-equal subjects, not one, so
+ * it stays ambiguous exactly like today).
+ *
+ * poller-brain#334 (MEM-53): reuses the same `TAG_TOKEN_SRC` grammar
+ * `extractHook`/`stripMemCitations` already trust for "this token is
+ * decoration, not prose" (poller-brain#343), applied at the START of a
+ * destination LINE instead of a heading.
+ *
+ * Captures a leading RUN of tags (`(?:${TAG_TOKEN_SRC}[\s/,·:;]*)+`), not
+ * just the first one — DevGuru catch, review round 1: an earlier version
+ * matched only the first tag, so a real leading run like
+ * `[MEM-167]/[MEM-170]/[MEM-171]: the SNS target is ...` silently picked
+ * MEM-167 as the sole subject instead of staying ambiguous (`LEADING_TAGS_RE`
+ * two lines below already proves a leading run is a routine shape, not an
+ * edge case — measured live: 4 real occurrences across 3 brains, one of
+ * which demoted MEM-355 from its own dedicated heading to a shared
+ * bookkeeping line). `distinctCitedKeysInLine` below still requires the
+ * WHOLE captured run to name exactly one distinct key, so a genuine run of
+ * co-equal tags correctly stays rejected — only a citation buried anywhere
+ * else on the line (a trailing parenthetical, a compact cluster
+ * mid-sentence, "per this rule (MEM-6/98/100)"-style justification prose)
+ * never matches and never gains new evidence.
+ */
+const SUBJECT_TAG_RE = new RegExp(
+  `^\\s*(?:[-*]\\s+)?(?:#{1,6}\\s+)?(?:\\*\\*)?((?:${TAG_TOKEN_SRC}[\\s/,·:;]*)+)`
+);
+
+function subjectPositionKey(line: string): string | null {
+  const m = SUBJECT_TAG_RE.exec(line);
+  if (!m) return null;
+  const keys = distinctCitedKeysInLine(m[1]);
+  return keys.length === 1 ? keys[0] : null;
+}
 
 /**
  * Strip a LEADING and/or TRAILING run of MEM-N citation tag(s) — own or

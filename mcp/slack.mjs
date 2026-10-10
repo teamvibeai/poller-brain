@@ -60,17 +60,38 @@ function textToSections(text, maxLen = 2900) {
   return sections
 }
 
-// Per Slack's docs, most WRITE methods accept a JSON body; READ/list methods are the
-// risk class — some (chat.getPermalink, pins.list) reject JSON outright and report
-// arguments as missing no matter what's sent, others (bookmarks.list) don't. There's no
-// clean rule to predict which; each entry below was confirmed by an actual failing call
-// (poller-brain#345). Before adding a new read/list method to either branch, probe it
-// live rather than assuming by analogy. pins.add/pins.remove live-probed 2026-08-19
-// (poller-brain#315, DevGuru): both content types return message_not_found on a bogus
-// timestamp (not invalid_arguments), confirming the JSON body parses — WRITE-method
-// default holds, no exception needed.
+// Slack's Web API has no clean read/write rule for which content-type a method
+// accepts — some read methods reject JSON outright (chat.getPermalink, pins.list),
+// others don't (bookmarks.list), and some write methods reject JSON too
+// (conversations.setTopic/setPurpose, files.*). Form-encoding is the safer default:
+// per Slack's own docs (docs.slack.dev/apis/web-api), arguments are passed "as GET
+// querystring parameters, POST parameters presented as application/x-www-form-urlencoded,
+// or a mix" — form is the documented universal transport, while JSON is only "Most
+// write methods allow arguments with application/json" (not a guarantee, and not for
+// reads). JSON is therefore a NAMED EXCEPTION, granted per-method only once actually
+// confirmed safe — never inferred from a namespace or verb (poller-brain#348). Before
+// adding a method here, probe it live rather than assuming by analogy.
+const JSON_SAFE_METHODS = new Set([
+  'auth.test',
+  'chat.postMessage',
+  'chat.update',
+  'reactions.add',
+  'reactions.remove',
+  'pins.add',
+  'pins.remove', // pins.add/pins.remove live-probed 2026-08-19 (poller-brain#315, DevGuru): both content types return message_not_found on a bogus timestamp (not invalid_arguments), confirming JSON parses
+  'bookmarks.list',
+  'assistant.threads.setStatus',
+])
 function needsFormEncoding(method) {
-  return method.startsWith('conversations.') || method.startsWith('files.') || method === 'chat.getPermalink' || method === 'pins.list'
+  return !JSON_SAFE_METHODS.has(method)
+}
+
+function encodeFormBody(body) {
+  return new URLSearchParams(
+    Object.entries(body)
+      .filter(([, v]) => v != null) // drops both undefined and null (would otherwise serialize as the literal "undefined"/"null")
+      .map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)]),
+  ).toString()
 }
 
 async function slackApi(method, body) {
@@ -79,7 +100,7 @@ async function slackApi(method, body) {
   let reqBody
   if (useForm) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    reqBody = new URLSearchParams(Object.entries(body).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)])).toString()
+    reqBody = encodeFormBody(body)
   } else {
     headers['Content-Type'] = 'application/json'
     reqBody = JSON.stringify(body)
@@ -607,10 +628,9 @@ async function resolveDisplayName(userId) {
     _userInfoCache.set(userId, name)
     return name
   } catch (err) {
-    // users.info is currently degrading silently in production (returns raw userId).
-    // Root cause not yet diagnosed — could be the same JSON-body issue as pb#345, or a
-    // missing users:read scope. Logged so the next occurrence is diagnosable instead of
-    // silently swallowed; do not guess-fix the encoding here (poller-brain#345 review).
+    // Root-caused and fixed in poller-brain#349: users.info was in JSON_SAFE_METHODS but
+    // actually rejects a JSON body (returns user_not_found), same class as pb#345. Kept
+    // logged in case a different failure mode shows up here in the future.
     console.error(`resolveDisplayName(${userId}) failed: ${err.message}`)
     _userInfoCache.set(userId, userId)
     return userId
@@ -671,6 +691,17 @@ const TOOLS = [
         timestamp: { type: 'string', description: 'Message timestamp (default: original message)' },
       },
       required: ['name'],
+    },
+  },
+  {
+    name: 'list_reactions',
+    description: 'List the current emoji reactions on a message (name, count, and reacting user IDs). Use this before add_reaction/remove_reaction to see what is already there, instead of guessing blindly or probing candidate emoji one at a time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        timestamp: { type: 'string', description: 'Message timestamp to inspect (default: original message)' },
+      },
     },
   },
   {
@@ -861,6 +892,29 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_channels',
+    description: 'List Slack conversations this bot is a member of — i.e. the channels/DMs actually provisioned for it (public channels, private channels, group DMs, 1:1 DMs), not the whole workspace. Use to resolve a name like "#integration-team" to a channel ID, or to see what this bot can read/post to.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        types: { type: 'string', description: 'Comma-separated Slack conversation types to include (default: "public_channel,private_channel,mpim,im")' },
+        limit: { type: 'number', minimum: 1, description: 'Max channels to return (default: 200, capped at 1000)' },
+      },
+    },
+  },
+  {
+    name: 'search_users',
+    description: 'Search workspace users by a case-insensitive substring match on display name, real name, username, or email. Slack has no server-side user-search API, so this lists all workspace users and filters client-side — unlike `list_channels`, this is necessarily workspace-wide (Slack has no concept of "users visible to a bot"), not scoped to this bot\'s channels.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Substring to match against name/display name/real name/email' },
+        limit: { type: 'number', minimum: 1, description: 'Max results to return (default: 20)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'set_expected_duration',
     description: 'Tell the platform roughly how long the work you are about to do will take, so the user gets proactive progress updates if it runs long (0-5 min: no update needed, 5-10 min: one update, 10-15 min: two updates, 15+ min: three updates). Call this once, early, when you can already tell a task will take a while (e.g. a large multi-file refactor or deep research) — not required for normal quick replies. This does not affect timeouts or safety limits, only how often the user hears from you.',
     inputSchema: {
@@ -1005,6 +1059,24 @@ async function handleTool(name, args) {
       return { ok: true }
     }
 
+    // reactions.get, like conversations.replies/history, isn't in JSON_SAFE_METHODS
+    // (poller-brain#348) so it takes the form-encoded branch by default — not
+    // live-probed for JSON safety since the bot token currently lacks the
+    // reactions:read scope this method needs (poller-brain#518/#520).
+    case 'list_reactions': {
+      const channel = args.channel || DEFAULT_CHANNEL
+      const timestamp = args.timestamp || DEFAULT_MESSAGE_TS
+      if (!channel) throw new Error('channel required')
+      if (!timestamp) throw new Error('timestamp required')
+      const result = await slackApi('reactions.get', { channel, timestamp })
+      const reactions = (result.message?.reactions || result.file?.reactions || []).map((r) => ({
+        name: r.name,
+        count: r.count,
+        users: r.users || [],
+      }))
+      return { ok: true, reactions }
+    }
+
     case 'read_thread': {
       const channel = args.channel || DEFAULT_CHANNEL
       const ts = args.thread_ts || DEFAULT_THREAD_TS
@@ -1017,6 +1089,9 @@ async function handleTool(name, args) {
         text: m.text || '',
         ts: m.ts,
         is_bot: Boolean(m.bot_id),
+        ...(m.reactions?.length && {
+          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users || [] })),
+        }),
         ...(m.blocks?.length && { blocks: m.blocks }),
         ...(m.attachments?.length && { attachments: m.attachments }),
         ...(m.files?.length && {
@@ -1082,6 +1157,9 @@ async function handleTool(name, args) {
         is_bot: Boolean(m.bot_id),
         thread_ts: m.thread_ts,
         reply_count: m.reply_count,
+        ...(m.reactions?.length && {
+          reactions: m.reactions.map((r) => ({ name: r.name, count: r.count, users: r.users || [] })),
+        }),
         ...(m.blocks?.length && { blocks: m.blocks }),
         ...(m.attachments?.length && { attachments: m.attachments }),
         ...(m.files?.length && {
@@ -1321,6 +1399,82 @@ async function handleTool(name, args) {
         status: args.text,
       })
       return { ok: true }
+    }
+
+    case 'list_channels': {
+      // conversations.list has no server-side "channels this bot is a member of"
+      // filter — it returns is_member per-channel (for public/private channels)
+      // and we filter client-side. im/mpim conversations don't reliably carry
+      // is_member (the bot is inherently a participant in any DM/group-DM it can
+      // see at all), so those are never excluded by this check — only an
+      // explicit is_member === false (public/private channel not yet invited)
+      // is filtered out (poller-brain#448).
+      const types = args.types || 'public_channel,private_channel,mpim,im'
+      const rawLimit = args.limit === undefined ? 200 : Number(args.limit)
+      if (!Number.isFinite(rawLimit) || rawLimit <= 0) throw new Error('limit must be a positive number')
+      const limit = Math.min(rawLimit, 1000)
+      const channels = []
+      let cursor
+      do {
+        const result = await slackApi('conversations.list', {
+          types,
+          exclude_archived: true,
+          limit: 200,
+          ...(cursor && { cursor }),
+        })
+        for (const ch of result.channels || []) {
+          if (ch.is_member === false) continue
+          channels.push({
+            id: ch.id,
+            name: ch.name || (ch.is_im ? `dm:${ch.user}` : undefined),
+            is_private: Boolean(ch.is_private),
+            is_im: Boolean(ch.is_im),
+            is_mpim: Boolean(ch.is_mpim),
+            num_members: ch.num_members,
+          })
+          if (channels.length >= limit) break
+        }
+        cursor = result.response_metadata?.next_cursor || null
+      } while (cursor && channels.length < limit)
+      return { ok: true, channels }
+    }
+
+    case 'search_users': {
+      // No users.search endpoint in the Slack Web API — users.list + client-side
+      // substring filter is the only option (poller-brain#448). Deactivated
+      // accounts are dropped; bots are kept (some TeamVibe agent bots are
+      // legitimate search targets, e.g. for handoff/escalation lookups).
+      const query = (args.query || '').trim().toLowerCase()
+      if (!query) throw new Error('query required')
+      const rawLimit = args.limit === undefined ? 20 : Number(args.limit)
+      if (!Number.isFinite(rawLimit) || rawLimit <= 0) throw new Error('limit must be a positive number')
+      const limit = Math.min(rawLimit, 1000)
+      const matches = []
+      let cursor
+      do {
+        const result = await slackApi('users.list', {
+          limit: 200,
+          ...(cursor && { cursor }),
+        })
+        for (const u of result.members || []) {
+          if (u.deleted) continue
+          const haystacks = [u.profile?.display_name, u.profile?.real_name, u.real_name, u.name, u.profile?.email]
+            .filter(Boolean)
+            .map((s) => s.toLowerCase())
+          if (!haystacks.some((s) => s.includes(query))) continue
+          matches.push({
+            id: u.id,
+            name: u.name,
+            display_name: u.profile?.display_name || u.real_name || u.name,
+            real_name: u.real_name,
+            email: u.profile?.email,
+            is_bot: Boolean(u.is_bot),
+          })
+          if (matches.length >= limit) break
+        }
+        cursor = result.response_metadata?.next_cursor || null
+      } while (cursor && matches.length < limit)
+      return { ok: true, users: matches }
     }
 
     case 'set_expected_duration': {

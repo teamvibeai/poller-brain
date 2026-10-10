@@ -27,10 +27,14 @@
  *     entry) must still be rejected as a whole — round 1's line-based scan
  *     would have proposed each line as an independent single-key candidate
  *     and split one entry across two rewrites
- *   - multi-key-line rejection on the destination side too (inherited from
- *     citation-detect.ts): scan-past-rejection finds a key's OWN dedicated
- *     single-key line even when an earlier ambiguous shared line also
- *     mentions it
+ *   - multi-key-line handling on the destination side too (inherited from
+ *     citation-detect.ts, poller-brain#334): a 2-key destination line counts
+ *     as evidence for whichever key is in leading subject position (e.g.
+ *     `[MEM-172] ... ([MEM-166])`), not for the other, incidentally-
+ *     mentioned key — see mem-registry-trim.test.ts for the sibling
+ *     scan-past-rejection case (a key with no leading-subject citation on
+ *     its first mention still gets found via its OWN dedicated line
+ *     elsewhere), same shared citation-detect.ts
  *   - index-shaped destination lines (pointer/lookup rows) are excluded
  *     from citation evidence AND reported via indexRejections, never
  *     silently dropped
@@ -59,6 +63,8 @@ import {
   applyLearningsTrimCandidates,
   trimPromotedLearnings,
   verifyLearningsTrimStats,
+  parseOnlySelectors,
+  unambiguousHeadlineKeys,
   type DestinationFile,
   type LearningsTrimCandidate,
 } from "./lib/mem-learnings-trim-core.js";
@@ -137,8 +143,8 @@ assert(
 
 const bulletMem172 = bulletFound.candidates.find((c) => c.key === "MEM-172")!;
 assert(
-  bulletMem172.entryStartLine === 5 && bulletMem172.line === 12 && bulletMem172.lineText.includes("dedicated recap"),
-  "bullet: MEM-172 candidate uses its OWN single-key destination line (line 12), not the ambiguous shared line (line 11) — scan-past-rejection"
+  bulletMem172.entryStartLine === 5 && bulletMem172.line === 11 && bulletMem172.lineText.includes("correction"),
+  "bullet: MEM-172 candidate uses the FIRST line it's the subject of (line 11), even though that line also mentions MEM-166 — subject-position acceptance (poller-brain#334; scan-past-rejection for the no-subject-tag case is covered in mem-registry-trim.test.ts, same shared citation-detect.ts)"
 );
 assert(bulletMem172.hook === "Correction lesson", "bullet: MEM-172 hook extracted from its governing heading");
 
@@ -163,8 +169,8 @@ assert(
   "bullet: MEM-99 entry rewritten to a `-` pointer with correct file:line, hook, and preserved provenance"
 );
 assert(
-  bulletR1.learnings.includes("- [MEM-172] → see semantic/topic.md:12 — Correction lesson (Source: X)"),
-  "bullet: MEM-172 entry trimmed using its OWN single-key destination line (line 12), provenance preserved"
+  bulletR1.learnings.includes("- [MEM-172] → see semantic/topic.md:11 — Correction lesson (Source: X)"),
+  "bullet: MEM-172 entry trimmed using its subject-position destination line (line 11), provenance preserved"
 );
 assert(
   bulletR1.learnings.includes("**Bounded-field rule** — cap every new field you add. (Source: DevGuru, [MEM-93][MEM-94][MEM-122])"),
@@ -645,6 +651,63 @@ assert(
 assert(
   bareHooks.get("MEM-904") === "MEM-904 Adjudication needs a review today",
   "bare token: MEM-904 heading is untouched even though the truncated remainder would start uppercase and slip past the old lowercase-start check"
+);
+
+// --- parseOnlySelectors: pure --only value parser (DevGuru catch, --------
+// poller-brain#334 review round 1, nonblocking 1). Extracted from the CLI
+// so it's unit-testable without mocking process.argv/exit.
+assert(
+  JSON.stringify(parseOnlySelectors("MEM-1,MEM-5")) === JSON.stringify([{ key: "MEM-1", line: null }, { key: "MEM-5", line: null }]),
+  "parseOnlySelectors: bare comma-separated keys parse with line=null"
+);
+assert(
+  JSON.stringify(parseOnlySelectors("MEM-25@67")) === JSON.stringify([{ key: "MEM-25", line: 67 }]),
+  "parseOnlySelectors: a span selector parses key + line"
+);
+let overflowThrew = false;
+try {
+  parseOnlySelectors("MEM-25@3@9");
+} catch {
+  overflowThrew = true;
+}
+assert(
+  overflowThrew,
+  'parseOnlySelectors: "MEM-25@3@9" (more than one "@") throws instead of silently using line=3 and dropping the "9"'
+);
+let hexThrew = false;
+try {
+  parseOnlySelectors("MEM-25@0x3");
+} catch {
+  hexThrew = true;
+}
+assert(hexThrew, 'parseOnlySelectors: "MEM-25@0x3" throws instead of Number() silently accepting hex as 3');
+let zeroThrew = false;
+try {
+  parseOnlySelectors("MEM-25@0");
+} catch {
+  zeroThrew = true;
+}
+assert(zeroThrew, 'parseOnlySelectors: "MEM-25@0" (non-positive line) throws');
+
+// --- unambiguousHeadlineKeys: the printed headline command must never ----
+// pre-expand to more than one candidate per key (DevGuru catch,
+// poller-brain#334 review round 1, BLOCKING 2 — live-verified: copy-pasting
+// the old headline applied both a genuine candidate and a bogus cross-ref
+// one sharing the same key, overwriting the cross-ref bullet with a
+// duplicate pointer, and all three verify checks stayed green because
+// duplicate pointers for one key don't change the distinct-key count).
+const headlineCandidates: LearningsTrimCandidate[] = [
+  { key: "MEM-25", format: "bullet", entryStartLine: 3, entryEndLine: 3, file: "semantic/topic.md", line: 3, lineText: "x", hook: "Late-fire pattern" },
+  { key: "MEM-25", format: "bullet", entryStartLine: 5, entryEndLine: 5, file: "semantic/topic.md", line: 3, lineText: "x", hook: "Late-fire pattern" },
+  { key: "MEM-99", format: "bullet", entryStartLine: 7, entryEndLine: 7, file: "semantic/other.md", line: 1, lineText: "y", hook: "Third lesson heading" },
+];
+assert(
+  unambiguousHeadlineKeys(headlineCandidates).join(",") === "MEM-99",
+  "unambiguousHeadlineKeys: MEM-25 (2 candidates) is excluded from the headline; only MEM-99 (1 candidate) is included"
+);
+assert(
+  unambiguousHeadlineKeys([headlineCandidates[2]]).join(",") === "MEM-99",
+  "unambiguousHeadlineKeys: a key with exactly one candidate is included"
 );
 
 // --- distinctKeysBefore/After: the real invariant verify now checks ------

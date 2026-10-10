@@ -23,7 +23,7 @@ const TTL_MAX = 21600
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--note TEXT] [--notify-on REGEX] ' +
-  '[--dry-run] -- <command...>\n' +
+  '[--quiet-checkpoints | --checkpoint-interval SECONDS | --eager-checkpoints] [--dry-run] -- <command...>\n' +
   '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
@@ -46,6 +46,33 @@ export function parseArgs(argv, env = {}) {
     dryRun: env.BG_TASK_DRY === '1',
     notifyOn: '',
     note: '',
+    // Suppresses the quiet-period and ceiling checkpoint triggers (see bg-task-runner.mjs)
+    // — opt-in, because losing interim visibility is a real cost, right for a known
+    // high-frequency-output task where only completion (or a --notify-on match) matters.
+    // See poller-brain#403.
+    quietCheckpoints: false,
+    // Replaces BOTH the quiet-debounce and the ttl-derived ceiling with a single "flush no
+    // more often than every N seconds" trigger — for a task with predictable short gaps
+    // between lines (the debounce always wins there, long before the ceiling could), where
+    // periodic status beats either the eager default or --quiet-checkpoints' total
+    // silence. 0 means "not set". See poller-brain#403 (round 2, Jakub).
+    checkpointInterval: 0,
+    // Restores the pre-#489 default (quiet-period debounce + ttl-derived ceiling, both
+    // eager) — opt-in, because losing that fast interim visibility is a real cost, right
+    // for a task whose caller actually reads along as it runs. The DEFAULT as of #489 is
+    // instead a plain ttl-derived periodic cadence (see bg-task-runner.mjs's
+    // flushIntervalSec): a wrapper script that just polls-and-echoes every ~20s for a
+    // 30-minute wait was spamming a checkpoint on nearly every burst under the old eager
+    // default, for tasks where only the terminal result actually mattered (Jakub,
+    // poller-brain#489).
+    eagerCheckpoints: false,
+    // Separate from checkpointInterval's own truthiness on purpose (poller-brain#403 round
+    // 3, DevGuru): `--checkpoint-interval ""` (an unset shell var expanding to nothing,
+    // e.g. `--checkpoint-interval "$INTERVAL"`) consumes the flag with an empty string,
+    // which is falsy — checking `opts.checkpointInterval` alone would silently skip BOTH
+    // the validation below and the mutual-exclusion check, and fall through to the runner
+    // as "not set", reverting to the eager default with zero indication anything was wrong.
+    checkpointIntervalGiven: false,
     cmd: [],
   }
   let i = 0
@@ -53,13 +80,16 @@ export function parseArgs(argv, env = {}) {
     const a = argv[i]
     if (a === '--') { i++; break }
     if (a === '--list') return { list: true }
-    const needsValue = ['--name', '--ttl', '--note', '--notify-on'].includes(a)
+    const needsValue = ['--name', '--ttl', '--note', '--notify-on', '--checkpoint-interval'].includes(a)
     if (needsValue && i + 1 >= argv.length) return { error: `${a} needs a value` }
     switch (a) {
       case '--name': opts.name = argv[++i]; break
       case '--ttl': opts.ttl = argv[++i]; break
       case '--note': opts.note = argv[++i]; break
       case '--notify-on': opts.notifyOn = argv[++i]; break
+      case '--quiet-checkpoints': opts.quietCheckpoints = true; break
+      case '--checkpoint-interval': opts.checkpointInterval = argv[++i]; opts.checkpointIntervalGiven = true; break
+      case '--eager-checkpoints': opts.eagerCheckpoints = true; break
       case '--dry-run': opts.dryRun = true; break
       case '-h': case '--help': return { help: true }
       default: return { error: `unknown argument: ${a}` }
@@ -82,6 +112,42 @@ export function parseArgs(argv, env = {}) {
   if (opts.notifyOn) {
     try { new RegExp(opts.notifyOn) } catch (e) {
       return { error: `--notify-on is not a valid regex: ${e.message}` }
+    }
+  }
+  // Ambiguous combination, not silently resolved: "suppress everything", "flush every N
+  // seconds", and "restore the eager debounce+ceiling" each answer a different question
+  // about the same triggers, and picking one for the caller risks masking a copy-paste
+  // mistake in an unattended background task. Checked BEFORE the value validation below
+  // (against checkpointIntervalGiven, not the value's truthiness) so this fires even when
+  // the value itself is also invalid — the conflict is in specifying more than one of
+  // these flags at all, not in what --checkpoint-interval was set to.
+  const triggerModeFlags = [
+    opts.quietCheckpoints && '--quiet-checkpoints',
+    opts.checkpointIntervalGiven && '--checkpoint-interval',
+    opts.eagerCheckpoints && '--eager-checkpoints',
+  ].filter(Boolean)
+  if (triggerModeFlags.length > 1) {
+    return { error: `${triggerModeFlags.join(' and ')} are mutually exclusive — pick one` }
+  }
+  // Checked against checkpointIntervalGiven, not opts.checkpointInterval's truthiness — see
+  // the field's own comment above: an explicitly-passed empty value must still hit this
+  // validation, not silently read as "not set" and fall through to the eager default.
+  if (opts.checkpointIntervalGiven) {
+    // Same integer-string check as --ttl above, for consistency. 0 and negative are
+    // rejected outright (a "flush every 0 seconds" interval is not a periodic trigger,
+    // it's the eager behavior this flag exists to replace).
+    if (!/^\d+$/.test(String(opts.checkpointInterval)) || Number(opts.checkpointInterval) <= 0) {
+      return { error: '--checkpoint-interval must be a positive integer number of seconds' }
+    }
+    opts.checkpointInterval = Number(opts.checkpointInterval)
+    // >= , not > : at N == ttl the flush would race the TTL kill and could produce at most
+    // one checkpoint duplicating the terminal drop — not a periodic trigger at all, just a
+    // confusing way to spell "never". --quiet-checkpoints says that honestly.
+    if (opts.checkpointInterval >= opts.ttl) {
+      return {
+        error: `--checkpoint-interval (${opts.checkpointInterval}s) must be less than --ttl (${opts.ttl}s)` +
+          ' — it would never meaningfully fire before the terminal drop; use --quiet-checkpoints if you want no interim checkpoints at all',
+      }
     }
   }
   return { opts }
@@ -293,7 +359,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const child = spawn(
     process.execPath,
     [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
-      opts.notifyOn, '--', ...opts.cmd],
+      opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
+      opts.eagerCheckpoints ? '1' : '0',
+      '--', ...opts.cmd],
     { detached: true, stdio: ['ignore', out, out] },
   )
   child.unref()
