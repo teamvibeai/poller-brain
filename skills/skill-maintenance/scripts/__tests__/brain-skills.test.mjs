@@ -171,6 +171,9 @@ test('lint detects local content hash drift and both-lock hash/source drift', ()
   assert.match(f.cli(['lint'], 1), /Two-lock hash drift/);
   tool.skills.demo.computedHash = f.readLock().skills.demo.content_hash; tool.skills.demo.source = 'tampered'; write(file, JSON.stringify(tool));
   assert.match(f.cli(['lint'], 1), /source\/ref\/path drift/);
+  tool.skills.demo.source = f.source; write(file, JSON.stringify(tool));
+  const provenance = f.readLock(); provenance.skills.demo.source = 'https://other.invalid/repo.git'; write(f.lockFile, JSON.stringify(provenance));
+  assert.match(f.cli(['lint'], 1), /provenance drift/);
 });
 test('ref/path traversal, unknown flags and accidental add overwrite refuse', () => {
   const f = fixture(); assert.match(f.cli(['add', `${f.source}#../demo`], 1), /Unsafe skill path/);
@@ -189,4 +192,31 @@ test('failed CLI installation restores existing content and both locks', () => {
   assert.match(f.cli(['sync'], 1), /npx failed/); assert.equal(fs.readFileSync(f.lockFile, 'utf8'), before);
   assert.equal(fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8'), toolBefore);
   assert.equal(f.state(), 'outdated');
+});
+test('name selection supports a root SKILL.md and source metadata order is immaterial', () => {
+  const f = fixture();
+  fs.renameSync(path.join(f.upstream, 'demo/SKILL.md'), path.join(f.upstream, 'SKILL.md'));
+  fs.renameSync(path.join(f.upstream, 'demo/scripts'), path.join(f.upstream, 'scripts'));
+  fs.rmdirSync(path.join(f.upstream, 'demo')); f.git(['add', '.']); f.git(['commit', '-m', 'root skill']);
+  assert.equal(f.cli(['add', f.source, '--name', 'demo']).path, '.');
+  const file = path.join(f.brain, 'skills-lock.json'), tool = JSON.parse(fs.readFileSync(file, 'utf8'));
+  tool.skills.demo = Object.fromEntries(Object.entries(tool.skills.demo).reverse()); write(file, JSON.stringify(tool));
+  f.cli(['lint']); assert.equal(f.state(), 'current');
+});
+test('annotated tags resolve to commit SHA rather than tag object', () => {
+  const f = fixture(); f.git(['tag', '-a', 'annotated', '-m', 'annotated tag']); f.update();
+  assert.equal(f.cli(['add', `${f.source}#demo`, '--ref', 'refs/tags/annotated']).sha, f.sha); f.cli(['lint']);
+});
+test('lint detects a tool-only lock entry and missing vendored files', () => {
+  const f = fixture(); f.add(); fs.rmSync(path.join(f.brain, '.claude/skills/demo'), { recursive: true });
+  assert.equal(f.state(), 'modified'); assert.match(f.cli(['lint'], 1), /Missing skill directory/);
+  f.cli(['ensure', 'demo', `${f.source}#demo`]);
+  const value = f.readLock(); delete value.skills.demo; write(f.lockFile, JSON.stringify(value));
+  assert.match(f.cli(['lint'], 1), /no provenance/);
+});
+test('wrapper refuses a symlinked skills directory', () => {
+  const f = fixture(); fs.renameSync(path.join(f.brain, '.claude/skills'), path.join(f.root, 'outside'));
+  fs.symlinkSync(path.join(f.root, 'outside'), path.join(f.brain, '.claude/skills'));
+  assert.match(f.cli(['add', '--new', 'escape'], 1), /symlink/);
+  assert.equal(fs.existsSync(path.join(f.root, 'outside/escape')), false);
 });
