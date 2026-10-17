@@ -115,6 +115,10 @@ The JSON file is written at the same time as the markdown report, in the same co
     "oldestAgeDays": null,
     "refs": []
   },
+  "skills": {
+    "counts": {"current": 0, "outdated": 0, "modified": 0, "waiting-upstream": 0, "own": 0, "not-discovered": 0},
+    "entries": []
+  },
   "brainCommitSha": "abc123def456789..."
 }
 ```
@@ -134,6 +138,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
 | `reflectionStatus` | `object` | Self-reported reflection cadence, computed by `scripts/reflection-guard.sh` (poller-brain#157). `lastReflectionDate` (string \| null): date parsed from the newest `memory/episodic/reflection-*.md` filename, or `null` if none exists yet. `daysSinceReflection` (int \| null): days elapsed since that date. `overdueThresholdDays` (int): the threshold used, from `REFLECTION_OVERDUE_THRESHOLD_DAYS` (default 3). `isOverdue` (bool): normally `daysSinceReflection >= overdueThresholdDays` (or `true` when no reflection has ever run), **except** when `idleSkipped` is `true` — an idle-skip forces `isOverdue: false` even past the threshold (poller-brain#391). `nonConformingReflectionFiles` (int): count of `reflection-*.md` files that don't match the strict `reflection-YYYY-MM-DD.md` shape (e.g. a stray `reflection-template.md` or a split `reflection-2026-08-12-part2.md`) — lets the fleet metric distinguish "reflects, but under an unparseable filename" from "never reflected" when `lastReflectionDate` is `null`. `idleSkipped` (bool): `true` only when the guard skipped an otherwise-overdue reflection because no consolidation report since the last reflection promoted anything (`poller-brain#391`, mirrors `#168`'s consolidation idle-skip) — distinguishes "healthy idle, nothing new to reflect on" from "genuinely 3+ days lagging" for the fleet metric; always `false` when `isOverdue` is `true`. Used by the eval pipeline to track fleet-wide reflection lag. |
 | `rescueBranches` | `object` | Self-reported state of this brain's own outstanding git "rescue" branches — `conflict/<brainId>-<timestamp>` refs the platform pushes to `origin` when a brain's push hits a real (non-auto-rebasable) conflict, so no commits are lost (`teamvibeai/teamvibe.ai#247`). Populated by running `git ls-remote origin 'refs/heads/conflict/<own-brainId>-*'` — **not** `git branch -r --list`, which only sees already-fetched refs and misses branches pushed by the platform since the brain's last fetch. `count` (int): number of matching refs found for this brain's own `<brainId>` prefix (never another brain's — see "Rescue Branch Detection" below). `oldestAgeDays` (int \| null): age in days of the oldest match, derived from the `<timestamp>` segment embedded in its ref name; `null` when `count` is 0. `refs` (string[]): the matching ref names, so the aggregator/consumer can act on individual branches. Detection only — see "Rescue Branch Detection" for the non-goal of automated resolution and the cleanup convention. Used by the eval pipeline's fleet-wide "outstanding rescue branches" signal (count + oldest age). |
+| `skills` | `object` | Output of `brain-skills report` (`data`): `counts` per state (`current`, `outdated`, `modified`, `waiting-upstream`, `own`, `not-discovered`) and `entries` with each skill's state and provenance. Run every maintenance session; see "Skills" below. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
 **Rules:**
@@ -144,6 +149,19 @@ The JSON file is written at the same time as the markdown report, in the same co
 - The JSON file MUST be valid JSON (no trailing commas, no comments).
 - Commit the JSON report in the same commit as the markdown report and the maintenance changes.
 - **Brevity: each item in `decisions` / `observations` / `recommendations` / `processImprovements` is ONE sentence (max ~200 chars). Cap each list at 5 items.** Reports are read by both humans and the eval pipeline — terse, fact-first writing scales; verbose narration does not. Reasoning belongs in the markdown report's Decisions section, NOT the JSON. If a criterion needs a specific evidence reference (e.g. a memory filename, a count), name it inline; do not describe the discovery process. The markdown report can still narrate in full — only the JSON list items need to be terse.
+
+## Skills
+
+Every maintenance session runs `status` and `report` through the `skill-maintenance`
+skill (`npx tsx "$CLAUDE_CONFIG_DIR/skills/skill-maintenance/scripts/brain-skills.ts"`;
+fallback: the script in that skill's own directory). Run `sync <name>` only for
+pure SHA bumps: `outdated` entries with no local edits or pending upstream PR.
+Then run `lint` and `report` again, and put the report's `data` under `skills` in
+the maintenance JSON report. Commit skill content and both locks together.
+New skills or new sources require a PR reviewed by the brain owner, never
+auto-merge. Use `ensure <name> <source>#<path> --ref main` when the brain's policy
+requires a mandatory skill (first customer: `work-management`); its first install
+still requires that PR. Modified and waiting-upstream copies need review.
 
 ## Eval Criteria
 
