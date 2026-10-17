@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const script = fileURLToPath(new URL('../brain-skills.ts', import.meta.url));
-const workspace = path.resolve(path.dirname(script), '../../..');
+const workspace = path.resolve(path.dirname(script), '..');
 let suiteRoot;
 before(() => { suiteRoot = fs.mkdtempSync(path.join(workspace, '.skill-tests-')); });
 after(() => { if (suiteRoot) fs.rmSync(suiteRoot, { recursive: true, force: true }); });
@@ -36,6 +36,7 @@ function fixture() {
   const deny = path.join(root, 'deny-network.cjs');
   write(deny, `for (const name of ['net','http','https','tls','dns']) { const mod = require('node:'+name); for (const key of ['connect','createConnection','request','get','lookup','resolve','resolve4','resolve6']) if (typeof mod[key] === 'function') mod[key] = () => { throw new Error('Network forbidden in tests: '+name+'.'+key); }; } globalThis.fetch = () => { throw new Error('Network forbidden in tests: fetch'); };\n`);
   const env = {
+    GIT_CONFIG_GLOBAL: path.join(root, 'empty-gitconfig'), GIT_CONFIG_NOSYSTEM: '1',
     PATH: `${bin}${path.delimiter}${process.env.PATH}`,
     NODE_OPTIONS: `--require=${deny}`, npm_config_offline: 'true', npm_config_audit: 'false', npm_config_update_notifier: 'false',
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${upstream}.insteadOf`, GIT_CONFIG_VALUE_0: source, GIT_ALLOW_PROTOCOL: 'file',
@@ -77,6 +78,50 @@ test('allowlisted local add delegates to real CLI and writes agreeing locks', ()
 });
 test('file:// source is allowlisted and installed from its resolved SHA', () => {
   const f = fixture(); assert.equal(f.cli(['add', `file://${f.upstream}#demo`]).sha, f.sha); f.cli(['lint']);
+});
+test('add preserves gitignore content and stages only the Claude skill copy', () => {
+  const f = fixture(), ignore = path.join(f.brain, '.gitignore');
+  write(ignore, '# Brain ignores\nnode_modules/');
+  f.add();
+  assert.equal(fs.readFileSync(ignore, 'utf8'), '# Brain ignores\nnode_modules/\n.agents/\n');
+  assert.equal(fs.existsSync(path.join(f.brain, '.agents/skills/demo/SKILL.md')), true);
+  f.git(['add', '--all'], f.brain);
+  assert.equal(f.git(['ls-files', '.agents'], f.brain), '');
+  assert.match(f.git(['ls-files', '.claude/skills/demo'], f.brain), /SKILL\.md/);
+  f.cli(['lint']);
+});
+test('successful add, ensure and sync repair the ignore line idempotently', () => {
+  const f = fixture(), ignore = path.join(f.brain, '.gitignore');
+  f.cli(['add', '--new', 'own-demo']);
+  assert.equal(fs.readFileSync(ignore, 'utf8'), '.agents/\n');
+  f.cli(['ensure', 'demo', `${f.source}#demo`]);
+  assert.equal(fs.readFileSync(ignore, 'utf8'), '.agents/\n');
+  write(ignore, '# Keep me\n');
+  assert.equal(f.cli(['ensure', 'demo', `${f.source}#demo`]).changed, false);
+  assert.equal(fs.readFileSync(ignore, 'utf8'), '# Keep me\n.agents/\n');
+  write(ignore, '# Sync repair\r\n');
+  f.cli(['sync']); f.cli(['sync']);
+  assert.equal(fs.readFileSync(ignore, 'utf8'), '# Sync repair\r\n.agents/\n');
+  write(ignore, '.agents/');
+  f.cli(['sync']);
+  assert.equal(fs.readFileSync(ignore, 'utf8'), '.agents/');
+});
+test('empty sync ensures the ignore line and lint rejects any tracked agents files', () => {
+  const f = fixture(); f.cli(['sync']);
+  assert.equal(fs.readFileSync(path.join(f.brain, '.gitignore'), 'utf8'), '.agents/\n');
+  write(path.join(f.brain, '.agents/other.txt'), 'tracked cache\n');
+  f.git(['add', '--force', '.agents'], f.brain);
+  const error = f.cli(['lint'], 1);
+  assert.match(error, /tracked/i); assert.match(error, /add.*\.agents\/.*\.gitignore/i);
+  f.git(['rm', '--cached', '-r', '.agents'], f.brain); f.cli(['lint']);
+});
+test('lint rejects tracked agents files even when the ignore line already exists', () => {
+  const f = fixture();
+  write(path.join(f.brain, '.gitignore'), '.agents/\n');
+  write(path.join(f.brain, '.agents/skills/demo/SKILL.md'), 'tracked copy\n');
+  f.git(['add', '--force', '.agents'], f.brain);
+  const error = f.cli(['lint'], 1);
+  assert.match(error, /tracked/i); assert.match(error, /add.*\.agents\/.*\.gitignore/i);
 });
 test('non-allowlisted source refuses before invoking git or npx', () => {
   const f = fixture(); assert.match(f.cli(['add', 'other/repo#demo'], 1), /outside.*allowlist/);
@@ -144,6 +189,43 @@ test('push applies additions, edits and deletions at locked SHA and records fake
 });
 test('push without changes refuses and does not create a PR', () => {
   const f = fixture(); f.add(); assert.match(f.cli(['push', 'demo'], 1), /no vendored changes/);
+});
+for (const missing of [[], ['user.name'], ['user.email'], ['user.name', 'user.email']]) {
+  test(`push uses the brain git identity with fallback for ${missing.join(', ') || 'no fields'}`, () => {
+    const f = fixture(); f.add(); f.edit(); f.fakeGh();
+    f.git(['config', 'user.name', 'Brain Owner'], f.brain);
+    f.git(['config', 'user.email', 'owner@example.test'], f.brain);
+    for (const key of missing) f.git(['config', '--unset', key], f.brain);
+    const author = `${missing.includes('user.name') ? 'JARVIS (Codex)' : 'Brain Owner'} <${missing.includes('user.email') ? 'jarvis@knedlopark.cz' : 'owner@example.test'}>`;
+    // Environment identities must not override the brain's configured author.
+    Object.assign(f.env, { GIT_AUTHOR_NAME: 'Environment User', GIT_AUTHOR_EMAIL: 'env@example.test' });
+    const result = f.cli(['push', 'demo']);
+    assert.equal(f.git(['show', '-s', '--format=%an <%ae>', result.branch]), author);
+    assert.equal(result.author, author);
+  });
+}
+test('provenance lock writes sorted block YAML and round-trips legacy JSON with quoted strings', () => {
+  const f = fixture(), installed = f.add(), legacy = f.readLock();
+  const oddStrings = ['null', 'true', '012345', 'note: value # comment', 'apostrophe\'s "quote"', 'line one\nline two', '', '~', '[flow]', ' leading ', '2026-10-17'];
+  legacy.skills.demo.installer.extra = Object.fromEntries(oddStrings.map((value, i) => [`case-${i}`, value]));
+  legacy.skills.demo.installer.flags = [true, false, null, 1, ...oddStrings];
+  write(f.lockFile, JSON.stringify(legacy));
+  const oldEntry = f.cli(['status']).entries.find(e => e.name === 'demo');
+  assert.equal(oldEntry.sha, installed.sha);
+  assert.deepEqual(oldEntry.installer, legacy.skills.demo.installer);
+  // push loads the old JSON lock and saves it through the new YAML writer.
+  f.edit(); f.fakeGh(); const result = f.cli(['push', 'demo']);
+  const yaml = fs.readFileSync(f.lockFile, 'utf8');
+  assert.match(yaml, /^skills:\n  demo:\n    content_hash:/);
+  const entryKeys = [...yaml.matchAll(/^    ([\w.-]+):/gm)].map(m => m[1]);
+  assert.deepEqual(entryKeys, [...entryKeys].sort());
+  const installerBlock = yaml.split('    installer:\n')[1].split(/^    \S/m)[0];
+  const installerKeys = [...installerBlock.matchAll(/^      ([\w.-]+):/gm)].map(m => m[1]);
+  assert.deepEqual(installerKeys, [...installerKeys].sort());
+  const newEntry = f.cli(['status']).entries.find(e => e.name === 'demo');
+  assert.deepEqual(newEntry.installer, legacy.skills.demo.installer);
+  assert.equal(newEntry.upstream_pr, result.upstream_pr);
+  assert.equal(newEntry.sha, oldEntry.sha);
 });
 test('lint flags nested skills and report marks them not-discovered', () => {
   const f = fixture(); write(path.join(f.brain, '.claude/skills/shared/demo/SKILL.md'), '---\nname: demo\ndescription: Nested\n---\n');
