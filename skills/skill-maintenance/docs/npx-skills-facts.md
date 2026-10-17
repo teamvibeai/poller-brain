@@ -16,7 +16,7 @@ accessing a server. The local-path and `file://` probes used their literal sourc
 
 | Probe | Exit | Observed result |
 | --- | --- | --- |
-| `add /absolute/upstream --skill demo --agent claude-code --copy -y --json` | 0 | Flat copied `.claude/skills/demo`; also `.agents/skills/demo`; JSON array on stdout, progress on stderr. |
+| `add /absolute/upstream --skill demo --agent claude-code --copy -y --json` | 0 | Flat copied `.claude/skills/demo`; JSON array on stdout, progress on stderr. Fresh copy installs need not create `.agents/skills/demo` (see follow-up below). |
 | `add file:///absolute/upstream --skill demo --agent claude-code --copy -y --json` | 0 | Same copied layout; git source includes `skillPath` in lock. |
 | `add ... --skill absent ... --json` | 1 | JSON array with `{name:"absent",status:"skipped",reason:"No matching skill found in source"}`. |
 | Invalid git repository | 1 | JSON array with `{status:"failed",error:"Failed to clone repository..."}`. |
@@ -33,6 +33,13 @@ accessing a server. The local-path and `file://` probes used their literal sourc
 | `add file:///upstream --ref v1 ...` | 0 | **Silently ignores `--ref`**, returns `ref:null` and installs default branch content. |
 | `add https://fixture.invalid/upstream.git#v1 ...` (local rewrite) | 0 | Returns `ref:"v1"`, installs original tag content, records ref and path. |
 | `add https://fixture.invalid/upstream.git#<40-char-SHA> ...` (local rewrite; offline integration tests) | 0 | Installs exact commit even when newer commits/uncommitted files exist upstream. |
+
+Follow-up isolation check: the original observation of two trees after `add`
+included canonical cache state from other CLI operations. A fresh wrapper copy
+install can leave `.agents/` absent. The cached 1.7.2 CLI's `installSkillForAgent`
+copy branch writes only the selected agent directory. Restore/update can leave
+both trees present; the wrapper preserves that cache but ignores all `.agents/`
+files in Git and commits only the Claude skill copy.
 
 ## Output and lock shapes
 

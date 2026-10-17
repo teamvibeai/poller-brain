@@ -23,8 +23,8 @@ Git clones/checkouts supply the policy's SHA verification and PR workflow.
 | `add --new NAME` | Scaffold flat `.claude/skills/NAME/SKILL.md`; no lock entry. Replace the description/workflow templates before review. |
 | `status [--json]` | Inventory and upstream SHA comparison using only `git ls-remote`, with no clone. JSON is always used. |
 | `sync [NAME] [--force]` | Reinstall selected/all vendored entries at their recorded ref. Preflight local edits and allowlist before mutation. Refuse edits without `upstream_pr` unless forced; clear `upstream_pr` after reinstall. Use for a waiting copy only after its PR merges. |
-| `push NAME` | Clone at locked SHA, copy the vendored changes including deletions, commit on a unique branch, push it and call `gh pr create`; save PR URL. Existing PR is an idempotent no-op. |
-| `lint` | Check flat skills, frontmatter/name/description, referenced scripts, both locks and content drift. No upstream network check. |
+| `push NAME` | Clone at locked SHA, copy the vendored changes including deletions, commit as the brain's git identity on a unique branch, push it and call `gh pr create`; save PR URL. Existing PR is an idempotent no-op. |
+| `lint` | Check flat skills, frontmatter/name/description, referenced scripts, both locks and content drift; reject tracked `.agents/` files. No upstream network check. |
 | `report` | Return maintenance-ready counts and entries; paste `data` under `skills`. |
 | `ensure NAME SOURCE[#PATH] [--ref REF]` | Allowlist check, then no-op if locked and SKILL.md exists, preserving edits. Otherwise install or restore the missing locked skill. Never replace an existing brain-own skill. |
 
@@ -39,10 +39,26 @@ Auth is supplied by existing git/gh credentials. No credentials are stored.
 
 New skills and new sources always require a PR reviewed by the brain owner,
 never auto-merge. Maintenance syncs only pure upstream SHA bumps, leaving local
-edits and pending upstream PRs for review. Commit content and both locks together.
+edits and pending upstream PRs for review. Commit `.claude/skills/<name>`, both
+locks, and the brain `.gitignore` together.
 Multi-skill sync preflights all entries but commits each install separately to
 its files; a later upstream failure can leave earlier successful installs ready
 for review. A single failed installation restores that skill and both locks.
+
+## Why two copies exist, only one is committed
+
+The CLI uses `.agents/skills/<name>` as its canonical installation cache; the
+wrapper requests `.claude/skills/<name>` as the Claude copy with `--copy --agent
+claude-code`. A fresh copy install may create only the Claude tree, while CLI
+restore/update operations can populate the canonical cache. When both exist,
+keep both on disk so CLI metadata and hashes remain usable. Only
+the `.claude/skills/<name>` skill copy is committed. After a successful `add`,
+`ensure` (including a no-op), or `sync` (including an empty sync), the wrapper
+appends `.agents/` to the brain `.gitignore` if absent, preserving existing text.
+It never stages files. Lint rejects any tracked `.agents/` files even if ignored;
+add the ignore line and run `git rm --cached -r .agents` to untrack existing
+copies. Rollback also restores the uncommitted cache and `.gitignore` if an
+installation fails.
 
 ## JSON output
 
@@ -60,7 +76,11 @@ Success exits 0; failures exit 1:
 `add`/installed `ensure`: `{name, source, path, ref, sha, upstream_pr,
 content_hash, installer, changed:true}`. No-op ensure: `{name,changed:false}`.
 Scaffold: `{name,state:"own",path}`. `sync`: `{entries:[provenance entries...]}`.
-`push`: `{name,upstream_pr,branch,changed:true}` or no-op without `branch`.
+`push`: `{name,upstream_pr,branch,author,changed:true}` or no-op without `branch`
+or `author`. `author` is the actual `Name <email>` used for the commit, read
+from `git config user.name` and `git config user.email` in the brain's cwd.
+Only an unset/empty field falls back to `JARVIS (Codex)` or
+`jarvis@knedlopark.cz`, respectively; the returned author exposes that fallback.
 `lint`: `{errors:[],count:N}`; structural errors appear in the failure's `error`.
 `status`: `{entries:[{name,...provenance,state,upstream_sha,modified}]}`;
 brain-own entries have `{name,state:"own"}`, nested entries additionally have
@@ -92,24 +112,26 @@ review the resulting PR.
   edits its fields. It contains `version:1`, `skills`, and per-skill `source`,
   `sourceType`, `computedHash`, optionally `sourceUrl`, `ref`, `skillPath`.
 - `.claude/skills/skills.lock.yaml` is wrapper-owned provenance and policy. It is
-  serialized as JSON (valid YAML 1.2) to avoid a YAML dependency. Do not hand-edit.
+  serialized as block YAML with sorted mapping keys and quoted strings where
+  needed, without a YAML dependency. Old JSON-shaped lock files still load and
+  become block YAML on the next lock write. Do not hand-edit.
 
 Example (hashes shortened for display):
 
 ```yaml
 skills:
   work-management:
-    source: github.com/knedlopark/shared-claude-skills
-    path: work-management
-    ref: main
-    sha: 0123456789abcdef...
-    upstream_pr: null
-    content_hash: 0123456789abcdef...
+    content_hash: "0123456789abcdef..."
     installer:
+      ref: "0123456789abcdef..."
+      skillPath: work-management/SKILL.md
       source: knedlopark/shared-claude-skills
       sourceType: github
-      ref: 0123456789abcdef...
-      skillPath: work-management/SKILL.md
+    path: work-management
+    ref: main
+    sha: "0123456789abcdef..."
+    source: github.com/knedlopark/shared-claude-skills
+    upstream_pr: null
 ```
 
 `sha` is the full 40-character resolved upstream commit; `content_hash` is SHA256

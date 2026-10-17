@@ -54,7 +54,9 @@ function fixture() {
     return expected === 0 ? value.data : value.error;
   };
   const lockFile = path.join(brain, '.claude/skills/skills.lock.yaml');
-  const readLock = () => JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+  // Read provenance through the public command, exercising the bounded parser
+  // for both legacy JSON and newly serialized YAML without another dependency.
+  const readLock = () => ({ skills: Object.fromEntries(cli(['status']).entries.filter(e => e.sha).map(({ name, state, upstream_sha, modified, ...entry }) => [name, entry])) });
   const update = () => { write(path.join(upstream, 'demo/SKILL.md'), skill + 'Upstream update\n'); git(['add', '.']); git(['commit', '-m', 'update']); return git(['rev-parse', 'HEAD']); };
   const edit = () => write(path.join(brain, '.claude/skills/demo/SKILL.md'), skill + 'Local improvement\n');
   const add = () => cli(['add', `${source}#demo`]);
@@ -82,6 +84,8 @@ test('file:// source is allowlisted and installed from its resolved SHA', () => 
 test('add preserves gitignore content and stages only the Claude skill copy', () => {
   const f = fixture(), ignore = path.join(f.brain, '.gitignore');
   write(ignore, '# Brain ignores\nnode_modules/');
+  // A prior CLI restore/update may have populated the canonical cache.
+  write(path.join(f.brain, '.agents/skills/demo/SKILL.md'), fs.readFileSync(path.join(f.upstream, 'demo/SKILL.md')));
   f.add();
   assert.equal(fs.readFileSync(ignore, 'utf8'), '# Brain ignores\nnode_modules/\n.agents/\n');
   assert.equal(fs.existsSync(path.join(f.brain, '.agents/skills/demo/SKILL.md')), true);

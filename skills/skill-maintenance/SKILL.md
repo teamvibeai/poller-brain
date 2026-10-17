@@ -13,7 +13,9 @@ New skill or new source = PR for the brain owner, never auto-merge. The workspac
 allowlist is `.claude/skills/allowlist.yaml`; absent means only
 `knedlopark/shared-claude-skills` and `teamvibeai/poller-brain`. An unlisted source
 requires an owner-reviewed allowlist change. Do not bypass this with direct CLI
-installation. Commit skill content and both locks together.
+installation. Commit `.claude/skills/<name>`, both locks, and `.gitignore`
+together. The CLI's second copy under `.agents/` stays on disk and is ignored;
+lint rejects tracked `.agents/` files.
 
 During **every maintenance session**, run `status` and `report` as required by
 MAINTENANCE.md. Sync only `outdated` entries with no local edits or upstream PR

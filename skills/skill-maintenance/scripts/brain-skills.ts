@@ -20,6 +20,11 @@ function run(command, args, dir = cwd, extraEnv = {}) {
 }
 function json(file, fallback) { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : fallback; }
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); }
+function ignoreAgents() {
+  const file = path.join(cwd, '.gitignore');
+  const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  if (!existing.split(/\r?\n/).includes('.agents/')) write(file, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + '.agents/\n');
+}
 function object(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function metadata(value) { return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'computedHash').sort(([a], [b]) => a.localeCompare(b))); }
 function scalar(text) {
@@ -90,7 +95,20 @@ function lock() {
   }
   return value;
 }
-function saveLock(value) { write(lockPath, JSON.stringify(value, null, 2) + '\n'); } // JSON is YAML 1.2.
+function yamlScalar(value) {
+  if (typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_./-]*$/.test(value) && !/^(?:null|true|false|yes|no|on|off)$/i.test(value)) return value;
+  return JSON.stringify(value);
+}
+function blockYaml(value, indent = '') {
+  return Object.keys(value).sort().map(key => {
+    if (!/^[A-Za-z0-9_.-]+$/.test(key)) fail(`Unsupported YAML key: ${key}`);
+    const item = value[key], prefix = `${indent}${key}:`;
+    if (object(item) && Object.keys(item).length) return `${prefix}\n${blockYaml(item, indent + '  ')}`;
+    if (Array.isArray(item) && item.length) return `${prefix}\n${item.map(v => `${indent}  - ${yamlScalar(v)}\n`).join('')}`;
+    return `${prefix} ${yamlScalar(item)}\n`;
+  }).join('');
+}
+function saveLock(value) { write(lockPath, blockYaml(value)); }
 function validName(name) { if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name || '')) fail(`Invalid skill name: ${name}`); return name; }
 function safeRelative(value) {
   if (!value || path.isAbsolute(value) || value.split(/[\\/]/).some(p => p === '..' || p === '.git' || p === '') || value.includes('\\')) fail(`Unsafe skill path: ${value}`);
@@ -192,7 +210,9 @@ function status() {
 }
 function transaction(name, callback) {
   return temporary(dir => {
-    const targets = [path.join(skillsDir, name), path.join(cwd, '.agents/skills', name), toolLockPath, lockPath];
+    const committedTargets = [path.join(skillsDir, name), toolLockPath, lockPath, path.join(cwd, '.gitignore')];
+    // The CLI cache is never committed, but must also be restored on failure.
+    const targets = [...committedTargets, path.join(cwd, '.agents/skills', name)];
     const existed = targets.map((target, i) => {
       if (!fs.existsSync(target)) return false;
       if (fs.lstatSync(target).isSymbolicLink()) fail(`Refusing symlink target: ${target}`);
@@ -241,6 +261,7 @@ function install(source, subpath, ref, requestedName, replacing = false) {
       value.skills[name] = { source: info.identity, path: selectedPath, ref, sha, upstream_pr: null, content_hash,
         installer: metadata(tool) };
       saveLock(value);
+      ignoreAgents();
       return { name, ...value.skills[name] };
     });
   });
@@ -264,6 +285,7 @@ function sync(name, force) {
 }
 function lint() {
   const errors = [], seen = new Set(), value = lock(), toolLock = json(toolLockPath, { version: 1, skills: {} });
+  if (run('git', ['ls-files', '--', '.agents'])) errors.push('.agents/ is tracked by git; add .agents/ to the brain .gitignore and untrack it with git rm --cached -r .agents');
   if (toolLock.version !== 1 || !object(toolLock.skills)) fail('Invalid skills-lock.json');
   if (fs.existsSync(skillsDir)) for (const item of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (item.isDirectory() && !fs.existsSync(path.join(skillsDir, item.name, 'SKILL.md'))) errors.push(`Skill directory has no SKILL.md: ${item.name}`);
@@ -308,6 +330,13 @@ function push(name) {
   if (!entry) fail(`No vendored skill: ${name}`);
   if (entry.upstream_pr) return { name, upstream_pr: entry.upstream_pr, changed: false };
   const info = allowed(entry.source), vendored = path.join(skillsDir, name);
+  function identity(key, fallback) {
+    const result = spawnSync('git', ['config', key], { cwd, env, encoding: 'utf8' });
+    if (result.error || (result.status !== 0 && result.status !== 1)) fail(`git config ${key} failed: ${result.error?.message || result.stderr.trim()}`);
+    return result.stdout.trim() || fallback;
+  }
+  const authorName = identity('user.name', 'JARVIS (Codex)'), authorEmail = identity('user.email', 'jarvis@knedlopark.cz');
+  const author = `${authorName} <${authorEmail}>`;
   return temporary(temp => {
     const repo = path.join(temp, 'upstream'); checkout(info, entry.sha, repo);
     const target = entry.path === '.' ? repo : path.join(repo, entry.path); realInside(repo, target);
@@ -319,20 +348,22 @@ function push(name) {
     if (!run('git', ['diff', '--cached', '--stat'], repo)) fail(`${name} has no vendored changes to push`);
     const branch = `skill-maintenance/${name}-${randomUUID().slice(0, 8)}`;
     run('git', ['checkout', '-b', branch], repo);
-    run('git', ['-c', 'user.name=JARVIS (Codex)', '-c', 'user.email=jarvis@knedlopark.cz', 'commit', '-m', `fix(${name}): apply brain skill improvements`], repo);
+    run('git', ['commit', '-m', `fix(${name}): apply brain skill improvements`], repo, {
+      GIT_AUTHOR_NAME: authorName, GIT_AUTHOR_EMAIL: authorEmail, GIT_COMMITTER_NAME: authorName, GIT_COMMITTER_EMAIL: authorEmail,
+    });
     run('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], repo);
     const body = path.join(temp, 'pr-body.txt');
     write(body, `Apply the vendored ${name} changes from the brain, based on ${entry.sha}.\n\nBrain owner review required.\n`);
     const url = run('gh', ['pr', 'create', '--base', entry.ref, '--head', branch, '--title', `fix(${name}): apply brain skill improvements`, '--body-file', body], repo);
     if (!/^https:\/\/[^\s]+\/pull\/\d+$/.test(url)) fail('gh pr create did not return a PR URL');
     entry.upstream_pr = url; saveLock(value);
-    return { name, upstream_pr: url, branch, changed: true };
+    return { name, upstream_pr: url, branch, author, changed: true };
   });
 }
 function main(args) {
   const root = run('git', ['rev-parse', '--show-toplevel']);
   if (fs.realpathSync(root) !== fs.realpathSync(cwd)) fail('Run brain-skills from the brain repository root');
-  for (const relative of ['.claude', '.claude/skills', '.agents', '.agents/skills', 'skills-lock.json']) {
+  for (const relative of ['.claude', '.claude/skills', '.agents', '.agents/skills', 'skills-lock.json', '.gitignore']) {
     const target = path.join(cwd, relative);
     if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) fail(`Refusing symlink target: ${relative}`);
   }
@@ -354,17 +385,18 @@ function main(args) {
     const name = validName(options['--new']), dir = path.join(skillsDir, name);
     if (fs.existsSync(dir) || Object.hasOwn(lock().skills, name)) fail(`Skill ${name} already exists`);
     write(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: Describe when to use ${name} and the result it produces.\n---\n\n# ${name}\n\nDescribe the workflow.\n`);
+    ignoreAgents();
     return { name, state: 'own', path: path.relative(cwd, dir) };
   }
   if (command === 'add' || command === 'ensure') {
     const name = command === 'ensure' ? validName(positional[0]) : options['--name'];
     const parsed = parseSourceArg(positional[command === 'ensure' ? 1 : 0]);
     allowed(parsed.source);
-    if (command === 'ensure' && lock().skills[name] && fs.existsSync(path.join(skillsDir, name, 'SKILL.md'))) return { name, changed: false };
+    if (command === 'ensure' && lock().skills[name] && fs.existsSync(path.join(skillsDir, name, 'SKILL.md'))) { ignoreAgents(); return { name, changed: false }; }
     const replacing = command === 'ensure' && Boolean(lock().skills[name]);
     return { ...install(parsed.source, parsed.subpath, options['--ref'] || 'main', name, replacing), changed: true };
   }
-  if (command === 'sync') return { entries: sync(positional[0], options['--force']) };
+  if (command === 'sync') { const entries = sync(positional[0], options['--force']); ignoreAgents(); return { entries }; }
   if (command === 'push') return push(positional[0]);
   if (command === 'lint') return lint();
   const entries = status();
