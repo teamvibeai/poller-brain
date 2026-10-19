@@ -81,51 +81,82 @@ test('allowlisted local add delegates to real CLI and writes agreeing locks', ()
 test('file:// source is allowlisted and installed from its resolved SHA', () => {
   const f = fixture(); assert.equal(f.cli(['add', `file://${f.upstream}#demo`]).sha, f.sha); f.cli(['lint']);
 });
-test('add preserves gitignore content and stages only the Claude skill copy', () => {
+function assertLayout(f) {
+  const canonical = path.join(f.brain, '.agents/skills/demo');
+  const link = path.join(f.brain, '.claude/skills/demo');
+  assert.equal(fs.lstatSync(canonical).isDirectory(), true);
+  assert.equal(fs.existsSync(path.join(canonical, 'SKILL.md')), true);
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.equal(fs.readlinkSync(link), '../../.agents/skills/demo');
+  assert.equal(fs.realpathSync(link), fs.realpathSync(canonical));
+}
+test('add commits canonical content and a relative Claude symlink without touching gitignore', () => {
   const f = fixture(), ignore = path.join(f.brain, '.gitignore');
   write(ignore, '# Brain ignores\nnode_modules/');
-  // A prior CLI restore/update may have populated the canonical cache.
-  write(path.join(f.brain, '.agents/skills/demo/SKILL.md'), fs.readFileSync(path.join(f.upstream, 'demo/SKILL.md')));
-  f.add();
-  assert.equal(fs.readFileSync(ignore, 'utf8'), '# Brain ignores\nnode_modules/\n.agents/\n');
-  assert.equal(fs.existsSync(path.join(f.brain, '.agents/skills/demo/SKILL.md')), true);
+  f.add(); assertLayout(f);
+  assert.equal(fs.readFileSync(ignore, 'utf8'), '# Brain ignores\nnode_modules/');
   f.git(['add', '--all'], f.brain);
-  assert.equal(f.git(['ls-files', '.agents'], f.brain), '');
-  assert.match(f.git(['ls-files', '.claude/skills/demo'], f.brain), /SKILL\.md/);
+  assert.match(f.git(['ls-files', '.agents'], f.brain), /demo\/SKILL\.md/);
+  assert.match(f.git(['ls-files', '--stage', '.claude/skills/demo'], f.brain), /^120000 /);
   f.cli(['lint']);
 });
-test('successful add, ensure and sync repair the ignore line idempotently', () => {
-  const f = fixture(), ignore = path.join(f.brain, '.gitignore');
-  f.cli(['add', '--new', 'own-demo']);
-  assert.equal(fs.readFileSync(ignore, 'utf8'), '.agents/\n');
-  f.cli(['ensure', 'demo', `${f.source}#demo`]);
-  assert.equal(fs.readFileSync(ignore, 'utf8'), '.agents/\n');
-  write(ignore, '# Keep me\n');
+test('add, ensure and sync preserve symlink layout and never create gitignore', () => {
+  const f = fixture(); f.cli(['add', '--new', 'own-demo']);
+  f.cli(['ensure', 'demo', `${f.source}#demo`]); assertLayout(f);
   assert.equal(f.cli(['ensure', 'demo', `${f.source}#demo`]).changed, false);
-  assert.equal(fs.readFileSync(ignore, 'utf8'), '# Keep me\n.agents/\n');
-  write(ignore, '# Sync repair\r\n');
-  f.cli(['sync']); f.cli(['sync']);
-  assert.equal(fs.readFileSync(ignore, 'utf8'), '# Sync repair\r\n.agents/\n');
-  write(ignore, '.agents/');
-  f.cli(['sync']);
-  assert.equal(fs.readFileSync(ignore, 'utf8'), '.agents/');
+  f.cli(['sync']); assertLayout(f);
+  assert.equal(fs.existsSync(path.join(f.brain, '.gitignore')), false);
+  const empty = fixture(); empty.cli(['sync']);
+  assert.equal(fs.existsSync(path.join(empty.brain, '.gitignore')), false);
 });
-test('empty sync ensures the ignore line and lint rejects any tracked agents files', () => {
-  const f = fixture(); f.cli(['sync']);
-  assert.equal(fs.readFileSync(path.join(f.brain, '.gitignore'), 'utf8'), '.agents/\n');
-  write(path.join(f.brain, '.agents/other.txt'), 'tracked cache\n');
-  f.git(['add', '--force', '.agents'], f.brain);
-  const error = f.cli(['lint'], 1);
-  assert.match(error, /tracked/i); assert.match(error, /add.*\.agents\/.*\.gitignore/i);
-  f.git(['rm', '--cached', '-r', '.agents'], f.brain); f.cli(['lint']);
+for (const canonicalExists of [false, true]) {
+  test(`installer copy fallback creates canonical content and a relative link (canonical exists: ${canonicalExists})`, () => {
+    const f = fixture(), bin = path.join(f.root, 'bin/npx');
+    if (canonicalExists) write(path.join(f.brain, '.agents/skills/demo/stale.txt'), 'stale');
+    // Delegate to the real pinned CLI in copy mode, while asserting the wrapper
+    // requested its default symlink mode. No installer output is fabricated.
+    write(bin, `#!/usr/bin/env node\nconst {spawnSync}=require('node:child_process'); const args=process.argv.slice(2); if(args.includes('--copy')||args[1]!=='skills@1.7.2'||!args.includes('claude-code'))process.exit(9); const r=spawnSync(${JSON.stringify(cmd('which', ['npx'], f.brain))}, [...args,'--copy'], {stdio:'inherit'});process.exit(r.status ?? 1);\n`);
+    fs.chmodSync(bin, 0o755);
+    f.add(); assertLayout(f); f.cli(['lint']);
+    assert.equal(fs.existsSync(path.join(f.brain, '.agents/skills/demo/stale.txt')), false);
+  });
+}
+test('ensure converts an existing locked Claude copy and preserves local edits', () => {
+  const f = fixture(); f.add();
+  const link = path.join(f.brain, '.claude/skills/demo'), canonical = path.join(f.brain, '.agents/skills/demo');
+  fs.unlinkSync(link); fs.renameSync(canonical, link); f.edit();
+  assert.equal(f.cli(['ensure', 'demo', `${f.source}#demo`]).changed, true);
+  assertLayout(f); assert.equal(f.state(), 'modified');
 });
-test('lint rejects tracked agents files even when the ignore line already exists', () => {
-  const f = fixture();
-  write(path.join(f.brain, '.gitignore'), '.agents/\n');
-  write(path.join(f.brain, '.agents/skills/demo/SKILL.md'), 'tracked copy\n');
-  f.git(['add', '--force', '.agents'], f.brain);
-  const error = f.cli(['lint'], 1);
-  assert.match(error, /tracked/i); assert.match(error, /add.*\.agents\/.*\.gitignore/i);
+test('lint rejects real Claude and canonical directories with the same name', () => {
+  const f = fixture(); f.cli(['add', '--new', 'demo']);
+  write(path.join(f.brain, '.agents/skills/demo/SKILL.md'), 'canonical duplicate\n');
+  assert.match(f.cli(['lint'], 1), /Duplicate.*demo/i);
+});
+for (const target of ['../../../outside', '../../.agents/skills/missing', '../../.agents/skills/other', 'absolute']) {
+  test(`lint rejects invalid Claude symlink: ${target}`, () => {
+    const f = fixture();
+    write(path.join(f.root, 'outside/SKILL.md'), '---\nname: demo\ndescription: Outside\n---\n');
+    write(path.join(f.brain, '.agents/skills/other/SKILL.md'), '---\nname: demo\ndescription: Other\n---\n');
+    fs.symlinkSync(target === 'absolute' ? path.join(f.root, 'outside') : target, path.join(f.brain, '.claude/skills/demo'));
+    assert.match(f.cli(['lint'], 1), /symlink/i);
+  });
+}
+test('canonical content determines hashes even when the Claude link is missing', () => {
+  const f = fixture(); f.add();
+  fs.unlinkSync(path.join(f.brain, '.claude/skills/demo'));
+  write(path.join(f.brain, '.agents/skills/demo/SKILL.md'), 'changed canonical content\n');
+  assert.match(f.cli(['lint'], 1), /Content hash drift/);
+  assert.match(f.cli(['sync'], 1), /locally modified/);
+});
+test('lint requires a real canonical directory and canonical SKILL.md for locked skills', () => {
+  const f = fixture(); f.add();
+  const canonical = path.join(f.brain, '.agents/skills/demo');
+  fs.renameSync(canonical, path.join(f.root, 'saved')); fs.symlinkSync(path.join(f.root, 'saved'), canonical);
+  assert.match(f.cli(['lint'], 1), /canonical.*(directory|symlink)/i);
+  fs.unlinkSync(canonical); fs.renameSync(path.join(f.root, 'saved'), canonical);
+  fs.rmSync(path.join(canonical, 'SKILL.md'));
+  assert.match(f.cli(['lint'], 1), /SKILL\.md/);
 });
 test('non-allowlisted source refuses before invoking git or npx', () => {
   const f = fixture(); assert.match(f.cli(['add', 'other/repo#demo'], 1), /outside.*allowlist/);
@@ -175,6 +206,8 @@ test('ensure is idempotent, preserves a local edit, and restores missing files',
 test('new skill is own, scaffolded flat and has no provenance', () => {
   const f = fixture(); f.cli(['add', '--new', 'work-management']);
   assert.equal(fs.existsSync(f.lockFile), false); assert.equal(f.cli(['status']).entries[0].state, 'own'); f.cli(['lint']);
+  assert.equal(fs.lstatSync(path.join(f.brain, '.claude/skills/work-management')).isDirectory(), true);
+  assert.equal(fs.existsSync(path.join(f.brain, '.agents/skills/work-management')), false);
   assert.match(f.cli(['add', '--new', '../escape'], 1), /Invalid skill name/);
 });
 test('push applies additions, edits and deletions at locked SHA and records fake gh PR', () => {
@@ -277,7 +310,7 @@ test('failed CLI installation restores existing content and both locks', () => {
   write(bin, '#!/usr/bin/env node\nrequire("node:fs").writeFileSync("skills-lock.json", "{}");process.exit(1);\n'); fs.chmodSync(bin, 0o755);
   assert.match(f.cli(['sync'], 1), /npx failed/); assert.equal(fs.readFileSync(f.lockFile, 'utf8'), before);
   assert.equal(fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8'), toolBefore);
-  assert.equal(f.state(), 'outdated');
+  assert.equal(f.state(), 'outdated'); assertLayout(f);
 });
 test('name selection supports a root SKILL.md and source metadata order is immaterial', () => {
   const f = fixture();
@@ -295,7 +328,7 @@ test('annotated tags resolve to commit SHA rather than tag object', () => {
 });
 test('lint detects a tool-only lock entry and missing vendored files', () => {
   const f = fixture(); f.add(); fs.rmSync(path.join(f.brain, '.claude/skills/demo'), { recursive: true });
-  assert.equal(f.state(), 'modified'); assert.match(f.cli(['lint'], 1), /Missing skill directory/);
+  assert.equal(f.state(), 'modified'); assert.match(f.cli(['lint'], 1), /symlink/i);
   f.cli(['ensure', 'demo', `${f.source}#demo`]);
   const value = f.readLock(); delete value.skills.demo; write(f.lockFile, JSON.stringify(value));
   assert.match(f.cli(['lint'], 1), /no provenance/);
