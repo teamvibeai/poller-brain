@@ -38,8 +38,12 @@ Follow-up isolation check: the original observation of two trees after `add`
 included canonical cache state from other CLI operations. A fresh wrapper copy
 install can leave `.agents/` absent. The cached 1.7.2 CLI's `installSkillForAgent`
 copy branch writes only the selected agent directory. Restore/update can leave
-both trees present; the wrapper preserves that cache but ignores all `.agents/`
-files in Git and commits only the Claude skill copy.
+both trees present. Those copy-mode observations are historical: the owner's
+2026-10-19 decision supersedes the previous ignore policy. The wrapper now uses
+default symlink mode, commits `.agents/skills/<name>` as canonical content and
+`.claude/skills/<name>` as a relative symlink. Claude Code discovery through that
+symlink was verified by the owner's headless probe that day. Current wrapper
+tests exercise the real pinned CLI's default symlink mode and copy fallback.
 
 ## Output and lock shapes
 

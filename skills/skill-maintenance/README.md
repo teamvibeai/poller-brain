@@ -13,18 +13,18 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/skill-maintenance/scripts/brain-skills.ts" st
 
 The exports also disable telemetry for the outer `npx tsx`. The wrapper always
 sets both variables to `1` for every subprocess, including the pinned installer
-`npx -y skills@1.7.2`. It uses `add --skill NAME --full-depth --copy -y --json
+`npx -y skills@1.7.2`. It uses `add --skill NAME --full-depth -y --json
 --agent claude-code`; the CLI owns discovery metadata, installation, and its lock.
 Git clones/checkouts supply the policy's SHA verification and PR workflow.
 
 | Command | Contract |
 | --- | --- |
-| `add SOURCE[#PATH] [--ref REF] [--name NAME]` | Require allowlisted git source, resolve branch/tag with `git ls-remote` (default `main`), select one skill, copy through the pinned CLI, verify SHA content, write provenance. Existing names refuse; use sync. |
+| `add SOURCE[#PATH] [--ref REF] [--name NAME]` | Require allowlisted git source, resolve branch/tag with `git ls-remote` (default `main`), select one skill, install through the pinned CLI in default symlink mode, verify SHA content, write provenance. Existing names refuse; use sync. |
 | `add --new NAME` | Scaffold flat `.claude/skills/NAME/SKILL.md`; no lock entry. Replace the description/workflow templates before review. |
 | `status [--json]` | Inventory and upstream SHA comparison using only `git ls-remote`, with no clone. JSON is always used. |
 | `sync [NAME] [--force]` | Reinstall selected/all vendored entries at their recorded ref. Preflight local edits and allowlist before mutation. Refuse edits without `upstream_pr` unless forced; clear `upstream_pr` after reinstall. Use for a waiting copy only after its PR merges. |
 | `push NAME` | Clone at locked SHA, copy the vendored changes including deletions, commit as the brain's git identity on a unique branch, push it and call `gh pr create`; save PR URL. Existing PR is an idempotent no-op. |
-| `lint` | Check flat skills, frontmatter/name/description, referenced scripts, both locks and content drift; reject tracked `.agents/` files. No upstream network check. |
+| `lint` | Check flat skills, frontmatter/name/description, referenced scripts, both locks and content drift; require canonical content and relative Claude symlinks for vendored skills. No upstream network check. |
 | `report` | Return maintenance-ready counts and entries; paste `data` under `skills`. |
 | `ensure NAME SOURCE[#PATH] [--ref REF]` | Allowlist check, then no-op if locked and SKILL.md exists, preserving edits. Otherwise install or restore the missing locked skill. Never replace an existing brain-own skill. |
 
@@ -32,33 +32,49 @@ Git clones/checkouts supply the policy's SHA verification and PR workflow.
 (`owner/repo`, `github.com/owner/repo`, HTTPS/SSH GitHub URLs), generic HTTPS/SSH
 git URLs ending `.git`, absolute/relative local git paths, or `file://` git URLs.
 `#PATH` is the wrapper's directory selector; `--ref` is a branch/tag, not a CLI
-passthrough. Paths must remain inside the repository. Copies with symlinks refuse.
+passthrough. Paths must remain inside the repository. Symlinks inside skill content refuse;
+the flat Claude discovery symlink is supported.
 No command retries automatically. If `push` fails after pushing a branch, the
 error leaves the branch upstream for manual recovery; inspect it before retrying.
 Auth is supplied by existing git/gh credentials. No credentials are stored.
 
 New skills and new sources always require a PR reviewed by the brain owner,
 never auto-merge. Maintenance syncs only pure upstream SHA bumps, leaving local
-edits and pending upstream PRs for review. Commit `.claude/skills/<name>`, both
-locks, and the brain `.gitignore` together.
+edits and pending upstream PRs for review. Commit `.agents/skills/<name>`, the `.claude/skills/<name>` symlink, and both
+locks together. Brain-own real directories remain committed under `.claude/skills/`.
 Multi-skill sync preflights all entries but commits each install separately to
 its files; a later upstream failure can leave earlier successful installs ready
 for review. A single failed installation restores that skill and both locks.
 
-## Why two copies exist, only one is committed
+## Shared canonical layout
 
-The CLI uses `.agents/skills/<name>` as its canonical installation cache; the
-wrapper requests `.claude/skills/<name>` as the Claude copy with `--copy --agent
-claude-code`. A fresh copy install may create only the Claude tree, while CLI
-restore/update operations can populate the canonical cache. When both exist,
-keep both on disk so CLI metadata and hashes remain usable. Only
-the `.claude/skills/<name>` skill copy is committed. After a successful `add`,
-`ensure` (including a no-op), or `sync` (including an empty sync), the wrapper
-appends `.agents/` to the brain `.gitignore` if absent, preserving existing text.
-It never stages files. Lint rejects any tracked `.agents/` files even if ignored;
-add the ignore line and run `git rm --cached -r .agents` to untrack existing
-copies. Rollback also restores the uncommitted cache and `.gitignore` if an
-installation fails.
+Owner decision, 2026-10-19: `.agents/skills/<name>/` is the shared, committed
+canonical skill directory. Codex, OpenCode and other CLIs read this location.
+Claude Code discovers the same content through a flat relative symlink:
+
+```text
+.agents/skills/demo/SKILL.md                # committed content
+.claude/skills/demo -> ../../.agents/skills/demo
+.claude/skills/my-own-skill/SKILL.md        # brain-own real directory
+```
+
+There is one committed copy of each vendored skill. A headless Claude Code probe
+on 2026-10-19 confirmed discovery through the symlinked SKILL.md. The wrapper
+uses the pinned CLI's default symlink mode without `--copy`, verifies the
+canonical SKILL.md and relative discovery link, and replaces any CLI fallback
+copy with the symlink. An existing locked Claude copy can be converted by
+`ensure` without losing local edits. Brain-own skills have no canonical entry
+and no provenance lock entry; they stay as flat real directories.
+
+Lint rejects dangling, absolute, outside-canonical or wrong-name Claude links,
+missing canonical content or discovery links for locked skills, nested skills,
+and duplicate canonical/real Claude directories with the same name. Content
+hashes and both-lock checks use the canonical directory. Rollback restores
+canonical content, the discovery symlink and both locks after a failed install.
+The wrapper does not edit `.gitignore` or stage files. Remove any legacy
+`.agents/` ignore rule when adopting this layout so canonical content is committed.
+
+Git must preserve symlinks (`core.symlinks=true`); Windows is not supported.
 
 ## JSON output
 
@@ -101,7 +117,7 @@ brain-own entries have `{name,state:"own"}`, nested entries additionally have
 
 State priority: `waiting-upstream` when a PR is recorded; otherwise `modified`
 when files differ or are missing; otherwise `outdated` when upstream SHA changed;
-otherwise `current`. Unlocked flat skills are `own`; nested SKILL.md files are
+otherwise `current`. Unlocked flat real skill directories are `own`; nested SKILL.md files are
 `not-discovered`. `modified` on a vendored status entry also exposes edits while
 waiting. Upstream movement alone does not mean that changed skill content is safe;
 review the resulting PR.
@@ -135,7 +151,7 @@ skills:
 ```
 
 `sha` is the full 40-character resolved upstream commit; `content_hash` is SHA256
-of vendored file paths and bytes in `localeCompare` sorted path order, matching
+of canonical `.agents/skills/<name>` file paths and bytes in `localeCompare` sorted path order, matching
 CLI 1.7.2's `computedHash` (ignores `.git` and `node_modules`). `installer` records
 the CLI's source/ref/path metadata verbatim, excluding its hash, so lint can
 detect two-lock provenance drift without taking ownership of `skills-lock.json`.
@@ -150,7 +166,7 @@ is removed afterward. This is useful for local testing but cannot be replayed
 with `experimental_install`; use wrapper `sync`, which resolves the durable
 provenance source. Local-path locks are not portable between machines. Production
 sources should use git URLs with native SHA support. Do not use direct CLI
-`update` or `experimental_install` to maintain wrapper-managed Claude copies;
+`update` or `experimental_install` to maintain wrapper-managed skills;
 they bypass policy and do not keep both locks in sync.
 
 ## Allowlist and YAML

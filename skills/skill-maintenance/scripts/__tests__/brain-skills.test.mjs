@@ -307,7 +307,7 @@ test('failed CLI installation restores existing content and both locks', () => {
   const f = fixture(); f.add(); f.update(); const before = fs.readFileSync(f.lockFile, 'utf8');
   const toolBefore = fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8');
   const bin = path.join(f.root, 'bin/npx');
-  write(bin, '#!/usr/bin/env node\nrequire("node:fs").writeFileSync("skills-lock.json", "{}");process.exit(1);\n'); fs.chmodSync(bin, 0o755);
+  write(bin, '#!/usr/bin/env node\nconst fs=require("node:fs");fs.writeFileSync("skills-lock.json", "{}");fs.writeFileSync(".claude/skills/skills.lock.yaml", "broken");for(const p of [".claude/skills/demo",".agents/skills/demo"])fs.rmSync(p,{recursive:true,force:true});fs.mkdirSync(".claude/skills/demo",{recursive:true});fs.writeFileSync(".claude/skills/demo/SKILL.md","broken");process.exit(1);\n'); fs.chmodSync(bin, 0o755);
   assert.match(f.cli(['sync'], 1), /npx failed/); assert.equal(fs.readFileSync(f.lockFile, 'utf8'), before);
   assert.equal(fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8'), toolBefore);
   assert.equal(f.state(), 'outdated'); assertLayout(f);

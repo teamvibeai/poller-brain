@@ -13,9 +13,18 @@ New skill or new source = PR for the brain owner, never auto-merge. The workspac
 allowlist is `.claude/skills/allowlist.yaml`; absent means only
 `knedlopark/shared-claude-skills` and `teamvibeai/poller-brain`. An unlisted source
 requires an owner-reviewed allowlist change. Do not bypass this with direct CLI
-installation. Commit `.claude/skills/<name>`, both locks, and `.gitignore`
-together. The CLI's second copy under `.agents/` stays on disk and is ignored;
-lint rejects tracked `.agents/` files.
+installation. Commit canonical `.agents/skills/<name>/` content, the relative
+`.claude/skills/<name> -> ../../.agents/skills/<name>` symlink, and both locks
+together. This is one shared, committed copy for Codex, OpenCode and other CLIs;
+Claude Code discovers it through the symlink (verified by headless probe on
+2026-10-19). The pinned installer uses default symlink mode without `--copy`;
+the wrapper verifies the layout and converts any fallback copy to a symlink.
+Brain-own skills stay as flat real `.claude/skills/<name>/` directories with no
+`.agents` entry or lock entry. Lint rejects invalid/dangling links, nested skills,
+missing canonical content and duplicate canonical/real Claude directories.
+The wrapper does not edit `.gitignore`; remove any legacy `.agents/` ignore rule
+when adopting this layout. Git must preserve symlinks (`core.symlinks=true`).
+Windows is not supported.
 
 During **every maintenance session**, run `status` and `report` as required by
 MAINTENANCE.md. Sync only `outdated` entries with no local edits or upstream PR

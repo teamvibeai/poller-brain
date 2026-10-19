@@ -8,6 +8,9 @@ import { spawnSync } from 'node:child_process';
 
 const cwd = process.cwd();
 const skillsDir = path.join(cwd, '.claude/skills');
+const agentsDir = path.join(cwd, '.agents/skills');
+const canonical = name => path.join(agentsDir, name);
+const exists = file => Boolean(fs.lstatSync(file, { throwIfNoEntry: false }));
 const lockPath = path.join(skillsDir, 'skills.lock.yaml');
 const toolLockPath = path.join(cwd, 'skills-lock.json');
 const env = { ...process.env, DO_NOT_TRACK: '1', DISABLE_TELEMETRY: '1', GIT_TERMINAL_PROMPT: '0' };
@@ -20,10 +23,40 @@ function run(command, args, dir = cwd, extraEnv = {}) {
 }
 function json(file, fallback) { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : fallback; }
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); }
-function ignoreAgents() {
-  const file = path.join(cwd, '.gitignore');
-  const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  if (!existing.split(/\r?\n/).includes('.agents/')) write(file, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + '.agents/\n');
+function canonicalDirectory(name) {
+  const dir = canonical(name);
+  if (!exists(dir) || !fs.lstatSync(dir).isDirectory()) fail(`Missing or invalid canonical directory (symlinks forbidden): ${name}`);
+  if (!fs.existsSync(path.join(dir, 'SKILL.md'))) fail(`Missing canonical SKILL.md: ${name}`);
+  return dir;
+}
+function skillLink(name) {
+  const link = path.join(skillsDir, name);
+  if (!exists(link) || !fs.lstatSync(link).isSymbolicLink()) fail(`Missing relative skill symlink: ${name}`);
+  const target = fs.readlinkSync(link);
+  if (path.isAbsolute(target) || path.resolve(skillsDir, target) !== canonical(name) || !fs.existsSync(link)) fail(`Invalid or dangling skill symlink: ${name}`);
+  const dir = canonicalDirectory(name);
+  if (fs.realpathSync(link) !== fs.realpathSync(dir)) fail(`Skill symlink escapes canonical directory: ${name}`);
+  return dir;
+}
+function normalizeLayout(name) {
+  const link = path.join(skillsDir, name), dir = canonical(name);
+  if (exists(link) && fs.lstatSync(link).isDirectory()) {
+    // Some CLI environments fall back to a copy. Promote those installed bytes
+    // to the canonical location before replacing the agent directory.
+    files(link);
+    if (!fs.existsSync(path.join(link, 'SKILL.md'))) fail(`Missing installed SKILL.md: ${name}`);
+    if (exists(dir) && !fs.lstatSync(dir).isDirectory()) fail(`Invalid canonical directory (symlink forbidden): ${name}`);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.cpSync(link, dir, { recursive: true });
+    fs.rmSync(link, { recursive: true });
+    fs.symlinkSync(path.relative(skillsDir, dir), link);
+  }
+  return skillLink(name);
+}
+function contentModified(name, entry) {
+  try { return hash(canonicalDirectory(name)) !== entry.content_hash; }
+  catch { return true; }
 }
 function object(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function metadata(value) { return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'computedHash').sort(([a], [b]) => a.localeCompare(b))); }
@@ -130,7 +163,7 @@ function files(root) {
     }
   }
   if (!fs.existsSync(root)) fail(`Missing skill directory: ${root}`);
-  if (fs.lstatSync(root).isSymbolicLink()) fail(`Skill must be a copy: ${root}`);
+  if (fs.lstatSync(root).isSymbolicLink()) fail(`Skill content directory must be real: ${root}`);
   walk(root);
   return result.sort((a, b) => a.localeCompare(b));
 }
@@ -188,39 +221,58 @@ function checkout(info, sha, dir) {
   run('git', ['clone', '--no-checkout', '--', info.url, dir]);
   run('git', ['checkout', '--detach', sha], dir);
 }
-function inventory() {
+function inventory(errors = []) {
   if (!fs.existsSync(skillsDir)) return [];
-  return files(skillsDir).filter(f => f.endsWith('/SKILL.md')).map(file => ({ file, name: file.split('/')[0], flat: file.split('/').length === 2 }));
+  const result = [];
+  for (const item of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+    if (!item.isDirectory() && !item.isSymbolicLink()) continue;
+    try {
+      const dir = item.isSymbolicLink() ? skillLink(item.name) : path.join(skillsDir, item.name);
+      for (const file of files(dir).filter(f => f === 'SKILL.md' || f.endsWith('/SKILL.md'))) {
+        result.push({ file: `${item.name}/${file}`, name: item.name, flat: file === 'SKILL.md', own: item.isDirectory() });
+      }
+    } catch (error) { errors.push(error.message); }
+  }
+  return result;
 }
 function status() {
   const entries = [];
   const provenance = lock().skills;
   for (const [name, entry] of Object.entries(provenance)) {
-    const dir = path.join(skillsDir, name);
-    const modified = !fs.existsSync(path.join(dir, 'SKILL.md')) || hash(dir) !== entry.content_hash;
+    let valid = true;
+    try { skillLink(name); } catch { valid = false; }
+    const modified = !valid || contentModified(name, entry);
     const upstream_sha = remoteSha(sourceInfo(entry.source), entry.ref);
     const state = entry.upstream_pr ? 'waiting-upstream' : modified ? 'modified' : upstream_sha !== entry.sha ? 'outdated' : 'current';
     entries.push({ name, ...entry, state, upstream_sha, modified });
   }
   for (const item of inventory()) {
     if (!item.flat) entries.push({ name: item.file.slice(0, -9), path: item.file, state: 'not-discovered' });
-    else if (!Object.hasOwn(provenance, item.name)) entries.push({ name: item.name, state: 'own' });
+    else if (item.own && !Object.hasOwn(provenance, item.name)) entries.push({ name: item.name, state: 'own' });
   }
   return entries;
 }
 function transaction(name, callback) {
   return temporary(dir => {
-    const committedTargets = [path.join(skillsDir, name), toolLockPath, lockPath, path.join(cwd, '.gitignore')];
-    // The CLI cache is never committed, but must also be restored on failure.
-    const targets = [...committedTargets, path.join(cwd, '.agents/skills', name)];
+    const targets = [path.join(skillsDir, name), toolLockPath, lockPath, canonical(name)];
     const existed = targets.map((target, i) => {
-      if (!fs.existsSync(target)) return false;
-      if (fs.lstatSync(target).isSymbolicLink()) fail(`Refusing symlink target: ${target}`);
-      fs.cpSync(target, path.join(dir, String(i)), { recursive: true }); return true;
+      if (!exists(target)) return null;
+      if (fs.lstatSync(target).isSymbolicLink()) {
+        if (i !== 0) fail(`Refusing symlink target: ${target}`);
+        return { link: fs.readlinkSync(target) };
+      }
+      const backup = path.join(dir, String(i));
+      fs.cpSync(target, backup, { recursive: true, verbatimSymlinks: true });
+      return { backup };
     });
     try { return callback(); }
     catch (error) {
-      targets.forEach((target, i) => { fs.rmSync(target, { recursive: true, force: true }); if (existed[i]) fs.cpSync(path.join(dir, String(i)), target, { recursive: true }); });
+      targets.forEach((target, i) => {
+        fs.rmSync(target, { recursive: true, force: true });
+        const saved = existed[i];
+        if (saved?.link !== undefined) fs.symlinkSync(saved.link, target);
+        else if (saved) fs.cpSync(saved.backup, target, { recursive: true, verbatimSymlinks: true });
+      });
       throw error;
     }
   });
@@ -241,7 +293,7 @@ function install(source, subpath, ref, requestedName, replacing = false) {
     if (candidates.length !== 1) fail('Select exactly one skill with #path or --name');
     const selected = candidates[0], name = validName(selected.name);
     const selectedPath = path.relative(repo, selected.dir).split(path.sep).join('/') || '.';
-    if (!replacing && (fs.existsSync(path.join(skillsDir, name)) || Object.hasOwn(lock().skills, name))) fail(`Skill ${name} already exists; use sync`);
+    if (!replacing && (exists(path.join(skillsDir, name)) || Object.hasOwn(lock().skills, name))) fail(`Skill ${name} already exists; use sync`);
     // Remote sources use the CLI's native #SHA support. For local sources the
     // CLI has no ref syntax; use a clean checkout at that SHA as its input.
     let input = `${info.url}#${sha}`;
@@ -250,10 +302,10 @@ function install(source, subpath, ref, requestedName, replacing = false) {
       input = cleanHead ? (selectedPath === '.' ? info.url : path.join(info.url, selectedPath)) : selected.dir;
     }
     return transaction(name, () => {
-      const output = run('npx', ['-y', 'skills@1.7.2', 'add', input, '--skill', name, '--full-depth', '--copy', '-y', '--json', '--agent', 'claude-code']);
+      const output = run('npx', ['-y', 'skills@1.7.2', 'add', input, '--skill', name, '--full-depth', '-y', '--json', '--agent', 'claude-code']);
       const result = JSON.parse(output);
-      if (!Array.isArray(result) || result.length !== 1 || result[0].status !== 'installed' || result[0].name !== name || result[0].mode !== 'copy') fail('Unexpected npx skills add result');
-      const content_hash = hash(path.join(skillsDir, name));
+      if (!Array.isArray(result) || result.length !== 1 || result[0].status !== 'installed' || result[0].name !== name || !['symlink', 'copy'].includes(result[0].mode)) fail('Unexpected npx skills add result');
+      const content_hash = hash(normalizeLayout(name));
       if (content_hash !== hash(selected.dir)) fail('Installed content differs from the resolved upstream SHA');
       const tool = json(toolLockPath, null)?.skills?.[name];
       if (!tool || tool.computedHash !== content_hash) fail('npx skills did not write the expected content lock');
@@ -261,7 +313,6 @@ function install(source, subpath, ref, requestedName, replacing = false) {
       value.skills[name] = { source: info.identity, path: selectedPath, ref, sha, upstream_pr: null, content_hash,
         installer: metadata(tool) };
       saveLock(value);
-      ignoreAgents();
       return { name, ...value.skills[name] };
     });
   });
@@ -278,19 +329,19 @@ function sync(name, force) {
   for (const item of names) {
     const entry = value.skills[item]; if (!entry) fail(`No vendored skill: ${item}`);
     allowed(entry.source);
-    const dir = path.join(skillsDir, item);
-    if ((!fs.existsSync(dir) || hash(dir) !== entry.content_hash) && !entry.upstream_pr && !force) fail(`${item} is locally modified; push it upstream or use --force`);
+    if (contentModified(item, entry) && !entry.upstream_pr && !force) fail(`${item} is locally modified; push it upstream or use --force`);
   }
   return names.map(item => { const entry = value.skills[item]; return install(entry.source, entry.path === '.' ? undefined : entry.path, entry.ref, item, true); });
 }
 function lint() {
   const errors = [], seen = new Set(), value = lock(), toolLock = json(toolLockPath, { version: 1, skills: {} });
-  if (run('git', ['ls-files', '--', '.agents'])) errors.push('.agents/ is tracked by git; add .agents/ to the brain .gitignore and untrack it with git rm --cached -r .agents');
   if (toolLock.version !== 1 || !object(toolLock.skills)) fail('Invalid skills-lock.json');
   if (fs.existsSync(skillsDir)) for (const item of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+    if (item.isDirectory() && exists(canonical(item.name))) errors.push(`Duplicate canonical and real Claude skill directory: ${item.name}`);
+    if (item.isSymbolicLink() && !Object.hasOwn(value.skills, item.name)) errors.push(`Skill symlink has no provenance: ${item.name}`);
     if (item.isDirectory() && !fs.existsSync(path.join(skillsDir, item.name, 'SKILL.md'))) errors.push(`Skill directory has no SKILL.md: ${item.name}`);
   }
-  for (const item of inventory()) {
+  for (const item of inventory(errors)) {
     try {
       if (!item.flat) fail(`Nested skill is not-discovered: ${item.file}`);
       const file = path.join(skillsDir, item.file), data = frontmatter(file);
@@ -307,8 +358,9 @@ function lint() {
     } catch (error) { errors.push(error.message); }
   }
   for (const [name, entry] of Object.entries(value.skills)) {
+    try { skillLink(name); } catch (error) { errors.push(error.message); }
     try {
-      const actual = hash(path.join(skillsDir, name)), tool = toolLock.skills[name];
+      const actual = hash(canonicalDirectory(name)), tool = toolLock.skills[name];
       if (!fs.existsSync(path.join(skillsDir, name, 'SKILL.md'))) errors.push(`Missing SKILL.md: ${name}`);
       if (actual !== entry.content_hash && !entry.upstream_pr) errors.push(`Content hash drift: ${name}`);
       if (!tool || tool.computedHash !== entry.content_hash) errors.push(`Two-lock hash drift: ${name}`);
@@ -329,7 +381,7 @@ function push(name) {
   validName(name); const value = lock(), entry = value.skills[name];
   if (!entry) fail(`No vendored skill: ${name}`);
   if (entry.upstream_pr) return { name, upstream_pr: entry.upstream_pr, changed: false };
-  const info = allowed(entry.source), vendored = path.join(skillsDir, name);
+  const info = allowed(entry.source), vendored = skillLink(name);
   function identity(key, fallback) {
     const result = spawnSync('git', ['config', key], { cwd, env, encoding: 'utf8' });
     if (result.error || (result.status !== 0 && result.status !== 1)) fail(`git config ${key} failed: ${result.error?.message || result.stderr.trim()}`);
@@ -363,9 +415,9 @@ function push(name) {
 function main(args) {
   const root = run('git', ['rev-parse', '--show-toplevel']);
   if (fs.realpathSync(root) !== fs.realpathSync(cwd)) fail('Run brain-skills from the brain repository root');
-  for (const relative of ['.claude', '.claude/skills', '.agents', '.agents/skills', 'skills-lock.json', '.gitignore']) {
+  for (const relative of ['.claude', '.claude/skills', '.agents', '.agents/skills', 'skills-lock.json', '.claude/skills/skills.lock.yaml']) {
     const target = path.join(cwd, relative);
-    if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) fail(`Refusing symlink target: ${relative}`);
+    if (exists(target) && fs.lstatSync(target).isSymbolicLink()) fail(`Refusing symlink target: ${relative}`);
   }
   const command = args.shift(), options = {}, positional = [];
   for (let i = 0; i < args.length; i++) {
@@ -383,20 +435,24 @@ function main(args) {
   if (command === 'add' && options['--new']) {
     if (positional.length || options['--ref'] || options['--name']) fail('--new cannot be combined with source options');
     const name = validName(options['--new']), dir = path.join(skillsDir, name);
-    if (fs.existsSync(dir) || Object.hasOwn(lock().skills, name)) fail(`Skill ${name} already exists`);
+    if (exists(dir) || exists(canonical(name)) || Object.hasOwn(lock().skills, name)) fail(`Skill ${name} already exists`);
     write(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: Describe when to use ${name} and the result it produces.\n---\n\n# ${name}\n\nDescribe the workflow.\n`);
-    ignoreAgents();
     return { name, state: 'own', path: path.relative(cwd, dir) };
   }
   if (command === 'add' || command === 'ensure') {
     const name = command === 'ensure' ? validName(positional[0]) : options['--name'];
     const parsed = parseSourceArg(positional[command === 'ensure' ? 1 : 0]);
     allowed(parsed.source);
-    if (command === 'ensure' && lock().skills[name] && fs.existsSync(path.join(skillsDir, name, 'SKILL.md'))) { ignoreAgents(); return { name, changed: false }; }
+    if (command === 'ensure' && lock().skills[name] && fs.existsSync(path.join(skillsDir, name, 'SKILL.md'))) {
+      const copied = fs.lstatSync(path.join(skillsDir, name)).isDirectory();
+      if (copied) transaction(name, () => normalizeLayout(name));
+      else skillLink(name);
+      return { name, changed: copied };
+    }
     const replacing = command === 'ensure' && Boolean(lock().skills[name]);
     return { ...install(parsed.source, parsed.subpath, options['--ref'] || 'main', name, replacing), changed: true };
   }
-  if (command === 'sync') { const entries = sync(positional[0], options['--force']); ignoreAgents(); return { entries }; }
+  if (command === 'sync') { const entries = sync(positional[0], options['--force']); return { entries }; }
   if (command === 'push') return push(positional[0]);
   if (command === 'lint') return lint();
   const entries = status();
