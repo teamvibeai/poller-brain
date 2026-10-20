@@ -21,11 +21,12 @@
 // as slack-payload.test.mjs (l).
 // Run: node mcp/__tests__/slack-discovery.test.mjs
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
+  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
 const exports = '\nexport { handleTool, TOOLS }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { handleTool, TOOLS } = mod
