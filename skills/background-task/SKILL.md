@@ -58,7 +58,8 @@ turn — never a `sleep`/loop inside a single call, even when the intent is "pol
 `Bash(run_in_background: true)` either: a `PreToolUse` hook blocks it outright (poller-brain#490)
 because it's killed the moment this turn ends — in production (`--output-format stream-json`)
 synchronously, the instant the model's final turn text has no pending tool_use; polling it "later"
-never happens. Known platform gap behind this whole trap, not yet fixed:
+never happens. The hook also blocks plain shell backgrounding such as `cmd &`, including
+`nohup cmd &` (poller-brain#546). Known platform gap behind this whole trap, not yet fixed:
 `teamvibeai/teamvibe.ai#106`.
 
 ## What you get back
