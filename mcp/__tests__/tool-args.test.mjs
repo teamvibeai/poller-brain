@@ -17,7 +17,7 @@ const mcpDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const validatorUrl = pathToFileURL(join(mcpDir, 'lib', 'validate-args.mjs')).href
 async function loadServer(file) {
   const src = readFileSync(join(mcpDir, file), 'utf8')
-  const prelude = src.split('\nconst rl = createInterface')[0]
+  const prelude = src.split('// --- stdio transport ---')[0]
     .replace("'./lib/validate-args.mjs'", JSON.stringify(validatorUrl))
   return await import('data:text/javascript,' + encodeURIComponent(prelude + '\nexport { handleRequest }\n'))
 }

@@ -18,6 +18,7 @@
  */
 
 import { createInterface } from 'readline'
+import { validateArgs } from './lib/validate-args.mjs'
 
 const BOT_TOKEN = process.env.SLACK_BOT_TOKEN
 const DEFAULT_CHANNEL = process.env.SLACK_CHANNEL
@@ -645,6 +646,7 @@ const TOOLS = [
     description: 'Send a message to the Slack thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback. AUTO-REPAIR: a bare URL wrapped in bold as its own span (`*https://...*`) is auto-stripped to a plain URL — Slack mangles that pattern\'s link (see `transformed.bold_url_stripped`). A bare URL wrapped in bold ALONGSIDE other text (`*see https://...*`) is auto-wrapped as `*see <https://...>*` instead, since stripping would also lose the intended bold (see `transformed.bold_url_wrapped`). Prefer a bare URL or `<url|label>` yourself rather than relying on either repair.' },
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions, or a `markdown` block for tables/GFM). See https://api.slack.com/block-kit. Providing blocks OPTS OUT of table auto-convert — your blocks are sent as-is and `text` is prepended as a visible section block. Omit blocks to let a GFM table in `text` auto-convert.', items: { type: 'object' } },
@@ -672,6 +674,7 @@ const TOOLS = [
     description: 'Add an emoji reaction to the original message.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         name: { type: 'string', description: 'Emoji name without colons (e.g., "eyes", "white_check_mark")' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
@@ -685,6 +688,7 @@ const TOOLS = [
     description: 'Remove an emoji reaction from the original message.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         name: { type: 'string', description: 'Emoji name without colons' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
@@ -698,6 +702,7 @@ const TOOLS = [
     description: 'List the current emoji reactions on a message (name, count, and reacting user IDs). Use this before add_reaction/remove_reaction to see what is already there, instead of guessing blindly or probing candidate emoji one at a time.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         timestamp: { type: 'string', description: 'Message timestamp to inspect (default: original message)' },
@@ -709,6 +714,7 @@ const TOOLS = [
     description: 'Read message history from the current thread.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         limit: { type: 'number', description: 'Max messages to return (default: 20)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
@@ -721,6 +727,7 @@ const TOOLS = [
     description: 'Read recent message history from a channel (not a thread).',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         limit: { type: 'number', description: 'Max messages to return (default: 20)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
@@ -732,6 +739,7 @@ const TOOLS = [
     description: 'Get a clickable Slack permalink URL for a specific message. Use this instead of guessing the workspace subdomain or hand-building an archives/deep-link URL.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         message_ts: { type: 'string', description: 'Timestamp of the message to link to (default: current thread timestamp, or original message timestamp if not in a thread)' },
@@ -743,6 +751,7 @@ const TOOLS = [
     description: 'List participants in the current thread: user IDs, display names, bot/human flags, and self marker. Use to know "who is in the room" before deciding tags, handoffs, or escalations. Returns deduplicated participants in first-spoke order.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
@@ -754,6 +763,7 @@ const TOOLS = [
     description: 'Get channel metadata: name, topic, purpose/description, member count, and privacy status. Useful for understanding channel context at the start of a session.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
       },
@@ -764,6 +774,7 @@ const TOOLS = [
     description: 'Set the topic of a Slack channel. The topic appears at the top of the channel.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         topic: { type: 'string', description: 'New topic text' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
@@ -776,6 +787,7 @@ const TOOLS = [
     description: 'Set the purpose/description of a Slack channel.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         purpose: { type: 'string', description: 'New purpose text' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
@@ -788,6 +800,7 @@ const TOOLS = [
     description: 'List pinned items in a channel.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
       },
@@ -798,6 +811,7 @@ const TOOLS = [
     description: 'Pin a message to a channel. Slack surfaces too_many_pins if the channel is at its pin limit, or not_pinnable for message types that cannot be pinned — both bubble up as errors.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         timestamp: { type: 'string', description: 'Message timestamp to pin (default: current thread timestamp, or original message timestamp if not in a thread)' },
@@ -809,6 +823,7 @@ const TOOLS = [
     description: 'Unpin a message from a channel.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         timestamp: { type: 'string', description: 'Message timestamp to unpin (default: current thread timestamp, or original message timestamp if not in a thread)' },
@@ -820,6 +835,7 @@ const TOOLS = [
     description: 'List bookmarks (links pinned at the top) of a channel.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
       },
@@ -830,6 +846,7 @@ const TOOLS = [
     description: 'Upload a code or text snippet to the thread. Use for long outputs, code blocks, logs, or structured data instead of pasting into a message.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         title: { type: 'string', description: 'Snippet title' },
         content: { type: 'string', description: 'Snippet content' },
@@ -843,6 +860,7 @@ const TOOLS = [
     description: 'Download a file from Slack. For small text files (<100KB), returns content inline. For larger or binary files (images, PDFs), saves to /tmp and returns the file path — use the Read tool to view the file.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         url: { type: 'string', description: 'Slack file URL (url_private from file objects)' },
       },
@@ -854,6 +872,7 @@ const TOOLS = [
     description: 'Upload a local file to the Slack thread.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         filepath: { type: 'string', description: 'Absolute path to the local file' },
         title: { type: 'string', description: 'File title (default: filename)' },
@@ -869,6 +888,7 @@ const TOOLS = [
     description: 'Update an existing message. Use after button_click events to change button states, show confirmations, or update content in-place.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         ts: { type: 'string', description: 'Timestamp of the message to update (required)' },
         text: { type: 'string', description: 'New text for the message. When blocks are also provided, text is auto-prepended as section block(s) so it stays visible AND serves as the notification fallback.' },
@@ -883,6 +903,7 @@ const TOOLS = [
     description: 'Set the typing indicator text (e.g., "Searching...", "Analyzing..."). Use empty string to clear.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         text: { type: 'string', description: 'Status text to display (empty string clears status)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
@@ -896,6 +917,7 @@ const TOOLS = [
     description: 'List Slack conversations this bot is a member of — i.e. the channels/DMs actually provisioned for it (public channels, private channels, group DMs, 1:1 DMs), not the whole workspace. Use to resolve a name like "#integration-team" to a channel ID, or to see what this bot can read/post to.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         types: { type: 'string', description: 'Comma-separated Slack conversation types to include (default: "public_channel,private_channel,mpim,im")' },
         limit: { type: 'number', minimum: 1, description: 'Max channels to return (default: 200, capped at 1000)' },
@@ -907,6 +929,7 @@ const TOOLS = [
     description: 'Search workspace users by a case-insensitive substring match on display name, real name, username, or email. Slack has no server-side user-search API, so this lists all workspace users and filters client-side — unlike `list_channels`, this is necessarily workspace-wide (Slack has no concept of "users visible to a bot"), not scoped to this bot\'s channels.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         query: { type: 'string', description: 'Substring to match against name/display name/real name/email' },
         limit: { type: 'number', minimum: 1, description: 'Max results to return (default: 20)' },
@@ -919,6 +942,7 @@ const TOOLS = [
     description: 'Tell the platform roughly how long the work you are about to do will take, so the user gets proactive progress updates if it runs long (0-5 min: no update needed, 5-10 min: one update, 10-15 min: two updates, 15+ min: three updates). Call this once, early, when you can already tell a task will take a while (e.g. a large multi-file refactor or deep research) — not required for normal quick replies. This does not affect timeouts or safety limits, only how often the user hears from you.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         minutes: { type: 'number', description: 'Your best-guess estimate of total time this task will take, in minutes' },
       },
@@ -1525,7 +1549,11 @@ async function handleRequest(req) {
     case 'tools/call': {
       const { name, arguments: args } = params
       try {
-        const result = await handleTool(name, args || {})
+        const toolArgs = args === undefined ? {} : args
+        const tool = TOOLS.find((t) => t.name === name)
+        const error = tool && validateArgs(name, toolArgs, tool.inputSchema)
+        if (error) throw new Error(error)
+        const result = await handleTool(name, toolArgs)
         return jsonrpcResponse(id, {
           content: [{ type: 'text', text: JSON.stringify(result) }],
         })

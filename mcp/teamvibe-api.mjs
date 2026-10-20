@@ -10,6 +10,7 @@
  */
 
 import { createInterface } from 'readline'
+import { validateArgs } from './lib/validate-args.mjs'
 
 const API_URL = process.env.TEAMVIBE_API_URL
 const TOKEN = process.env.TEAMVIBE_POLLER_TOKEN
@@ -128,6 +129,7 @@ const TOOLS = [
     description: 'List scheduled messages for the current workspace/channel. Returns all schedules with their status, cron expression, and next run time. Run timestamps are ISO-UTC; the matching *Local fields render them in the schedule timezone with the weekday — read those before concluding a schedule misfired.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         channelId: { type: 'string', description: 'Filter by channel ID (default: current channel)' },
       },
@@ -138,6 +140,7 @@ const TOOLS = [
     description: 'Create or update a scheduled message. For recurring schedules use CRON type with a cron expression. For one-time schedules use ONE_TIME type with scheduledAt. The response echoes the stored row including nextRunAt and nextRunAtLocal (schedule timezone + weekday) — check it fires when you intended.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         scheduleId: { type: 'string', description: 'Schedule ID to update (omit to create new)' },
         scheduleType: { type: 'string', enum: ['CRON', 'ONE_TIME'], description: 'CRON for recurring, ONE_TIME for single execution' },
@@ -167,6 +170,7 @@ const TOOLS = [
     description: 'Delete a scheduled message by its ID.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         scheduleId: { type: 'string', description: 'The schedule ID to delete' },
       },
@@ -178,6 +182,7 @@ const TOOLS = [
     description: 'Submit feedback about the platform (bugs, improvements, observations). Feedback is stored in a central database and consolidated by the eval pipeline. Use when a user explicitly reports an issue or when you observe a platform problem worth tracking.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         type: {
           type: 'string',
@@ -301,7 +306,11 @@ async function handleRequest(req) {
     case 'tools/call': {
       const { name, arguments: args } = params
       try {
-        const result = await handleTool(name, args || {})
+        const toolArgs = args === undefined ? {} : args
+        const tool = TOOLS.find((t) => t.name === name)
+        const error = tool && validateArgs(name, toolArgs, tool.inputSchema)
+        if (error) throw new Error(error)
+        const result = await handleTool(name, toolArgs)
         return jsonrpcResponse(id, {
           content: [{ type: 'text', text: JSON.stringify(result) }],
         })
@@ -318,6 +327,8 @@ async function handleRequest(req) {
       return jsonrpcError(id, -32601, `Method not found: ${method}`)
   }
 }
+
+// --- stdio transport ---
 
 const rl = createInterface({ input: process.stdin, terminal: false })
 
