@@ -851,6 +851,8 @@ const TOOLS = [
         title: { type: 'string', description: 'Snippet title' },
         content: { type: 'string', description: 'Snippet content' },
         filetype: { type: 'string', description: 'File type (default: "text"). Common: javascript, python, json, markdown, csv' },
+        channel: { type: 'string', description: 'Channel ID (default: current channel)' },
+        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
       },
       required: ['title', 'content'],
     },

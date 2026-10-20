@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 process.env.SLACK_CHANNEL = 'C_DEFAULT'
+process.env.SLACK_THREAD_TS = '1.1'
 process.env.SLACK_BOT_TOKEN = 'xoxb-test'
 process.env.TEAMVIBE_API_URL = 'https://api.invalid'
 process.env.TEAMVIBE_POLLER_TOKEN = 'test-token'
@@ -19,6 +20,9 @@ const realFetch = globalThis.fetch
 let calls = []
 globalThis.fetch = async (url, opts) => {
   calls.push({ url, opts })
+  if (url.endsWith('files.getUploadURLExternal')) {
+    return { ok: true, json: async () => ({ ok: true, upload_url: 'https://upload.invalid/snippet', file_id: 'F_SNIPPET' }) }
+  }
   return { ok: true, json: async () => ({ ok: true, channel: 'C_DEFAULT', ts: '1.1', items: [] }) }
 }
 
@@ -62,6 +66,30 @@ try {
     await rejected('unknown tool unchanged', 'not_a_tool', {}, 'Unknown tool: not_a_tool')
 
     if (server === 'slack') {
+      const payloadFor = (method) => {
+        const call = calls.find((c) => c.url.endsWith(method))
+        if (!call) return undefined
+        return call.opts.headers['Content-Type'] === 'application/json'
+          ? JSON.parse(call.opts.body)
+          : Object.fromEntries(new URLSearchParams(call.opts.body))
+      }
+      for (const explicit of [true, false]) {
+        calls = []
+        const destination = explicit ? { channel: 'C_TARGET', thread_ts: '2.2' } : {}
+        const response = await request('upload_snippet', { title: 'Example', content: 'hello', ...destination })
+        const label = explicit ? 'explicit' : 'default'
+        ok(`slack: upload_snippet ${label} destination succeeds`, !response.result.isError)
+        ok(`slack: upload_snippet ${label} uploads content`, calls.some((c) => c.url === 'https://upload.invalid/snippet' && c.opts.body === 'hello'))
+        const complete = payloadFor('files.completeUploadExternal')
+        ok(`slack: upload_snippet ${label} forwards channel`, complete?.channel_id === (explicit ? 'C_TARGET' : 'C_DEFAULT'))
+        ok(`slack: upload_snippet ${label} forwards thread_ts`, complete?.thread_ts === (explicit ? '2.2' : '1.1'))
+      }
+      calls = []
+      const sent = await request('send_message', { text: 'x', channel: 'C_TARGET', thread_ts: '2.2' })
+      ok('slack: send_message explicit destination succeeds', !sent.result.isError)
+      const posted = payloadFor('chat.postMessage')
+      ok('slack: send_message forwards explicit channel', posted?.channel === 'C_TARGET')
+      ok('slack: send_message forwards explicit thread_ts', posted?.thread_ts === '2.2')
       await rejected('modal missing view', 'send_message', { text: 'x', modals: [{}] }, 'Missing required parameter `modals[0].view` for send_message')
       calls = []
       const response = await request('send_message', { text: 'x', thread_ts: null })
