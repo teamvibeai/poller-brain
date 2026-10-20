@@ -73,45 +73,93 @@ process.stdin.on("end", () => {
     return;
   }
 
-  // Classify operators only in executable shell context. Collect a candidate
-  // first; an uncertain/unclosed construct anywhere makes this scan fail open.
-  // This is a lexer, not a Bash grammar/evaluator. Parameter/arithmetic data
-  // and heredoc bodies are opaque; executable substitutions are scanned anew.
-  function hasBackground(source) {
+  // This lexer classifies command-list operators, not shell evaluation. Literal
+  // spans suppress bare ampersands but still inspect executable substitutions.
+  // A reader commits its result only after finding its own balanced closer.
+  function hasBackground(source, dataOnly = false) {
     const SQ = String.fromCharCode(39);
     let i = 0;
     let background = false;
     const uncertain = () => { throw new Error("Unclassified shell syntax"); };
     const starts = (text) => source.startsWith(text, i);
-    const arrayWord = /[A-Za-z_][A-Za-z0-9_]*(?:\+?=\(|\[)/y;
     const boundary = (c) => c === undefined || /[\s;&|<>()]/.test(c);
-    const escape = () => {
+    const keyword = (text) => starts(text) && boundary(source[i + text.length]);
+
+    // Form logical tokens before recognizing operators/openers. Stop before
+    // quotes and physical newlines: their readers own continuation handling,
+    // especially literal single quotes and quoted-delimiter heredoc bodies.
+    // Stop at # too: shell comments end at the physical newline.
+    let logicalEnd = 0;
+    function logical() {
+      if (i < logicalEnd) return;
+      let p = i;
+      while (p < source.length && ![SQ, "\"", "`", "#", "\n"].includes(source[p])) {
+        if (source[p] === "\\") {
+          if (source[p + 1] === "\n") {
+            source = source.slice(0, p) + source.slice(p + 2);
+            continue;
+          }
+          p += 2;
+        } else p++;
+      }
+      logicalEnd = p;
+    }
+    function escape() {
       if (i + 1 >= source.length) uncertain();
       i += 2;
-    };
+    }
 
-    function quote(kind, inspect) {
-      i++; // Opening quote (the dollar prefix, if any, is already consumed).
+    // Recover only the unresolved word/construct up to the next list segment.
+    // Quotes still protect separators. In particular an unfinished quote cannot
+    // turn its literal text into an executable command on recovery.
+    function recover(start) {
+      i = start;
       while (i < source.length) {
+        const c = source[i];
+        if (c === "\\") { i = Math.min(i + 2, source.length); continue; }
+        if (c === SQ || c === "\"" || c === "`") {
+          const q = source[i++];
+          while (i < source.length && source[i] !== q) {
+            if (q !== SQ && source[i] === "\\") i++;
+            i++;
+          }
+          if (i < source.length) i++;
+          continue;
+        }
+        if (/[\n;|]/.test(c) || starts("&&")) return;
+        i++;
+      }
+    }
+    function guarded(read) {
+      const start = i;
+      const saved = background;
+      try { read(); }
+      catch {
+        background = saved;
+        recover(start);
+      }
+    }
+
+    function quote(kind) {
+      i++;
+      while (i < source.length) {
+        if (kind === "double") logical();
         if (source[i] === (kind === "double" ? "\"" : SQ)) { i++; return; }
         if (kind !== "single" && source[i] === "\\") { escape(); continue; }
-        if (kind === "double" && expansion(inspect, true)) continue;
-        if (kind === "double" && source[i] === "`") { backtick(inspect); continue; }
+        if (kind === "double" && expansion(true)) continue;
+        if (kind === "double" && source[i] === "`") { backtick(); continue; }
         i++;
       }
       uncertain();
     }
-
-    function backtick(inspect) {
+    function backtick() {
       i++;
       let body = "";
-      // Legacy substitution removes these backslashes before parsing its body.
-      // Its terminating backtick is found before the inner shell parses quotes.
+      // Backtick substitution removes these escapes before parsing its body.
       while (i < source.length) {
         if (source[i] === "`") {
           i++;
-          const found = hasBackground(body);
-          if (inspect && found) background = true;
+          if (hasBackground(body)) background = true;
           return;
         }
         if (source[i] === "\\") {
@@ -127,78 +175,140 @@ process.stdin.on("end", () => {
       }
       uncertain();
     }
-
-    function parameter() {
+    function parameter(quoted) {
       i += 2;
-      let braces = 1;
       while (i < source.length) {
-        if (source[i] === "\\") { escape(); continue; }
-        if (source[i] === SQ) { quote("single", false); continue; }
-        if (source[i] === "\"") { quote("double", false); continue; }
-        if (expansion(false)) continue;
-        if (source[i] === "`") { backtick(false); continue; }
-        if (source[i] === "{") braces++;
-        if (source[i++] === "}" && --braces === 0) return;
-      }
-      uncertain();
-    }
-
-    function arithmetic(prefix) {
-      i += prefix;
-      let parentheses = 0;
-      while (i < source.length) {
-        if (!parentheses && starts("))")) { i += 2; return; }
-        if (source[i] === "\\") { escape(); continue; }
-        if (source[i] === SQ) { quote("single", false); continue; }
-        if (source[i] === "\"") { quote("double", false); continue; }
-        if (expansion(false)) continue;
-        if (source[i] === "`") { backtick(false); continue; }
-        if (source[i] === "(") parentheses++;
-        if (source[i] === ")" && --parentheses < 0) uncertain();
+        logical();
+        if (source[i] === "}") { i++; return; }
+        if (wordPart(quoted)) continue;
+        // A bare { in a default value does not nest parameter expansions.
         i++;
       }
       uncertain();
     }
-
-    function expansion(inspect, quoted = false) {
-      if (!quoted && starts("$" + SQ)) { i++; quote("ansi", false); }
-      else if (!quoted && starts("$\"")) { i++; quote("double", inspect); }
-      else if (starts("${")) parameter();
+    function arithmetic(prefix, legacy = false) {
+      i += prefix;
+      let depth = 0;
+      while (i < source.length) {
+        logical();
+        if (!depth && starts(legacy ? "]" : "))")) { i += legacy ? 1 : 2; return; }
+        if (wordPart()) continue;
+        if (source[i] === (legacy ? "[" : "(")) depth++;
+        if (source[i] === (legacy ? "]" : ")") && --depth < 0) uncertain();
+        i++;
+      }
+      uncertain();
+    }
+    function expansion(quoted = false) {
+      if (!quoted && starts("$" + SQ)) { i++; quote("ansi"); }
+      else if (!quoted && starts("$\"")) { i++; quote("double"); }
+      else if (starts("${")) parameter(quoted);
       else if (starts("$((")) arithmetic(3);
-      else if (starts("$(")) { i += 2; shell(")", inspect); }
-      else if (starts("$[")) uncertain(); // Legacy arithmetic is not classified.
+      else if (starts("$[")) arithmetic(2, true);
+      else if (starts("$(")) { i += 2; shell(")"); }
       else return false;
       return true;
     }
-
-    function conditional(inspect) {
+    function wordPart(quoted = false) {
+      if (source[i] === "\\") escape();
+      else if (!quoted && source[i] === SQ) quote("single");
+      else if (source[i] === "\"") quote("double");
+      else if (expansion(quoted)) { /* reader consumed it */ }
+      else if (source[i] === "`") backtick();
+      else if (!quoted && (source[i] === "<" || source[i] === ">") && source[i + 1] === "(") {
+        i += 2; shell(")");
+      } else return false;
+      return true;
+    }
+    function conditional() {
       i += 2;
       while (i < source.length) {
+        logical();
+        // ]] is a reserved word: embedded regex/pattern brackets are data.
         if (starts("]]") && /\s/.test(source[i - 1]) && boundary(source[i + 2])) { i += 2; return; }
-        // Regex character classes can contain apparent closing brackets.
-        if (starts("=~")) uncertain();
-        if (source[i] === "\\") { escape(); continue; }
-        if (source[i] === SQ) { quote("single", false); continue; }
-        if (source[i] === "\"") { quote("double", inspect); continue; }
-        if (expansion(inspect)) continue;
-        if (source[i] === "`") { backtick(inspect); continue; }
+        if (wordPart()) continue;
+        i++;
+      }
+      uncertain();
+    }
+    function opaque(close) {
+      // Arrays, subscripts and extended globs are words, not command lists.
+      // Their bare & may even be invalid Bash; it must never imply a launch.
+      i++;
+      while (i < source.length) {
+        logical();
+        if (source[i] === close) { i++; return; }
+        if (wordPart()) continue;
+        if (source[i] === "(") { opaque(")"); continue; }
+        if (source[i] === "[") { opaque("]"); continue; }
         i++;
       }
       uncertain();
     }
 
+    function ansiDelimiter() {
+      i += 2;
+      let value = "";
+      let known = true;
+      const escapes = { a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
+      while (i < source.length) {
+        if (source[i] === SQ) { i++; return { value: value.split("\0")[0], known }; }
+        if (source[i] !== "\\") { value += source[i++]; continue; }
+        i++;
+        const c = source[i++];
+        if (c === undefined) uncertain();
+        if (c === "\n") { value += "\\\n"; continue; }
+        if (c === "\\" || c === SQ || c === "\"") { value += c; continue; }
+        if (Object.hasOwn(escapes, c)) { value += escapes[c]; continue; }
+        const pattern = c === "x" ? /^[0-9a-fA-F]{1,2}/ : c === "u" ? /^[0-9a-fA-F]{1,4}/ : c === "U" ? /^[0-9a-fA-F]{1,8}/ : /[0-7]/.test(c) ? /^[0-7]{1,3}/ : null;
+        if (pattern) {
+          const offset = /[0-7]/.test(c) ? i - 1 : i;
+          const digits = pattern.exec(source.slice(offset));
+          if (!digits) { value += "\\" + c; continue; }
+          const code = parseInt(digits[0], /[0-7]/.test(c) ? 8 : 16);
+          // Non-ASCII escapes and invalid Unicode need byte/locale semantics.
+          // Keep their entire heredoc opaque rather than guess a terminator.
+          if (code > 127) known = false;
+          else value += String.fromCodePoint(code);
+          i = offset + digits[0].length;
+          continue;
+        }
+        if (c === "c") {
+          const control = source[i++];
+          if (control === undefined) uncertain();
+          const code = control === "?" ? 127 : control.toUpperCase().charCodeAt(0) & 31;
+          if (control === "\\") known = false;
+          else value += String.fromCharCode(code);
+          continue;
+        }
+        value += "\\" + c;
+      }
+      uncertain();
+    }
     function delimiter() {
       let value = "";
       let word = false;
-      while (i < source.length && !/[\s<>&|;()]/.test(source[i])) {
+      let quoted = false;
+      let known = true;
+      while (i < source.length) {
+        logical();
+        if (/[\s<>&|;()]/.test(source[i])) break;
         word = true;
+        if (starts("$" + SQ)) {
+          quoted = true;
+          const decoded = ansiDelimiter();
+          value += decoded.value;
+          known = known && decoded.known;
+          continue;
+        }
+        if (starts("$\"")) { quoted = true; i++; }
         if (source[i] === SQ || source[i] === "\"") {
+          quoted = true;
           const kind = source[i++];
           while (i < source.length && source[i] !== kind) {
             if (kind === "\"" && source[i] === "\\") {
               if (i + 1 >= source.length) uncertain();
               const next = source[i + 1];
-              // In double quotes, other backslashes survive quote removal.
               if ("$`\"\\\n".includes(next)) {
                 if (next !== "\n") value += next;
                 i += 2;
@@ -210,118 +320,191 @@ process.stdin.on("end", () => {
           if (i === source.length) uncertain();
           i++;
         } else if (source[i] === "\\") {
+          quoted = true;
           if (i + 1 >= source.length) uncertain();
-          if (source[i + 1] !== "\n") value += source[i + 1];
+          value += source[i + 1];
           i += 2;
         } else {
-          // Expansion-like delimiter words have special Bash parsing rules;
-          // ANSI-C/localized delimiter decoding is deliberately unsupported.
-          if (source[i] === "$" || source[i] === "`") uncertain();
+          // Bash does not expand an ordinary $ in a delimiter word.
           value += source[i++];
         }
       }
       if (!word) uncertain();
-      return value;
+      return { value, quoted, known };
     }
-
     function bodies(heredocs) {
-      for (const { value, stripTabs } of heredocs) {
+      for (const { value, quoted, known, stripTabs } of heredocs) {
+        if (!known) uncertain();
         let terminated = false;
+        let body = "";
         while (i < source.length) {
-          const newline = source.indexOf("\n", i);
-          const end = newline < 0 ? source.length : newline;
-          const line = source.slice(i, end);
-          i = newline < 0 ? source.length : end + 1;
+          let line = "";
+          let continued;
+          do {
+            const newline = source.indexOf("\n", i);
+            const end = newline < 0 ? source.length : newline;
+            let physical = source.slice(i, end);
+            i = newline < 0 ? source.length : end + 1;
+            const slashes = /\\+$/.exec(physical)?.[0].length || 0;
+            continued = !quoted && newline >= 0 && slashes % 2 === 1;
+            if (continued) physical = physical.slice(0, -1);
+            line += physical;
+          } while (continued && i < source.length);
           if ((stripTabs ? line.replace(/^\t+/, "") : line) === value) {
             terminated = true;
             break;
           }
+          body += line + "\n";
         }
         if (!terminated) uncertain();
+        if (!quoted && hasBackground(body, true)) background = true;
       }
       heredocs.length = 0;
     }
 
-    function shell(stop = "", inspect = true) {
+    function caseStatement() {
+      i += 4;
+      // The selector is a word; substitutions in it can execute.
+      while (i < source.length) {
+        logical();
+        if (keyword("in") && /\s/.test(source[i - 1])) { i += 2; break; }
+        if (wordPart()) continue;
+        i++;
+      }
+      while (i < source.length) {
+        logical();
+        if (/\s/.test(source[i])) { i++; continue; }
+        if (source[i] === "#") {
+          const newline = source.indexOf("\n", i);
+          i = newline < 0 ? source.length : newline;
+          continue;
+        }
+        if (keyword("esac")) { i += 4; return; }
+        if (source[i] === "(") i++; // Optional pattern opener.
+        let closed = false;
+        while (i < source.length) {
+          logical();
+          if (source[i] === ")") { i++; closed = true; break; }
+          if (wordPart()) continue;
+          if ("?*+@!".includes(source[i]) && source[i + 1] === "(") { i++; opaque(")"); continue; }
+          i++; // Pattern metacharacters, including &, are data.
+        }
+        if (!closed) uncertain();
+        shell("case");
+        if (keyword("esac")) { i += 4; return; }
+        if (starts(";;&")) i += 3;
+        else if (starts(";;") || starts(";&")) i += 2;
+        else uncertain();
+      }
+      uncertain();
+    }
+    function shell(stop = "") {
       const heredocs = [];
       let word = false;
+      let commandStart = true;
       while (i < source.length) {
+        logical();
+        if (i >= source.length) break;
         const c = source[i];
-        // Continuations inside an operator/opener require token reassembly.
-        // Do not guess whether the fragments form &&, <<, $((, an extglob, etc.
-        if (/[$&|<>()\[\]{}?*+@!]/.test(c) && source.startsWith("\\\n", i + 1)) uncertain();
-        if (stop && c === stop && (stop !== "}" || (!word && boundary(source[i + 1])))) {
+        if (stop === "case" && (starts(";;") || starts(";&") || (!word && commandStart && keyword("esac")))) {
+          if (heredocs.length) uncertain();
+          return;
+        }
+        if (stop && stop !== "case" && c === stop && (stop !== "}" || (!word && boundary(source[i + 1])))) {
           if (heredocs.length) uncertain();
           i++;
           return;
-        }
-        if (c === "\\") {
-          const continuation = source[i + 1] === "\n";
-          escape();
-          if (!continuation) word = true;
-          continue;
         }
         if (c === "#" && !word) {
           const newline = source.indexOf("\n", i);
           i = newline < 0 ? source.length : newline;
           continue;
         }
-        if (c === SQ) { quote("single", false); word = true; continue; }
-        if (c === "\"") { quote("double", inspect); word = true; continue; }
-        if (expansion(inspect)) { word = true; continue; }
-        if (c === "`") { backtick(inspect); word = true; continue; }
+        if (c === "\\" || c === SQ || c === "\"" || c === "$" || c === "`" || ((c === "<" || c === ">") && source[i + 1] === "(")) {
+          let consumed = false;
+          guarded(() => { consumed = wordPart(); });
+          if (consumed) { word = true; commandStart = false; continue; }
+          // A dollar sign with no expansion is a normal word character.
+        }
         if (!word) {
-          // Array assignments/subscripts need Bash word/assignment grammar.
-          arrayWord.lastIndex = i;
-          if (arrayWord.test(source)) uncertain();
+          const assignment = /^[A-Za-z_][A-Za-z0-9_]*(?:\+?=\(|\[)/.exec(source.slice(i));
+          if (assignment) {
+            i += assignment[0].length - 1;
+            guarded(() => opaque(source[i] === "(" ? ")" : "]"));
+            word = true;
+            continue;
+          }
+          if (commandStart && keyword("case")) { guarded(caseStatement); word = false; continue; }
+          // These reserved words introduce another command position.
+          const reserved = /^(?:time(?:[ \t]+-p)?|if|then|elif|else|while|until|do|!)(?=\s)/.exec(source.slice(i));
+          if (commandStart && reserved) { i += reserved[0].length; continue; }
         }
-        // Extended-glob parentheses can contain literal shell metacharacters.
-        if ("?*+@!".includes(c) && source[i + 1] === "(") uncertain();
+        if ("?*+@!".includes(c) && source[i + 1] === "(") {
+          i++; guarded(() => opaque(")")); word = true; continue;
+        }
         if (!word && c === "{" && boundary(source[i + 1])) {
-          i++; shell("}", inspect); word = false; continue;
+          guarded(() => { i++; shell("}"); }); word = false; continue;
         }
-        if (!word && c === "}" && boundary(source[i + 1])) uncertain();
-        if (!word && starts("[[") && /\s/.test(source[i + 2] || "")) { conditional(inspect); continue; }
-        if (starts("((")) { arithmetic(2); word = false; continue; }
-        if (c === "(") { i++; shell(")", inspect); word = false; continue; }
-        if (c === ")") uncertain(); // Includes case patterns: needs full grammar.
-        if (starts("<<<")) {
-          // The following word uses the same quote/expansion readers. Literal
-          // ampersands inside it stay data; an unquoted & still ends the word.
-          i += 3; word = false; continue;
+        if (!word && starts("[[") && /\s/.test(source[i + 2] || "")) {
+          guarded(conditional); word = false; commandStart = false; continue;
         }
+        if (starts("((")) { guarded(() => arithmetic(2)); word = false; commandStart = false; continue; }
+        if (c === "(") { guarded(() => { i++; shell(")"); }); word = false; commandStart = false; continue; }
+        if (c === ")" || (!word && c === "}" && boundary(source[i + 1]))) {
+          // Unmatched closers are unresolved only in this segment.
+          i++; recover(i); word = false; continue;
+        }
+        if (starts("<<<")) { i += 3; word = false; continue; }
         if (starts("<<")) {
-          i += 2;
-          const stripTabs = source[i] === "-";
-          if (stripTabs) i++;
-          while (source[i] === " " || source[i] === "\t") i++;
-          heredocs.push({ value: delimiter(), stripTabs });
+          guarded(() => {
+            i += 2;
+            const stripTabs = source[i] === "-";
+            if (stripTabs) i++;
+            while (source[i] === " " || source[i] === "\t") i++;
+            heredocs.push({ ...delimiter(), stripTabs });
+          });
           word = true;
           continue;
         }
-        // Consume the other ampersand-bearing operators before a lone &.
         const operator = /^(?:&&|&>>?|[<>]&|\|&)/.exec(source.slice(i, i + 3));
-        if (operator) { i += operator[0].length; word = false; continue; }
-        if (c === "&" && inspect) background = true;
+        if (operator) {
+          i += operator[0].length; word = false;
+          if (operator[0] === "&&" || operator[0] === "|&") commandStart = true;
+          continue;
+        }
+        if (c === "&") background = true;
         i++;
-        if (c === "\n") bodies(heredocs);
+        if (c === "\n" && heredocs.length) {
+          // A missing terminator makes the remaining body literal/unknown;
+          // it cannot erase an already classified command-list operator.
+          try { bodies(heredocs); }
+          catch { i = source.length; }
+          heredocs.length = 0;
+        }
+        if (/[\n;&|]/.test(c)) commandStart = true;
+        else if (!/\s/.test(c)) commandStart = false;
         word = !/[\s;&|<>()]/.test(c);
       }
       if (stop || heredocs.length) uncertain();
     }
 
-    shell();
+    if (dataOnly) {
+      // Heredoc quotes and bare & are literal. Only executable expansions and
+      // backticks enter shell context; backslash can quote their opening byte.
+      while (i < source.length) {
+        if (source[i] === "\\" && "$`\\".includes(source[i + 1] || "\0")) { i += 2; continue; }
+        if (source[i] === "$") { guarded(() => { if (!expansion(true)) i++; }); continue; }
+        if (source[i] === "`") { guarded(backtick); continue; }
+        i++;
+      }
+    } else {
+      // No outer catch may erase detections from earlier complete segments.
+      try { shell(); } catch { /* Incomplete queued heredoc at EOF. */ }
+    }
     return background;
   }
 
-  let background = false;
-  try {
-    background = hasBackground(command);
-  } catch {
-    // Unknown syntax, unclosed contexts/heredocs, or excessive nesting: allow.
-    // Earlier #490 run_in_background and setsid/disown checks remain intact.
-    process.exit(0);
-  }
+  const background = hasBackground(command);
   if (background) {
     deny(
       "Plain shell backgrounding (cmd &, including nohup cmd &) dies with " +
