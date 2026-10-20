@@ -62,6 +62,15 @@ never happens. The hook also blocks plain shell backgrounding such as `cmd &`, i
 `nohup cmd &` (poller-brain#546). Known platform gap behind this whole trap, not yet fixed:
 `teamvibeai/teamvibe.ai#106`.
 
+**Known limits:** the hook denies command-position `coproc` as backgrounding, but
+allows EOF-terminated expandable heredoc substitutions, exotic ANSI-C/Unicode
+heredoc delimiters, and syntax the lexer cannot parse (including unmodeled function
+compound bodies) by design. Unclassified array words containing bare brackets also
+allow their segment, potentially missing executable
+substitutions in sibling elements. The scanner denies only when certain so valid
+foreground work is not blocked; the Stop hook and this background-task skill remain
+the real safety net.
+
 ## What you get back
 
 All output goes to **this thread by default** — the one the poller stamped as

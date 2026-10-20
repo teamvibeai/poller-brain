@@ -154,6 +154,115 @@ const rereview = [
   ["re-review 36", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf '%s\\n' $'more\\'s & fine'"}}],
 ];
 
+// Final re-review: all 60 rows; owner-approved fail-open limits stay visible.
+const finalReview = [
+  ["final review 1", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" a\\\n\\&b"}}],
+  ["final review 2", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"one\\\n & two\""}}],
+  ["final review 3", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf '%s' 'one\\\n & two'"}}],
+  ["final review 4", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf '%s' $'one\\\n & two'"}}],
+  ["final review 5", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf one &\\\n& printf two"}}],
+  ["final review 6", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf one |\\\n& cat"}}],
+  ["final review 7", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<DOC\nalpha\\\nDOC\nbeta & gamma\nDOC\nprintf tail"}}],
+  ["final review 8", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<'DOC'\nalpha\\\nDOC\nprintf '%s' 'after & literal'"}}],
+  ["final review 9", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<\"D\"OC\n$(printf fake &)\\\nDOC\nprintf tail"}}],
+  ["final review 10", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<DOC\n$(printf \"%s\" \"inner & literal\")\\\ntail & data\nDOC\nprintf tail"}}],
+  ["final review 11", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<DOC\nfirst & line\nDOC\n[[ x == x && y == y ]] && printf tail"}}],
+  ["final review 12", "allow", {"tool_name": "Bash", "tool_input": {"command": "case b in a|b) printf one ;;& b|c) printf two ;& *) printf three;; esac"}}],
+  ["final review 13", "allow", {"tool_name": "Bash", "tool_input": {"command": "case \"a&b\" in (a\\&b|other) printf \"%s\" \"yes & done\";; (*) :;; esac"}}],
+  ["final review 14", "allow", {"tool_name": "Bash", "tool_input": {"command": "arr=(\"$( (printf \"%s\" \"x & y\") )\" \"$(( (3 & 1) + 2 ))\"); printf \"%s\" \"${arr[@]}\""}}],
+  ["final review 15", "allow", {"tool_name": "Bash", "tool_input": {"command": "arr+=(\"paren ( inner )\" \"$(printf \"%s\" \"$(printf \"%s\" \"a & b\")\")\"); :"}}],
+  ["final review 16", "allow", {"tool_name": "Bash", "tool_input": {"command": "[[ x == x && ( y == y || z == q ) ]] && printf \"%s\" \"ok & done\""}}],
+  ["final review 17", "allow", {"tool_name": "Bash", "tool_input": {"command": "[[ \"$(printf \"%s\" \"x & y\")\" == \"x & y\" || a == b ]]"}}],
+  ["final review 18", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"$(( ( $(printf 7) & $(printf 3) ) + $(printf 2) ))\""}}],
+  ["final review 19", "allow", {"tool_name": "Bash", "tool_input": {"command": "f() { case b in a|b) printf \"%s\" \"f & ok\";; esac; }; f"}}],
+  ["final review 20", "allow", {"tool_name": "Bash", "tool_input": {"command": "function f { [[ x == x && y == y ]]; printf \"%s\" \"f & ok\"; }; f"}}],
+  ["final review 21", "allow", {"tool_name": "Bash", "tool_input": {"command": "while IFS= read -r line; do printf \"%s\" \"$line\"; done <<DOC\na & b\\\nnext\nDOC"}}],
+  ["final review 22", "allow", {"tool_name": "Bash", "tool_input": {"command": "while read -r line; do printf '%s' \"$line\"; done <<'DOC'\n$(printf fake &)\\\nDOC\nprintf after"}}],
+  ["final review 23", "allow", {"tool_name": "Bash", "tool_input": {"command": "select answer in \"a & b\" other; do printf \"%s\" \"$answer\"; break; done <<< 1"}}],
+  ["final review 24", "allow", {"tool_name": "Bash", "tool_input": {"command": "until [[ x == y || a == b ]]; do printf \"%s\" \"a & b\"; break; done"}}],
+  ["final review 25", "allow", {"tool_name": "Bash", "tool_input": {"command": "{ printf \"%s\" \"group & data\"; } > /dev/null"}}],
+  ["final review 26", "allow", {"tool_name": "Bash", "tool_input": {"command": "time printf \"%s\" \"timed & data\""}}],
+  ["final review 27", "allow", {"tool_name": "Bash", "tool_input": {"command": "! printf \"%s\" \"negated & data\""}}],
+  ["final review 28", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"pipe & data\" |& cat"}}],
+  ["final review 29", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf first && { printf \"%s\" \"group & data\"; }"}}],
+  ["final review 30", "allow", {"tool_name": "Bash", "tool_input": {"command": "trap 'printf \"%s\" \"trap & text\"' EXIT; printf before"}}],
+  ["final review 31", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf '%s' \"a \\& b\""}}],
+  ["final review 32", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"$(case b in a|b) printf 'x & y' ;;& b) printf z;; esac)\""}}],
+  ["final review 33", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<ONE <<'TWO'\n$(printf \"%s\" \"a & b\")\nONE\n$(printf fake &)\\\nTWO\nprintf after"}}],
+  ["final review 34", "allow", {"tool_name": "Bash", "tool_input": {"command": "for ((i=0; i<2; i++)); do printf \"%s\" \"$((i & 1))\"; done"}}],
+  ["final review 35", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"${missing:-$(printf \"%s\" \"a & b\")}\""}}],
+  ["final review 36", "allow", {"tool_name": "Bash", "tool_input": {"command": "f() case x in x) : ;& *) :;; esac; f"}}],
+  ["final review 37", "allow", {"tool_name": "Bash", "tool_input": {"command": "function f case x in x) : ;& *) :;; esac; f"}}],
+  ["final review 38", "allow", {"tool_name": "Bash", "tool_input": {"command": "items=(prefix[ $(case x in x) printf ok ;& *) printf done;; esac)); printf \"%s\" \"${items[@]}\""}}],
+  ["final review 39", "allow", {"tool_name": "Bash", "tool_input": {"command": "items=(prefix[ $(printf \"%s\" \"left & right\") $(case x in x) printf ok ;;& *) printf done;; esac)); printf \"%s\" \"${items[@]}\""}}],
+  ["final review 40", "deny", {"tool_name": "Bash", "tool_input": {"command": "sleep 0.02 &\\\nwait"}}],
+  ["final review 41", "deny", {"tool_name": "Bash", "tool_input": {"command": "[[ x == x && y == y ]]; { sleep 0.02 & wait; }"}}],
+  ["final review 42", "deny", {"tool_name": "Bash", "tool_input": {"command": "case b in a|b) sleep 0.02 & wait ;;& b) : ;& *) :;; esac"}}],
+  ["final review 43", "deny", {"tool_name": "Bash", "tool_input": {"command": "arr=(\"$( (sleep 0.02 & wait; printf x) )\"); :"}}],
+  ["final review 44", "deny", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"$(( ( $(sleep 0.02 & wait; printf 7) & 3 ) + 2 ))\""}}],
+  ["final review 45", "deny", {"tool_name": "Bash", "tool_input": {"command": "cat <<DOC\nprefix\\\n$(sleep 0.02 & wait; printf done)\nDOC"}}],
+  ["final review 46", "deny", {"tool_name": "Bash", "tool_input": {"command": "cat <<'DOC'\nliteral &\\\nDOC\nsleep 0.02 & wait"}}],
+  ["final review 47", "deny", {"tool_name": "Bash", "tool_input": {"command": "f() { sleep 0.02 & wait; }; f"}}],
+  ["final review 48", "deny", {"tool_name": "Bash", "tool_input": {"command": "function f { sleep 0.02 & wait; }; f"}}],
+  ["final review 49", "deny", {"tool_name": "Bash", "tool_input": {"command": "while read -r line; do sleep 0.02 & wait; done <<DOC\nx\nDOC"}}],
+  ["final review 50", "deny", {"tool_name": "Bash", "tool_input": {"command": "select answer in x; do sleep 0.02 & wait; break; done <<< 1"}}],
+  ["final review 51", "deny", {"tool_name": "Bash", "tool_input": {"command": "until false; do sleep 0.02 & wait; break; done"}}],
+  ["final review 52", "deny", {"tool_name": "Bash", "tool_input": {"command": "printf x |& cat & wait"}}],
+  ["final review 53", "deny", {"tool_name": "Bash", "tool_input": {"command": "printf first && { sleep 0.02 & wait; }"}}],
+  ["final review 54", "deny", {"tool_name": "Bash", "tool_input": {"command": "coproc sleep 0.02; wait"}}],
+  ["final review 55", "deny", {"tool_name": "Bash", "tool_input": {"command": "coproc WORKER { sleep 0.02; }; wait"}}],
+  ["final review 56", "deny", {"tool_name": "Bash", "tool_input": {"command": "cat <<DOC\n`(sleep 0.02 & wait; printf x)`\nDOC"}}],
+  ["final review 57", "deny", {"tool_name": "Bash", "tool_input": {"command": "[[ \"$(sleep 0.02 & wait; printf x)\" == x && y == y ]]"}}],
+  ["final review 58", "allow", {"tool_name": "Bash", "tool_input": {"command": "items=(prefix[ \"$(sleep 0.02 & wait; printf live)\"); printf \"%s\" \"${items[@]}\""}}, "known-limit"],
+  ["final review 59", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<DOC\n$(sleep 0.02 & wait; printf live)\n"}}, "known-limit"],
+  ["final review 60", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<$'\\u00e9'\nbody\né\nsleep 0.02 & p=$!; kill -0 \"$p\" && printf live; wait"}}, "known-limit"],
+];
+
+// Boundaries for the final three code fixes; commands are never executed.
+const finalRegression = [
+  ["function incomplete case", "allow", {"tool_name": "Bash", "tool_input": {"command": "f() case x in x) : ;& *) :;;"}}],
+  ["function keyword incomplete case", "allow", {"tool_name": "Bash", "tool_input": {"command": "function f case x in x) : ;& *) :;;"}}],
+  ["function incomplete nested case", "allow", {"tool_name": "Bash", "tool_input": {"command": "f() { case x in x) : ;& *) :;;"}}],
+  ["function keyword incomplete nested case", "allow", {"tool_name": "Bash", "tool_input": {"command": "function f { case x in x) : ;& *) :;;"}}],
+  ["function incomplete retains prior launch", "deny", {"tool_name": "Bash", "tool_input": {"command": "sleep 1 & f() case x in x) : ;& *) :;;"}}],
+  ["function unclassified body", "allow", {"tool_name": "Bash", "tool_input": {"command": "function f unknown &"}}, "known-limit"],
+  ["function complete retains later launch", "deny", {"tool_name": "Bash", "tool_input": {"command": "f() case x in x) : ;& *) :;; esac; sleep 1 & wait"}}],
+  ["function incomplete array body", "allow", {"tool_name": "Bash", "tool_input": {"command": "f() { items=(prefix[ \"$(case x in x) : ;& *) :;; esac)\");"}}],
+  ["function parentheses spacing", "allow", {"tool_name": "Bash", "tool_input": {"command": "f ( ) case x in x) : ;;& *) :;; esac; f"}}],
+  ["function keyword parentheses", "allow", {"tool_name": "Bash", "tool_input": {"command": "function f() case x in x) : ;& *) :;; esac; f"}}],
+  ["function newline body", "allow", {"tool_name": "Bash", "tool_input": {"command": "f()\ncase x in x) : ;& *) :;; esac; f"}}],
+  ["function nested substitution", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"$(f() case x in x) : ;& *) :;; esac; f)\""}}],
+  ["function case background", "deny", {"tool_name": "Bash", "tool_input": {"command": "f() case x in x) sleep 1 & wait ;& *) :;; esac; f"}}],
+  ["function keyword case background", "deny", {"tool_name": "Bash", "tool_input": {"command": "function f case x in x) sleep 1 & wait ;;& *) :;; esac; f"}}],
+  ["function subshell case", "allow", {"tool_name": "Bash", "tool_input": {"command": "f() (case x in x) : ;& *) :;; esac); f"}}],
+  ["function loop case", "allow", {"tool_name": "Bash", "tool_input": {"command": "function f while true; do case x in x) : ;& *) :;; esac; break; done; f"}}],
+  ["function incomplete compound", "allow", {"tool_name": "Bash", "tool_input": {"command": "f() { sleep 1 &"}}],
+  ["function keyword incomplete compound", "allow", {"tool_name": "Bash", "tool_input": {"command": "function f { sleep 1 &"}}],
+  ["function literal argument", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" function f coproc"}}],
+  ["array brackets case sibling", "allow", {"tool_name": "Bash", "tool_input": {"command": "items=(prefix[ \"$(case x in x) : ;& *) :;; esac)\"); :"}}],
+  ["array bracket independent prior launch", "deny", {"tool_name": "Bash", "tool_input": {"command": "sleep 1 & items=(prefix[ \"$(case x in x) : ;& *) :;; esac)\"); wait"}}],
+  ["array bracket independent later launch", "deny", {"tool_name": "Bash", "tool_input": {"command": "items=(prefix[ \"$(case x in x) : ;;& *) :;; esac)\"); sleep 1 & wait"}}],
+  ["array bracket sibling rollback", "allow", {"tool_name": "Bash", "tool_input": {"command": "items=(\"$(sleep 1 & wait)\" prefix[ \"$(case x in x) : ;& *) :;; esac)\"); :"}}, "known-limit"],
+  ["array bracket sibling later background", "allow", {"tool_name": "Bash", "tool_input": {"command": "items=(prefix[ \"$(sleep 1 & wait)\"); :"}}, "known-limit"],
+  ["array bracket quoted literal", "allow", {"tool_name": "Bash", "tool_input": {"command": "items=(\"prefix[\" \"$(case x in x) : ;& *) :;; esac)\"); :"}}],
+  ["coproc named simple", "deny", {"tool_name": "Bash", "tool_input": {"command": "coproc WORKER sleep 0.02; wait"}}],
+  ["coproc anonymous group", "deny", {"tool_name": "Bash", "tool_input": {"command": "coproc { sleep 0.02; }; wait"}}],
+  ["coproc after conditional", "deny", {"tool_name": "Bash", "tool_input": {"command": "true && coproc sleep 0.02; wait"}}],
+  ["coproc nested substitution", "deny", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"$(coproc sleep 0.02; wait)\""}}],
+  ["coproc function body", "deny", {"tool_name": "Bash", "tool_input": {"command": "f() { coproc sleep 0.02; wait; }; f"}}],
+  ["coproc function name", "allow", {"tool_name": "Bash", "tool_input": {"command": "function coproc { :; }"}}],
+  ["coproc plain argument", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" coproc"}}],
+  ["coproc single quoted command", "allow", {"tool_name": "Bash", "tool_input": {"command": "'coproc' sleep 0.02"}}],
+  ["coproc double quoted command", "allow", {"tool_name": "Bash", "tool_input": {"command": "\"coproc\" sleep 0.02"}}],
+  ["coproc escaped command", "allow", {"tool_name": "Bash", "tool_input": {"command": "\\coproc sleep 0.02"}}],
+  ["coproc quoted data", "allow", {"tool_name": "Bash", "tool_input": {"command": "printf \"%s\" \"coproc sleep 0.02\""}}],
+  ["coproc comment", "allow", {"tool_name": "Bash", "tool_input": {"command": ": # coproc sleep 0.02"}}],
+  ["coproc case pattern", "allow", {"tool_name": "Bash", "tool_input": {"command": "case x in coproc) :;; esac"}}],
+  ["coproc quoted heredoc", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<'DOC'\ncoproc sleep 0.02\nDOC"}}],
+  ["coproc unquoted heredoc data", "allow", {"tool_name": "Bash", "tool_input": {"command": "cat <<DOC\ncoproc sleep 0.02\nDOC"}}],
+  ["coproc heredoc substitution", "deny", {"tool_name": "Bash", "tool_input": {"command": "cat <<DOC\n$(coproc sleep 0.02; wait)\nDOC"}}],
+];
+
 // Explicit finding 2/3 examples, plus context boundaries and fail-open behavior.
 const regression = [
   ['allow', String.raw`printf '%s\n' "$(printf "%s" "x & y")"`],
@@ -295,19 +404,26 @@ const cases = [
   ...allowed.map(([command, extra = {}], i) => [`original allow ${i + 1}`, 'allow', { tool_name: 'Bash', tool_input: { command, ...extra } }]),
   ...matrix,
   ...rereview,
+  ...finalReview,
+  ...finalRegression,
   ...spans.map(([expected, command], i) => [`span ${i + 1}`, expected, { tool_name: 'Bash', tool_input: { command } }]),
   ['Bash without command', 'allow', { tool_name: 'Bash', tool_input: { run_in_background: true } }],
   ['Bash non-string command', 'allow', { tool_name: 'Bash', tool_input: { command: null, run_in_background: true } }],
   ...regression.map(([expected, command], i) => [`regression ${i + 1}`, expected, { tool_name: 'Bash', tool_input: { command } }]),
 ];
 // Syntax-check only: never execute the review commands or launch their children.
-for (const [label, , payload] of rereview) {
+const syntaxCases = [...rereview, ...finalReview, ...finalRegression.filter(([label]) => !/incomplete|unclassified/.test(label))];
+for (const [label, , payload] of syntaxCases) {
   const result = spawnSync('bash', ['-n'], { input: payload.tool_input.command, encoding: 'utf8' });
   assert.ifError(result.error);
   assert.equal(result.status, 0, `${label} must remain Bash-valid: ${result.stderr}`);
-  assert.equal(result.stderr, '', `${label} syntax warnings`);
+  if (label === 'final review 59') {
+    assert.match(result.stderr, /here-document.*delimited by end-of-file/, `${label} expected EOF warning`);
+  } else {
+    assert.equal(result.stderr, '', `${label} syntax warnings`);
+  }
 }
-console.log(`${rereview.length} re-review commands passed bash -n`);
+console.log(`${syntaxCases.length} review/regression commands passed bash -n (row 59: expected EOF warning)`);
 let failures = 0;
 for (const [label, expected, payload] of cases) {
   const result = spawnSync('bash', [hook], {
@@ -339,5 +455,6 @@ for (const [label, expected, payload] of cases) {
   }
 }
 const denyCount = cases.filter(([, expected]) => expected === 'deny').length;
-console.log(`${cases.length} total: ${denyCount} denied / ${cases.length - denyCount} allowed cases; ${failures} failures`);
+const knownLimitCount = cases.filter(([, , , tag]) => tag === 'known-limit').length;
+console.log(`${cases.length} total: ${denyCount} denied / ${cases.length - denyCount} allowed cases (${knownLimitCount} known-limit); ${failures} failures`);
 process.exitCode = failures ? 1 : 0;

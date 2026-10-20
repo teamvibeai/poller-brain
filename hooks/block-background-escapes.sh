@@ -2,6 +2,23 @@
 # PreToolUse hook: deny Bash(run_in_background: true), manual setsid/disown
 # detachment and plain shell backgrounding; use background-task (bg-task.mjs).
 #
+# Scanner contract: deny only when certain; uncertain segments allow silently.
+# Opaque to bare &: quotes (including $'...'), ${...}, arithmetic, [[ ]],
+# case patterns and heredoc bodies. Executable $(...), backticks and process
+# substitutions recurse, including inside expandable words/terminated heredocs.
+# Logical tokens join backslash-newline except in literal quotes/comments and
+# quoted heredoc bodies. Readers commit only balanced, understood constructs;
+# uncertainty rolls back their candidates, preserving independent segments.
+# Deny: command-list &, command-position coproc, plus the existing independent
+# setsid/disown text checks and run_in_background flag. Denials keep exit 0 and
+# stdout JSON; allowed calls emit nothing. This is a lexer, not a Bash parser.
+# Known limits: EOF-terminated expandable heredoc substitutions; exotic ANSI-C /
+# Unicode heredoc delimiters needing byte/locale semantics; unclassified array
+# words containing bare brackets (their siblings may be missed); unmodeled
+# function compound bodies; unparseable or excessively nested syntax.
+# Allowing uncertainty avoids blocking valid work; the Stop hook and
+# background-task skill remain the safety net.
+#
 # Why: two independent bare `claude -p` tests (2026-09-22, poller-brain#478
 # thread) confirmed run_in_background never survives past the end of the
 # current turn -- Claude Code's own internal task manager kills it itself
@@ -80,6 +97,7 @@ process.stdin.on("end", () => {
     const SQ = String.fromCharCode(39);
     let i = 0;
     let background = false;
+    let functionDepth = 0;
     const uncertain = () => { throw new Error("Unclassified shell syntax"); };
     const starts = (text) => source.startsWith(text, i);
     const boundary = (c) => c === undefined || /[\s;&|<>()]/.test(c);
@@ -134,8 +152,11 @@ process.stdin.on("end", () => {
       const start = i;
       const saved = background;
       try { read(); }
-      catch {
+      catch (error) {
         background = saved;
+        // A function body must be understood as a whole compound command.
+        // Its recovery text cannot supply command-position evidence.
+        if (functionDepth) throw error;
         recover(start);
       }
     }
@@ -231,19 +252,40 @@ process.stdin.on("end", () => {
       }
       uncertain();
     }
-    function opaque(close) {
+    function opaque(close, array = false) {
       // Arrays, subscripts and extended globs are words, not command lists.
       // Their bare & may even be invalid Bash; it must never imply a launch.
+      const saved = background;
+      let certain = true;
       i++;
-      while (i < source.length) {
-        logical();
-        if (source[i] === close) { i++; return; }
-        if (wordPart()) continue;
-        if (source[i] === "(") { opaque(")"); continue; }
-        if (source[i] === "[") { opaque("]"); continue; }
-        i++;
+      try {
+        while (i < source.length) {
+          logical();
+          if (source[i] === close) {
+            i++;
+            if (!certain) background = saved;
+            return certain;
+          }
+          if (wordPart()) continue;
+          if (source[i] === "(") { if (!opaque(")", array)) certain = false; continue; }
+          if (source[i] === "[") {
+            // A bare bracket in an array word need not have a matching ].
+            // Do not guess subscript grammar or recover through sibling $().
+            if (array) { certain = false; i++; }
+            else opaque("]");
+            continue;
+          }
+          i++;
+        }
+        uncertain();
+      } catch (error) {
+        if (certain) throw error;
+        // No certain boundary remains: the unresolved array consumes the rest.
+        // Recovery must never reinterpret its case terminators as launches.
+        background = saved;
+        i = source.length;
+        return false;
       }
-      uncertain();
     }
 
     function ansiDelimiter() {
@@ -427,14 +469,43 @@ process.stdin.on("end", () => {
           // A dollar sign with no expansion is a normal word character.
         }
         if (!word) {
+          // Both declaration forms leave a compound command in command position,
+          // including inline case bodies whose ;& / ;;& are not backgrounding.
+          const declaration = /^(?:[A-Za-z_][A-Za-z0-9_]*[ \t]*\([ \t]*\)|function[ \t]+[A-Za-z_][A-Za-z0-9_]*(?:[ \t]*\([ \t]*\))?(?=[\s({]))/.exec(source.slice(i));
+          if (commandStart && declaration) {
+            const saved = background;
+            i += declaration[0].length;
+            functionDepth++;
+            try {
+              while (i < source.length) {
+                logical();
+                if (/\s/.test(source[i])) { i++; continue; }
+                if (source[i] !== "#") break;
+                const newline = source.indexOf("\n", i);
+                i = newline < 0 ? source.length : newline;
+              }
+              if (keyword("case")) caseStatement();
+              else if (source[i] === "{" && boundary(source[i + 1])) { i++; shell("}"); }
+              else if (starts("[[") && /\s/.test(source[i + 2] || "")) conditional();
+              else if (starts("((")) arithmetic(2);
+              else if (source[i] === "(") { i++; shell(")"); }
+              else uncertain(); // Other compound bodies are an intentional limit.
+            } catch {
+              background = saved;
+              i = source.length; // Unknown body extent: never deny from recovery.
+            } finally { functionDepth--; }
+            commandStart = false;
+            continue;
+          }
           const assignment = /^[A-Za-z_][A-Za-z0-9_]*(?:\+?=\(|\[)/.exec(source.slice(i));
           if (assignment) {
             i += assignment[0].length - 1;
-            guarded(() => opaque(source[i] === "(" ? ")" : "]"));
+            guarded(() => opaque(source[i] === "(" ? ")" : "]", source[i] === "("));
             word = true;
             continue;
           }
           if (commandStart && keyword("case")) { guarded(caseStatement); word = false; continue; }
+          if (commandStart && keyword("coproc")) { background = true; i += 6; commandStart = false; word = true; continue; }
           // These reserved words introduce another command position.
           const reserved = /^(?:time(?:[ \t]+-p)?|if|then|elif|else|while|until|do|!)(?=\s)/.exec(source.slice(i));
           if (commandStart && reserved) { i += reserved[0].length; continue; }
