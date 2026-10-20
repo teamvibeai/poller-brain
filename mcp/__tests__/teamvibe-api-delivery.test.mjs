@@ -6,11 +6,12 @@
 // export the pure helper. No network, no stdin.
 // Run: node mcp/__tests__/teamvibe-api-delivery.test.mjs
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'teamvibe-api.mjs'), 'utf8')
 const prelude = src.split('// --- JSON-RPC 2.0 / MCP protocol ---')[0]
+  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
 const exports = '\nexport { buildDeliveryInfo, buildScheduleResponse }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { buildDeliveryInfo, buildScheduleResponse } = mod
