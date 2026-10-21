@@ -51,7 +51,6 @@ function guard(dir, overrides = {}) {
       CONSOLIDATION_IDLE_STREAK_MIN: '2',
       CONSOLIDATION_IDLE_FALLBACK_HOURS: '168',
       CONSOLIDATION_ACTIVITY_MEM_MIN: '1',
-      CONSOLIDATION_ACTIVITY_DAYS_MIN: '2',
       CONSOLIDATION_ACTIVITY_BYTES_MIN: '32768',
       ...overrides,
     },
@@ -68,7 +67,7 @@ const memLines = (count) => singleDay() + Array.from({ length: count }, (_, i) =
 test('T1: one promotable MEM line overrides the idle streak', (t) => {
   const result = guard(brain(t, { today: memLines(1) }))
   assert.equal(result.status, 0, result.stdout)
-  assert.match(result.stdout, /idle streak ignored: 1 \[MEM\] lines in TODAY\.md/)
+  assert.match(result.stdout, /idle streak ignored: 1 \[MEM\]\/\[REMEMBER\] lines in TODAY\.md/)
 })
 
 test('T2: routine single-day logs still idle-skip', (t) => {
@@ -77,11 +76,16 @@ test('T2: routine single-day logs still idle-skip', (t) => {
   assert.match(result.stdout, /idle-skip/)
 })
 
-test('T3: two distinct date headings override the idle streak', (t) => {
-  const result = guard(brain(t, { today: `# ${dateAgo(1)}\n${singleDay()}` }))
-  assert.equal(result.status, 0, result.stdout)
-  assert.match(result.stdout, /idle streak ignored: 2 distinct date headings in TODAY\.md/)
-})
+for (const headingCount of [2, 5]) {
+  test(`T3b: multi-day routine log after ≥24h still idle-skips (${headingCount} headings)`, (t) => {
+    const headings = Array.from({ length: headingCount }, (_, i) => `# ${dateAgo(headingCount - i - 1)}\n`).join('')
+    const today = headings + '- [10:00] log: routine\n'.repeat(headingCount === 2 ? 1 : 20)
+    assert.ok(Buffer.byteLength(today) < 32768)
+    const result = guard(brain(t, { today }))
+    assert.equal(result.status, 1, result.stdout)
+    assert.match(result.stdout, /idle-skip/)
+  })
+}
 
 test('T4: 40 KB of routine logs override the idle streak', (t) => {
   const today = singleDay() + '- [10:00] log: routine\n'.repeat(2000)
@@ -117,22 +121,7 @@ for (const count of [2, 3]) {
   test(`T8: MEM minimum of 3 with ${count} MEM lines`, (t) => {
     const result = guard(brain(t, { today: memLines(count) }), { CONSOLIDATION_ACTIVITY_MEM_MIN: '3' })
     assert.equal(result.status, count === 3 ? 0 : 1, result.stdout)
-    assert.match(result.stdout, count === 3 ? /idle streak ignored: 3 \[MEM\] lines/ : /idle-skip/)
-  })
-}
-
-test('repeated headings for one date do not count as multiple days', (t) => {
-  const result = guard(brain(t, { today: singleDay().repeat(3) }))
-  assert.equal(result.status, 1, result.stdout)
-  assert.match(result.stdout, /idle-skip/)
-})
-
-for (const count of [2, 3]) {
-  test(`date heading minimum of 3 with ${count} distinct dates`, (t) => {
-    const today = Array.from({ length: count }, (_, i) => `# ${dateAgo(i)}\n`).join('')
-    const result = guard(brain(t, { today }), { CONSOLIDATION_ACTIVITY_DAYS_MIN: '3' })
-    assert.equal(result.status, count === 3 ? 0 : 1, result.stdout)
-    assert.match(result.stdout, count === 3 ? /3 distinct date headings/ : /idle-skip/)
+    assert.match(result.stdout, count === 3 ? /idle streak ignored: 3 \[MEM\]\/\[REMEMBER\] lines/ : /idle-skip/)
   })
 }
 
@@ -154,7 +143,7 @@ for (const inside of [true, false]) {
     })
     assert.equal(result.status, inside ? 0 : 1, result.stdout)
     assert.match(result.stdout, inside ? /inside window/ : /outside window/)
-    assert.match(result.stdout, /idle streak ignored: 1 \[MEM\] lines/)
+    assert.match(result.stdout, /idle streak ignored: 1 \[MEM\]\/\[REMEMBER\] lines/)
   })
 }
 
@@ -164,12 +153,36 @@ test('168h idle fallback still forces a check-in without activity', (t) => {
   assert.match(result.stdout, /idle but overdue.*forcing check-in run/)
 })
 
-test('noncanonical MEM-like prose is not promotable activity', (t) => {
-  const today = singleDay() + '[MEM-12] prose\n- [MEM-feedback] prose\n - [MEM-13] indented\n'
+for (const line of [
+  'prose [MEM-12] mid-line',
+  '- [MEM-feedback] malformed',
+  ' - [MEM-13] indented',
+  '[REMEMBER] keep this',
+]) {
+  test(`mid-line and malformed MEM tags and [REMEMBER] count as promotable: ${line}`, (t) => {
+    const result = guard(brain(t, { today: singleDay() + line + '\n' }))
+    assert.equal(result.status, 0, result.stdout)
+    assert.match(result.stdout, /idle streak ignored: 1 \[MEM\]\/\[REMEMBER\] lines in TODAY\.md/)
+  })
+}
+
+test('unbracketed MEM-12 and [MEMO] still idle-skip', (t) => {
+  const today = singleDay() + 'prose MEM-12 without brackets\n[MEMO] keep this\n'
   const result = guard(brain(t, { today }))
   assert.equal(result.status, 1, result.stdout)
   assert.match(result.stdout, /idle-skip/)
 })
+
+for (const [knob, value, reason] of [
+  ['CONSOLIDATION_ACTIVITY_MEM_MIN', '0', /idle streak ignored/],
+  ['CONSOLIDATION_ACTIVITY_BYTES_MIN', 'abc', /idle streak ignored: cannot parse TODAY\.md activity threshold/],
+]) {
+  test(`knob 0 means always, non-numeric knob bypasses idle-skip (${knob}=${value})`, (t) => {
+    const result = guard(brain(t, { today: singleDay() }), { [knob]: value })
+    assert.equal(result.status, 0, result.stdout)
+    assert.match(result.stdout, reason)
+  })
+}
 
 test('activity detection failure falls through to the time policy', (t) => {
   const dir = brain(t, { today: memLines(1) })

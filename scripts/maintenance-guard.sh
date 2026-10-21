@@ -36,12 +36,13 @@
 # reflection-guard.sh's cadence-gate pattern (poller-brain#157) applied to
 # the opposite problem (running too often instead of too rarely).
 #
-# Activity override (pb#560): TODAY.md with promotable [MEM] lines, multiple
-# distinct date headings, or excessive bytes bypasses the idle streak and
-# restores the existing 24h window / 48h fallback policy. Thresholds are
-# CONSOLIDATION_ACTIVITY_MEM_MIN (1), CONSOLIDATION_ACTIVITY_DAYS_MIN (2),
-# and CONSOLIDATION_ACTIVITY_BYTES_MIN (32768). Routine log volume alone
-# still does not imply promotable content; the byte cap bounds context size.
+# Activity override (pb#560): TODAY.md with promotable [MEM]/[REMEMBER]
+# tag lines (the shape consolidation Step 1b promotes) or excessive bytes
+# bypasses the idle streak and restores the existing 24h window / 48h
+# fallback policy. Thresholds are CONSOLIDATION_ACTIVITY_MEM_MIN (1) and
+# CONSOLIDATION_ACTIVITY_BYTES_MIN (32768). Routine log volume alone still
+# does not imply promotable content; the byte cap bounds context size.
+# A non-numeric or `0` threshold disables the idle-skip (fail-open by design).
 
 BRAIN_DIR="${1:-.}"
 REPORTS_DIR="$BRAIN_DIR/reports"
@@ -52,7 +53,6 @@ IDLE_STREAK_MIN="${CONSOLIDATION_IDLE_STREAK_MIN:-2}"  # consecutive zero-promot
 WINDOW_START="${CONSOLIDATION_WINDOW_START:-0}"   # hour UTC (inclusive)
 WINDOW_END="${CONSOLIDATION_WINDOW_END:-6}"       # hour UTC (exclusive)
 ACTIVITY_MEM_MIN="${CONSOLIDATION_ACTIVITY_MEM_MIN:-1}"
-ACTIVITY_DAYS_MIN="${CONSOLIDATION_ACTIVITY_DAYS_MIN:-2}"
 ACTIVITY_BYTES_MIN="${CONSOLIDATION_ACTIVITY_BYTES_MIN:-32768}"
 
 # Get current UTC hour
@@ -80,31 +80,25 @@ has_new_activity() {
   [ -f "$today" ] && [ -r "$today" ] || return 1
 
   local threshold
-  for threshold in "$ACTIVITY_MEM_MIN" "$ACTIVITY_DAYS_MIN" "$ACTIVITY_BYTES_MIN"; do
+  for threshold in "$ACTIVITY_MEM_MIN" "$ACTIVITY_BYTES_MIN"; do
     if ! [[ "$threshold" =~ ^[0-9]+$ ]]; then
       ACTIVITY_REASON="cannot parse TODAY.md activity threshold"
       return 0
     fi
   done
 
-  # One pass counts canonical MEM lines and unique YYYY-MM-DD headings.
-  # awk prints explicit zeroes and succeeds even when neither pattern matches.
-  local counts mem_count day_count bytes
-  if ! counts=$(awk '
-    /^- \[MEM-[0-9]+\]/ { mem++ }
-    /^# [0-9]{4}-[0-9]{2}-[0-9]{2}/ { dates[substr($0, 3, 10)] = 1 }
-    END { for (day in dates) days++; print mem+0, days+0 }
+  # Count lines with the shape consolidation Step 1b promotes.
+  # awk prints an explicit zero and succeeds even when no tags match.
+  local mem_count bytes
+  if ! mem_count=$(awk '
+    /\[(MEM-[^]]+|REMEMBER)\]/ { mem++ }
+    END { print mem+0 }
   ' "$today" 2>/dev/null); then
     ACTIVITY_REASON="cannot read TODAY.md activity"
     return 0
   fi
-  read -r mem_count day_count <<< "$counts"
   if [ "$mem_count" -ge "$ACTIVITY_MEM_MIN" ]; then
-    ACTIVITY_REASON="$mem_count [MEM] lines in TODAY.md"
-    return 0
-  fi
-  if [ "$day_count" -ge "$ACTIVITY_DAYS_MIN" ]; then
-    ACTIVITY_REASON="$day_count distinct date headings in TODAY.md"
+    ACTIVITY_REASON="$mem_count [MEM]/[REMEMBER] lines in TODAY.md"
     return 0
   fi
   # wc -c is portable across GNU/Linux and BSD/macOS (unlike stat flags).
