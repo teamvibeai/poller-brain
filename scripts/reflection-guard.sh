@@ -1,7 +1,7 @@
 #!/bin/bash
 # Checks if memory reflection should run, and reports reflection cadence status.
 # Exit 0 = reflection needed, exit 1 = skip (recent enough).
-# Usage: bash scripts/reflection-guard.sh [brain_dir]
+# Usage: bash "$CLAUDE_CONFIG_DIR/scripts/reflection-guard.sh" [brain_dir]
 #
 # brain_dir defaults to current working directory.
 #
