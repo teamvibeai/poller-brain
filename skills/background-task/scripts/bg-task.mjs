@@ -356,7 +356,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // detached: true puts the runner in its own session and process group, so the
   // spawner killing the session's process group at teardown cannot reach it. This is
   // the whole trick — verified empirically in pb#231 (survived a full teardown).
-  const child = spawn(
+  // Pollers with on-demand Git credentials (teamvibe.ai#633) export a launcher that
+  // registers the task so the session's credential files outlive the session, and strips
+  // the poller token from the runner env. Older pollers don't set it; a broken adapter
+  // must never stop a background task from starting, so fall back to plain spawn.
+  let spawnRunner = spawn
+  if (process.env.TV_GIT_BG_TASK_LAUNCHER) {
+    try {
+      const adapter = await import(process.env.TV_GIT_BG_TASK_LAUNCHER)
+      if (typeof adapter.spawnBackgroundTask === 'function') spawnRunner = adapter.spawnBackgroundTask
+    } catch (e) {
+      process.stderr.write(`bg-task: git credential launcher unavailable (${e.message}); starting without it\n`)
+    }
+  }
+  const child = spawnRunner(
     process.execPath,
     [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
       opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
