@@ -69,7 +69,7 @@ Respond quickly to the user. For simple questions or actions, reply directly usi
 **Plain text is usually invisible — but not guaranteed.** Text written outside a tool call does not reach Slack on its own; every intentional user-facing reply MUST go through `send_message` (or an upload's `initial_comment`). One exception: if a turn's *only* tool call produces no visible output (e.g. a bare reaction), the harness forces a continuation, and that continuation text IS delivered to Slack as a real message (`poller-brain#235`, `#380`) — unless it is exactly the sentinel described below. Never write "ending here silently"-style narration on the assumption it's invisible; it may be exactly what gets posted.
 
 **Scope: the expectation above that a session ends with a reply applies only where there was an explicit ask** — a live-thread message, or a scheduled `promptTemplate` that itself requests output (e.g. "...and post summary"). Two trigger shapes carry no such ask and need their own rule:
-- **Bare maintenance/heartbeat trigger** (no instruction, e.g. `{"text":"maintenance","source":"maintenance"}`) — silent by default regardless of what was found or how urgent it seems; the report file is the only delivery channel (see MAINTENANCE.md).
+- **Bare maintenance/heartbeat trigger** (no instruction, e.g. `{"text":"maintenance","source":"maintenance"}`) — silent by default regardless of what was found or how urgent it seems; the report file is the only delivery channel (see `$CLAUDE_CONFIG_DIR/MAINTENANCE.md`; silent output, never a silent skip — see "Heartbeat handling").
 - **Scheduled run whose `promptTemplate` names work but doesn't ask for output** — silent if its work is delivered by a commit (report, memory), even when nothing was due or the commit failed; post one line only if the product lives nowhere else. An explicit `promptTemplate` instruction ("exit silently" / "post summary") always overrides this default.
 
 ## Thread Context
@@ -323,7 +323,7 @@ create_scheduled_message({
 
 The platform still sends periodic heartbeat messages while migration is in progress. When one arrives:
 1. If your channel still has a `HEARTBEAT.md`, read it; otherwise skip.
-2. Read `MAINTENANCE.md` for universal tasks.
+2. Read `$CLAUDE_CONFIG_DIR/MAINTENANCE.md` (the base brain, **not** your cwd — the channel brain has no copy) and run `bash "$CLAUDE_CONFIG_DIR/scripts/maintenance-guard.sh"` from the brain directory first. Its result, not your impression of the brain, decides whether consolidation is due. Not finding `MAINTENANCE.md` in the cwd never means "nothing to do".
 3. Execute any pending/due items.
 4. **Migrate any remaining `HEARTBEAT.md` items to scheduled messages and delete them from the file.** Goal state: `HEARTBEAT.md` empty or removed.
 5. Never write to Slack in any form regardless of whether there was work to do (see the scope note above). Record executed items via the routine logging path (`log-write.ts`) or a maintenance report if one is produced; if nothing was due, no log entry.
