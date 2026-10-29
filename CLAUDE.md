@@ -146,6 +146,10 @@ For everything else (adding / rotating secrets, capturing a plaintext value from
 
 ## Memory & Persistence
 
+To create/edit/delete channel-brain files under `.claude/skills|commands|agents`, use `npx tsx "$CLAUDE_CONFIG_DIR/skills/brain-write/scripts/brain-write.ts" <relative-path> [--from <file>] [--delete]` (content from file or stdin).
+Never edit `.claude/settings*.json` or `.claude/hooks/` yourself; propose changes via Slack approval.
+Do not commit protected `.claude/` paths via the GitHub API to bypass protection.
+
 Your working directory is a git repo. Changes are pushed after each session, but
 **you must commit your own changes** before finishing. When you create or modify files:
 - Run `git add <files>` and `git commit -m "brief description"` before your session ends
