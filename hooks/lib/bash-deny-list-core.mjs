@@ -11,19 +11,7 @@
  * tracked separately as teamvibeai/teamvibe.ai#344.
  */
 
-export interface DenyMatch {
-  denied: boolean;
-  ruleId?: string;
-  reason?: string;
-}
-
-interface DenyRule {
-  id: string;
-  pattern: RegExp;
-  reason: string;
-}
-
-const RULES: DenyRule[] = [
+const RULES = [
   {
     id: "rm-rf-root",
     // rm with both -r and -f (any order, combined or separate flags, long
@@ -61,7 +49,7 @@ const RULES: DenyRule[] = [
   },
 ];
 
-export function checkBashCommand(command: string): DenyMatch {
+export function checkBashCommand(command) {
   for (const rule of RULES) {
     if (rule.pattern.test(command)) {
       return { denied: true, ruleId: rule.id, reason: rule.reason };

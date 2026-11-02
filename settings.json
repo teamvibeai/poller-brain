@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx tsx $CLAUDE_CONFIG_DIR/hooks/bash-deny-list.ts"
+            "command": "node \"$CLAUDE_CONFIG_DIR/hooks/bash-deny-list.mjs\""
           }
         ]
       },
