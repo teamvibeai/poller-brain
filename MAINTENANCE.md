@@ -5,7 +5,7 @@ Execute them during scheduled maintenance sessions. (Legacy: heartbeat sessions 
 
 ## Reporting Convention
 
-Every background maintenance operation MUST produce a report file. This gives users visibility into what the agent did without digging through git history. **The report file + git commit is the delivery channel — not Slack.** A bare maintenance/heartbeat trigger carries no explicit ask (see CLAUDE.md "CRITICAL: How to Respond" scope note), so do not additionally write to Slack in any form (`send_message`, file/snippet upload, `update_message`) as a summary, even when the run surfaced something noteworthy, blocked, or worth escalating (`poller-brain#327`) — it is silent because there was no ask, regardless of what the run produced. The only reason to post is if the *triggering* message itself explicitly asked for it — e.g. a `create_scheduled_message` run whose `promptTemplate` says "...and post summary" — in which case that instruction is the ask, and follow it.
+Every background maintenance operation MUST produce a report file. This gives users visibility into what the agent did without digging through git history. **The report file + git commit is the delivery channel — not Slack.** A bare maintenance/heartbeat trigger carries no explicit ask (see CLAUDE.md "CRITICAL: How to Respond" scope note), so do not additionally write to Slack in any form (`send_message`, file/snippet upload, `update_message`) as a summary, even when the run surfaced something noteworthy, blocked, or worth escalating (`poller-brain#327`) — it is silent because there was no ask, regardless of what the run produced. The only reason to post is if the *triggering* message itself explicitly asked for it — e.g. a `schedule_create` run whose `promptTemplate` says "...and post summary" — in which case that instruction is the ask, and follow it.
 
 ### Report location
 
@@ -182,7 +182,8 @@ These criteria are used for self-assessment in the JSON report's `selfAssessment
 
 ## Pending Issues (deprecated)
 
-`PENDING_ISSUES.md` is deprecated in favor of `mcp__teamvibe-api__submit_feedback`
+`PENDING_ISSUES.md` is deprecated in favor of `feedback_submit`
+(resolve merged/legacy tools through CLAUDE.md's **MCP tool names** table)
 (see CLAUDE.md's "Reporting Issues" section) — most agents don't have GitHub
 repo access to create issues, which the old file-based flow implicitly
 assumed. Do not write new entries to `PENDING_ISSUES.md`.
@@ -190,7 +191,7 @@ assumed. Do not write new entries to `PENDING_ISSUES.md`.
 ## One-Time
 
 - **Memory migration**: If `memory/core/` directory does not exist, run the migration described in the `memory` skill. This splits the old monolithic MEMORY.md into the tiered structure. Only needed once per brain.
-- **`PENDING_ISSUES.md` migration**: If this file exists with `status: pending` entries, submit each one via `mcp__teamvibe-api__submit_feedback` — infer `type`/`priority` from the entry's content (the old format didn't have them) and include the original `repo` in `context` — then delete the file. Only needed once per brain.
+- **`PENDING_ISSUES.md` migration**: If this file exists with `status: pending` entries, submit each one via `feedback_submit` (using the MCP tool names table) — infer `type`/`priority` from the entry's content (the old format didn't have them) and include the original `repo` in `context` — then delete the file. Only needed once per brain.
 
 ## Daily
 
@@ -240,7 +241,7 @@ assumed. Do not write new entries to `PENDING_ISSUES.md`.
 Heartbeat is deprecated (`teamvibeai/teamvibe.ai#102`). During every consolidation, agents MUST sweep `HEARTBEAT.md` if it exists in the channel brain:
 
 1. Read `HEARTBEAT.md`. For each unchecked `- [ ]` task:
-   - Convert to a `create_scheduled_message` call (`runAt` for one-time, `cron` for recurring) — see CLAUDE.md "Migration recipe" section.
+   - Convert to a `schedule_create` call (`scheduleType: "ONE_TIME"` + `scheduledAt`, or `scheduleType: "CRON"` + `cronExpression`) — see CLAUDE.md's MCP tool names table and "Migration recipe" section.
    - Delete the migrated line from `HEARTBEAT.md`.
 2. Remove all completed `- [x]` lines.
 3. If the file is now empty (or contains only headings/comments), delete it.

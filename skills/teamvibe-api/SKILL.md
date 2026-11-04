@@ -8,11 +8,13 @@ description: |
 
 # TeamVibe API — Scheduled Messages & Feedback
 
-All tools are prefixed `mcp__teamvibe-api__`. Channel and workspace context are automatically set.
+Use `schedule_create`, `schedule_list`, `schedule_delete`, and `feedback_submit`
+from the merged catalog when available. Resolve these operation names through
+CLAUDE.md's **MCP tool names** table for legacy sessions too. Channel and workspace context are automatically set.
 
 ## Tools
 
-### create_scheduled_message
+### schedule_create
 
 Create or update a schedule.
 
@@ -39,15 +41,15 @@ Create or update a schedule.
 >   "origin": { "source": "slack", "channel": "C0PROJECT123" }
 > }
 > ```
-> The `create_scheduled_message` response echoes a `delivery` block with the resolved `channel` and a `resolvedFrom` flag (`inherited-from-current-session` vs `explicit-origin`) — **verify it matches the intended recipient** before trusting the schedule.
+> The `schedule_create` response echoes a `delivery` block with the resolved `channel` and a `resolvedFrom` flag (`inherited-from-current-session` vs `explicit-origin`) — **verify it matches the intended recipient** before trusting the schedule.
 
-### list_scheduled_messages
+### schedule_list
 
 List all schedules for the current channel. No required parameters.
 
 Every run timestamp comes back twice: the stored ISO-UTC value (`lastRunAt`, `nextRunAt`, `scheduledAt`) and a rendered `*Local` twin in the schedule's own timezone with the weekday — `"lastRunAtLocal": "Thu 2026-05-28 18:00:17 (Europe/Prague)"`. Read the `*Local` field. See [Verifying a schedule](#verifying-a-schedule).
 
-### delete_scheduled_message
+### schedule_delete
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
@@ -147,18 +149,18 @@ Monitoring a deploy or CI run needs dedup, thread targeting, a retry cap, and se
 {
   "scheduleType": "ONE_TIME",
   "scheduledAt": "<now + 3 min UTC>",
-  "promptTemplate": "Check deploy status for PR #33 in repo org/frontend.\n\nRun: gh run list --repo org/frontend --branch feature-branch --limit 3\n\nBefore posting anything, read the last 10 messages in thread 1774264733.819979 (channel C0AH9EL2SUQ) — if a deploy notification for this PR is already there, stop, do nothing.\n\n- If COMPLETED (success): post in that thread: 'Deploy done ✅ https://preview-33.example.com'. Then call delete_scheduled_message with scheduleId: <this schedule's real ID>.\n- If STILL RUNNING and this is attempt < 5 (this is attempt 1/5): call create_scheduled_message for +3min with this same prompt, incrementing the attempt count in the text, then delete this schedule.\n- If STILL RUNNING and this is attempt 5/5: post 'Still not done after 5 checks, stopping.' in the thread and delete this schedule.\n- If FAILED: post failure details in the thread and delete this schedule."
+  "promptTemplate": "Check deploy status for PR #33 in repo org/frontend.\n\nRun: gh run list --repo org/frontend --branch feature-branch --limit 3\n\nBefore posting anything, read the last 10 messages in thread 1774264733.819979 (channel C0AH9EL2SUQ) — if a deploy notification for this PR is already there, stop, do nothing.\n\n- If COMPLETED (success): post in that thread: 'Deploy done ✅ https://preview-33.example.com'. Then call schedule_delete with scheduleId: <this schedule's real ID>.\n- If STILL RUNNING and this is attempt < 5 (this is attempt 1/5): call schedule_create for +3min with this same prompt, incrementing the attempt count in the text, then delete this schedule.\n- If STILL RUNNING and this is attempt 5/5: post 'Still not done after 5 checks, stopping.' in the thread and delete this schedule.\n- If FAILED: post failure details in the thread and delete this schedule."
 }
 ```
 
-There is no `{SCHEDULE_ID}` template variable — the platform sends `promptTemplate` to the fired session unmodified. Substitute the real `scheduleId` yourself: create the schedule once, read the ID off the response, then call `create_scheduled_message` again with that `scheduleId` to rewrite the prompt so it can reference itself.
+There is no `{SCHEDULE_ID}` template variable — the platform sends `promptTemplate` to the fired session unmodified. Substitute the real `scheduleId` yourself: create the schedule once, read the ID off the response, then call `schedule_create` again with that `scheduleId` to rewrite the prompt so it can reference itself.
 
 ### Updating an existing schedule
 
 User: "Change that PR check to 9am instead"
 
-1. Call `list_scheduled_messages` to find the schedule ID
-2. Call `create_scheduled_message` with the `scheduleId` and updated `cronExpression: "0 9 * * 1-5"`
+1. Call `schedule_list` to find the schedule ID
+2. Call `schedule_create` with the `scheduleId` and updated `cronExpression: "0 9 * * 1-5"`
 
 ## Timezone
 
@@ -180,7 +182,7 @@ The routine:
 3. Remember what `lastRunAt` actually means: the run was **enqueued** at that moment, not necessarily delivered. It is evidence the scheduler fired, not evidence you received anything.
 4. If you still believe a run was missed, say what you checked and what remains unexplained. "`nextRunAt` jumped from Thu to Mon and `1-4` includes Thursday" is a claim; "Thursday's run is absent from `lastRunAtLocal` although the previous and following occurrences both landed" is evidence.
 
-After `create_scheduled_message`, the response echoes the stored row with `nextRunAtLocal` — one glance confirms the cron means what you intended before you walk away from it.
+After `schedule_create`, the response echoes the stored row with `nextRunAtLocal` — one glance confirms the cron means what you intended before you walk away from it.
 
 ## Common cron patterns
 
@@ -196,7 +198,7 @@ After `create_scheduled_message`, the response echoes the stored row with `nextR
 
 # Agent Feedback
 
-## submit_feedback
+## feedback_submit
 
 Submit feedback about the platform. Stored in a central database and consolidated by the eval pipeline.
 

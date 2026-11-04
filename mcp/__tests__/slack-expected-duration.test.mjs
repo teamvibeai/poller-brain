@@ -1,17 +1,17 @@
 // Unit tests for the set_expected_duration tool handler (tv#32 Layer B).
 // This tool makes no Slack API call — it's purely a signal the poller reads
 // off the stdout stream — so handleTool() for this one case is safe to call
-// directly without mocking network I/O. Same load-the-prelude trick as
-// slack-payload.test.mjs since slack.mjs auto-starts a stdio server on import.
+// directly without mocking network I/O. Same private-helper loader as
+// slack-payload.test.mjs to expose the shared module’s private helpers.
 // Run: node mcp/__tests__/slack-expected-duration.test.mjs
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
-const prelude = src.split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
-const exports = '\nexport { handleTool, TOOLS }\n'
+const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'slack-tools.mjs'), 'utf8')
+const prelude = src
+  .replace("'./validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
+const exports = '\nexport { handleTool }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { handleTool, TOOLS } = mod
 

@@ -8,7 +8,8 @@ did, with no error anywhere.
 This is advanced/opt-in troubleshooting, not default behavior — reach for it only when a
 user explicitly asks you to root-cause a vanished session, or when you're deciding a
 background/scheduled failure needs more than a guess before you escalate it (e.g. via
-`submit_feedback`). It is not something to explain or offer to a regular user asking an
+`feedback_submit`; resolve tool names through CLAUDE.md's **MCP tool names** table,
+using the merged catalog when available and the legacy fallback otherwise). It is not something to explain or offer to a regular user asking an
 ordinary question.
 
 ## 1. Locate candidate session transcripts

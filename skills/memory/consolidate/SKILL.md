@@ -366,13 +366,16 @@ For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older 
 
 Heartbeat is being deprecated (`teamvibeai/teamvibe.ai#102`). Channel brain repos are private and live in customer GH orgs — the platform cannot inspect them. Each brain MUST self-report `HEARTBEAT.md` state so the eval pipeline can track migration progress.
 
-**All scheduled times below are UTC.** `runAt` is ISO-8601 UTC, `cron` follows standard 5-field syntax in UTC. Do NOT use local time — agents run across timezones and the platform interprets schedules as UTC.
+**All scheduled times below are UTC.** Use `schedule_create` through CLAUDE.md's
+**MCP tool names** table (merged primary, legacy fallback). For one-time schedules,
+use `scheduleType: "ONE_TIME"` and ISO-8601 UTC `scheduledAt`; for recurring schedules,
+use `scheduleType: "CRON"`, a standard 5-field `cronExpression`, and `timezone: "UTC"`.
 
 1. **Sweep** — if `HEARTBEAT.md` exists in the brain root:
    - For every unchecked `- [ ]` task:
      - Read the task text. If older than 30 days (per the `(added YYYY-MM-DD)` annotation or git blame on that line) and no longer relevant, mention it in `decisions` and delete it without scheduling — don't blindly schedule stale work.
-     - Otherwise, write a clear `promptTemplate` for `create_scheduled_message` that restates the task in imperative form ("Check if PR #123 is merged. If not, ping the assignee."). Include any context the agent will need (links, deadlines).
-     - Call `create_scheduled_message`. **If the call fails, leave the line in place and continue with the next item** — do NOT delete the source line until you have confirmation that the schedule was created. Record the failure in `decisions`.
+     - Otherwise, write a clear `promptTemplate` for `schedule_create` that restates the task in imperative form ("Check if PR #123 is merged. If not, ping the assignee."). Include any context the agent will need (links, deadlines).
+     - Call `schedule_create` using the available catalog. **If the call fails, leave the line in place and continue with the next item** — do NOT delete the source line until you have confirmation that the schedule was created. Record the failure in `decisions`.
      - Once the call succeeds, delete the migrated line.
    - Remove all completed `- [x]` lines.
    - If the file then has no real content (only blank lines, headings, or HTML comments), delete it.

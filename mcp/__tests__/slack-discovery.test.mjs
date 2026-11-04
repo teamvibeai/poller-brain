@@ -14,9 +14,8 @@
 // (unlike list_channels), because Slack has no "users visible to a bot"
 // concept.
 //
-// slack.mjs auto-starts a stdio server on import, so we load just the pure
-// prelude (everything before the transport section) and export-by-eval
-// handleTool + TOOLS, same trick as slack-expected-duration.test.mjs. Network
+// Export the shared module’s private handleTool via a data URL,
+// same trick as slack-expected-duration.test.mjs. Network
 // calls go through the real slackApi() with global.fetch mocked, same trick
 // as slack-payload.test.mjs (l).
 // Run: node mcp/__tests__/slack-discovery.test.mjs
@@ -24,10 +23,10 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
-const prelude = src.split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
-const exports = '\nexport { handleTool, TOOLS }\n'
+const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'slack-tools.mjs'), 'utf8')
+const prelude = src
+  .replace("'./validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
+const exports = '\nexport { handleTool }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { handleTool, TOOLS } = mod
 

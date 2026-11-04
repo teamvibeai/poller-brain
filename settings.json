@@ -11,6 +11,7 @@
       "Grep",
       "WebFetch",
       "WebSearch",
+      "mcp__teamvibe__*",
       "mcp__slack__*",
       "mcp__teamvibe-api__*"
     ]
@@ -27,7 +28,7 @@
         ]
       },
       {
-        "matcher": "mcp__slack__send_message",
+        "matcher": "^(mcp__slack__send_message|mcp__teamvibe__slack_send_message)$",
         "hooks": [
           {
             "type": "command",

@@ -6,9 +6,7 @@
 //   #3 thread_ts: null (broadcast)                       → suppressed (exception 4)
 //   #4 cold start / scheduled (no session thread)        → suppressed (exception 1)
 // plus the default path (thread_ts omitted) which must stay untouched.
-// slack.mjs auto-starts a stdio server on import, so we load just the pure
-// prelude (everything before the transport section) and export-by-eval the
-// helpers. No network, no Slack. Run: node mcp/__tests__/slack-threadts-warning.test.mjs
+// Export the shared module’s private helpers via a data URL. No network, no Slack. Run: node mcp/__tests__/slack-threadts-warning.test.mjs
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -23,9 +21,9 @@ process.env.SLACK_CHANNEL = SESSION_CHANNEL
 process.env.SLACK_MESSAGE_TS = TRIGGER_TS
 process.env.SLACK_BOT_TOKEN = 'xoxb-test'
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
-const prelude = src.split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
+const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'slack-tools.mjs'), 'utf8')
+const prelude = src
+  .replace("'./validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
 const exports =
   '\nexport { computeThreadOverrideWarning, referencesThreadTs, resolveThreadOverrideWarning }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))

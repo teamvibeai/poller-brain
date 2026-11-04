@@ -8,17 +8,15 @@
 // method inside a namespace that has an unrelated JSON-safe sibling. users.info
 // moved to the form branch in poller-brain#349 (live-confirmed to reject JSON
 // bodies with user_not_found; users:read scope was never the issue).
-// slack.mjs auto-starts a stdio server on import, so we load just the pure
-// prelude (everything before the transport section) and export-by-eval the
-// helpers. No network, no Slack. Run: node mcp/__tests__/slack-encoding.test.mjs
+// Export the shared module’s private helpers via a data URL. No network, no Slack. Run: node mcp/__tests__/slack-encoding.test.mjs
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { expectedEncoding } from './slack-encoding-expectations.mjs'
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
-const prelude = src.split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
+const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'slack-tools.mjs'), 'utf8')
+const prelude = src
+  .replace("'./validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
 const exports = '\nexport { needsFormEncoding, encodeFormBody }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { needsFormEncoding, encodeFormBody } = mod

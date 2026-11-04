@@ -1,7 +1,7 @@
 // Unit tests for the pb#124 delivery-target surfacing (option B): the
 // create_scheduled_message response echoes a `delivery` block so the agent can
 // verify a scheduled message reaches the intended recipient before trusting it.
-// teamvibe-api.mjs auto-starts a stdio server at the transport section, so we
+// The shared teamvibe-api-tools.mjs module is import-safe; we
 // load just the prelude (everything before the JSON-RPC section) as a module and
 // export the pure helper. No network, no stdin.
 // Run: node mcp/__tests__/teamvibe-api-delivery.test.mjs
@@ -9,9 +9,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'teamvibe-api.mjs'), 'utf8')
+const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'teamvibe-api-tools.mjs'), 'utf8')
 const prelude = src.split('// --- JSON-RPC 2.0 / MCP protocol ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
+  .replace("'./validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
 const exports = '\nexport { buildDeliveryInfo, buildScheduleResponse }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { buildDeliveryInfo, buildScheduleResponse } = mod

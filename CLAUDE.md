@@ -62,6 +62,27 @@ You have access to the company's **knowledge base** (the current working directo
 - Create temporary local files when needed for your work
 - Do NOT create new permanent files or edit existing files unless explicitly asked
 
+## MCP tool names (merged primary, legacy fallback)
+
+Use the tools actually available in this session. Prefer the merged `teamvibe`
+server when provided; old pollers and legacy sessions expose `slack` and
+`teamvibe-api` instead. Resolve tool references using this table:
+
+| Operation / shorthand | Primary tool | Legacy fallback |
+| --- | --- | --- |
+| Slack `<name>` (e.g. `send_message`, `read_thread`) | `mcp__teamvibe__slack_<name>` | `mcp__slack__<name>` |
+| `schedule_create` / `create_scheduled_message` | `mcp__teamvibe__schedule_create` | `mcp__teamvibe-api__create_scheduled_message` |
+| `schedule_list` / `list_scheduled_messages` | `mcp__teamvibe__schedule_list` | `mcp__teamvibe-api__list_scheduled_messages` |
+| `schedule_delete` / `delete_scheduled_message` | `mcp__teamvibe__schedule_delete` | `mcp__teamvibe-api__delete_scheduled_message` |
+| `feedback_submit` / `submit_feedback` | `mcp__teamvibe__feedback_submit` | `mcp__teamvibe-api__submit_feedback` |
+
+Bare tool names throughout these instructions, skills and maintenance docs are
+shorthand for this mapping. Translate references in saved schedule prompts and
+remembered instructions in either direction to the available catalog, including
+fully qualified names. A missing namespace is a reason to use its available
+counterpart; an error from an available tool is not a reason to repeat a side
+effect through another name. Parameters and behavior are identical in both modes.
+
 ## CRITICAL: How to Respond
 
 Respond quickly to the user. For simple questions or actions, reply directly using the `send_message` tool. If research or thinking is needed, send a brief acknowledgment first (e.g., "Let me look into that..." or react with :eyes:), then follow up with a thoughtful response — don't silently disappear for minutes.
@@ -194,14 +215,14 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detai
 
 ## Scheduled Messages
 
-Use `mcp__teamvibe-api__*` tools (`create_scheduled_message`, `list_scheduled_messages`, `delete_scheduled_message`) for reminders and recurring tasks. See the `teamvibe-api` skill for full parameter reference, examples, and promptTemplate writing guide.
+Use `schedule_create`, `schedule_list`, and `schedule_delete` for reminders and recurring tasks (resolve names through the MCP tool names table above). See the `teamvibe-api` skill for full parameter reference, examples, and promptTemplate writing guide.
 
 ## Polling & Notifications
 
 Each CRON/ONE_TIME firing starts a **new session with no memory of previous runs** — nothing dedupes, counts attempts, or auto-deletes on your behalf. Encode that state as literal text in the `promptTemplate` itself:
 
 1. **Deduplication** — before sending a notification, call `read_channel`/`read_thread` (limit ~10) and check whether you already posted an identical or near-identical message. If yes, don't send again.
-2. **Self-delete on completion** — `promptTemplate` is delivered to the next session verbatim; there is no `{SCHEDULE_ID}`-style substitution. To let a fired session delete its own schedule, embed the *real* `scheduleId` (from the `create_scheduled_message` response, or `list_scheduled_messages`) as plain text — e.g. `"...once done, call delete_scheduled_message with scheduleId: sch_abc123"`. For a brand-new schedule you only learn the ID after creating it, so call `create_scheduled_message` again with that `scheduleId` to rewrite the prompt to reference itself.
+2. **Self-delete on completion** — `promptTemplate` is delivered to the next session verbatim; there is no `{SCHEDULE_ID}`-style substitution. To let a fired session delete its own schedule, embed the *real* `scheduleId` (from the `schedule_create` response, or `schedule_list`) as plain text — e.g. `"...once done, call schedule_delete with scheduleId: sch_abc123"`. For a brand-new schedule you only learn the ID after creating it, so call `schedule_create` again with that `scheduleId` to rewrite the prompt to reference itself.
 3. **Thread targeting** — status updates (deploy, CI, pipeline) belong in the thread the request came from, not the channel root. Hardcode the literal `thread_ts` in the prompt.
 4. **Retry limit** — track attempts as literal text in the prompt (e.g. "this is attempt 2/5"); the platform doesn't count them for you. After the max, send one final "still not done, stopping" message and delete the schedule.
 5. **Prefer chained ONE_TIME over CRON for polling** — each firing creates the next ONE_TIME only if still needed, so it stops naturally. A CRON keeps firing on its own schedule regardless of task state.
@@ -215,7 +236,7 @@ for one. Best-effort only: it survives session teardown, not a poller restart.
 
 `Bash(run_in_background: true)` is blocked by a `PreToolUse` hook — it's killed the moment your
 turn ends, not merely left unobserved (poller-brain#488/#490). Anything someone is waiting on →
-`background-task` or `create_scheduled_message`.
+`background-task` or `schedule_create`.
 
 This also covers a single slow call within one turn, not just multi-step jobs — a foreground
 *blocking* call (long build, `codex exec`) that runs past the poller's idle watchdog window kills
@@ -301,22 +322,24 @@ You can attach multiple modals to one message — each gets its own button:
 
 ## Task Scheduling & Heartbeat (DEPRECATED)
 
-> **Status:** Heartbeat is being deprecated in favor of `create_scheduled_message` and event triggers. Tracked in `teamvibeai/teamvibe.ai#102`. **Do NOT add new HEARTBEAT.md tasks** — schedule them explicitly instead.
+> **Status:** Heartbeat is being deprecated in favor of `schedule_create` and event triggers. Tracked in `teamvibeai/teamvibe.ai#102`. **Do NOT add new HEARTBEAT.md tasks** — schedule them explicitly instead.
 
 ### When a user asks you to track / remember / follow up on something
 
-Use `mcp__teamvibe-api__create_scheduled_message` with explicit `runAt` (one-time) or `cron` (recurring). See the `teamvibe-api` skill for the full parameter reference.
+Use `schedule_create` (see the MCP tool names table) with `scheduleType: "ONE_TIME"` and `scheduledAt`, or `scheduleType: "CRON"` and `cronExpression`. See the `teamvibe-api` skill for the full parameter reference.
 
 ```typescript
 // One-time follow-up:
-create_scheduled_message({
-  runAt: "2026-05-13T09:00:00Z",
+schedule_create({
+  scheduleType: "ONE_TIME",
+  scheduledAt: "2026-05-13T09:00:00Z",
   promptTemplate: "Check if PR #123 is merged. If not, ping the assignee."
 })
 
 // Recurring task:
-create_scheduled_message({
-  cron: "0 7 * * 1-5",   // weekday mornings 07:00 UTC
+schedule_create({
+  scheduleType: "CRON",
+  cronExpression: "0 7 * * 1-5",   // weekday mornings 07:00 UTC
   promptTemplate: "Run morning health check and post summary."
 })
 ```
@@ -333,8 +356,8 @@ The platform still sends periodic heartbeat messages while migration is in progr
 ### Migration recipe for existing HEARTBEAT.md items
 
 For each `- [ ]` line:
-- *One-time check* (e.g. `Check if PR #123 is merged on 2026-05-15`) → `create_scheduled_message({ runAt: "2026-05-15T08:00:00Z", promptTemplate: "..." })`
-- *Recurring* (e.g. `Check unread emails daily`) → `create_scheduled_message({ cron: "0 8 * * *", promptTemplate: "..." })`
+- *One-time check* (e.g. `Check if PR #123 is merged on 2026-05-15`) → `schedule_create({ scheduleType: "ONE_TIME", scheduledAt: "2026-05-15T08:00:00Z", promptTemplate: "..." })`
+- *Recurring* (e.g. `Check unread emails daily`) → `schedule_create({ scheduleType: "CRON", cronExpression: "0 8 * * *", promptTemplate: "..." })`
 - Delete the line from `HEARTBEAT.md` once the scheduled message is created.
 
 When `HEARTBEAT.md` becomes empty, delete the file.
@@ -346,7 +369,7 @@ When `HEARTBEAT.md` becomes empty, delete the file.
 When a user explicitly asks to report an issue about the platform or base
 brain (e.g., "zapiš jako issue", "report this", "pošli jako issue"), or when
 you observe a platform problem worth tracking yourself, use
-`mcp__teamvibe-api__submit_feedback`. It writes directly to the central
+`feedback_submit` (see the MCP tool names table). It writes directly to the central
 feedback DB; consolidated by the eval pipeline into a weekly digest and
 triaged into individual GitHub issues. This is the only supported route —
 most agents don't have GitHub repo access to create issues directly.

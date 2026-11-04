@@ -1,5 +1,6 @@
 #!/bin/bash
-# PreToolUse hook: deny mcp__slack__send_message when `text` contains GFM-style
+# PreToolUse hook: deny mcp__teamvibe__slack_send_message (legacy fallback:
+# mcp__slack__send_message) when `text` contains GFM-style
 # `**bold**` (double asterisk) instead of Slack's own `*bold*` (single asterisk).
 #
 # Why: Slack does not render `**text**` as bold -- it renders literally as

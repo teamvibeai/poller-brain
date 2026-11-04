@@ -6,14 +6,13 @@
 // as having skipped a Thursday. Rendered in its own timezone with the weekday, the
 // report refutes itself. If that assertion ever fails, the fix stopped working.
 //
-// teamvibe-api.mjs auto-starts a stdio server on import, so we load just the pure
-// prelude (everything before the transport section) and export-by-eval the helpers.
+// Export the shared module’s private helpers via a data URL.
 // No network, no API. Run: node mcp/__tests__/teamvibe-api-schedule-time.test.mjs
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'teamvibe-api.mjs'), 'utf8')
+const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'teamvibe-api-tools.mjs'), 'utf8')
 const prelude = src
   .split('// --- JSON-RPC 2.0 / MCP protocol ---')[0]
   .split('\n')

@@ -1,4 +1,4 @@
-// Encoding confirmed for methods called by slackApi() in slack.mjs.
+// Encoding confirmed for methods called by slackApi() in slack-tools.mjs.
 // Keep this independent of JSON_SAFE_METHODS and needsFormEncoding(): a new
 // call site must be classified explicitly before the encoding tests pass.
 export const expectedEncoding = {

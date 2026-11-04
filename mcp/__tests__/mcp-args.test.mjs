@@ -1,7 +1,5 @@
-// Exercise tools/call in both real server preludes; no stdio or live API.
-// Like teamvibe-api-delivery.test.mjs, export private helpers via a data URL.
+// Exercise tools/call in both import-safe shared handlers; no stdio or live API.
 // Run: node mcp/__tests__/mcp-args.test.mjs
-import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -15,7 +13,6 @@ process.env.TEAMVIBE_WORKSPACE_ID = 'W1'
 let pass = 0, fail = 0
 const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n) } else { fail++; console.log('  ✗ FAIL', n) } }
 const mcpDir = join(dirname(fileURLToPath(import.meta.url)), '..')
-const validatorUrl = pathToFileURL(join(mcpDir, 'lib', 'validate-args.mjs')).href
 const realFetch = globalThis.fetch
 let calls = []
 globalThis.fetch = async (url, opts) => {
@@ -28,12 +25,7 @@ globalThis.fetch = async (url, opts) => {
 
 try {
   for (const server of ['slack', 'teamvibe-api']) {
-    const src = readFileSync(join(mcpDir, `${server}.mjs`), 'utf8')
-    const prelude = src.split('// --- stdio transport ---')[0]
-      // Also loads the old TeamVibe server, before it has a transport marker.
-      .split('\nconst rl = createInterface(')[0]
-      .replace("'./lib/validate-args.mjs'", JSON.stringify(validatorUrl))
-    const { handleRequest } = await import('data:text/javascript,' + encodeURIComponent(prelude + '\nexport { handleRequest }\n'))
+    const { handleRequest } = await import(pathToFileURL(join(mcpDir, 'lib', `${server}-tools.mjs`)).href)
     const request = async (name, args) => JSON.parse(await handleRequest({ jsonrpc: '2.0', id: 553, method: 'tools/call', params: { name, arguments: args } }))
     const listed = JSON.parse(await handleRequest({ id: 1, method: 'tools/list' })).result.tools
     ok(`${server}: every tool forbids unknown top-level keys`, listed.every((t) => t.inputSchema.additionalProperties === false))

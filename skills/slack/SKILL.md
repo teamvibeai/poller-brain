@@ -7,7 +7,9 @@ description: |
 
 # Slack Communication Skill
 
-All Slack tools are available as MCP tools (prefixed `mcp__slack__`). Channel and thread context are automatically configured.
+Resolve the bare Slack tool names below using CLAUDE.md's **MCP tool names** table:
+the merged `teamvibe` catalog is primary, with the legacy catalog as fallback when
+that is what the session provides. Channel and thread context are automatically configured.
 
 ## Tools
 

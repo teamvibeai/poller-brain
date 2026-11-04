@@ -3,17 +3,15 @@
 //   (a) auto-convert  — pipe-table in `text` AND no agent blocks
 //   (b) section-prepend — `text` + agent blocks (or modals)
 //   (c) verbatim passthrough — plain `text`, no blocks
-// slack.mjs auto-starts a stdio server on import, so we load just the pure
-// prelude (everything before the transport section) and export-by-eval the
-// helper. No network, no Slack. Run: node mcp/__tests__/slack-payload.test.mjs
+// Export the shared module’s private helpers via a data URL. No network, no Slack. Run: node mcp/__tests__/slack-payload.test.mjs
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { expectedEncoding } from './slack-encoding-expectations.mjs'
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
-const prelude = src.split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
+const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'slack-tools.mjs'), 'utf8')
+const prelude = src
+  .replace("'./validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
 const exports = '\nexport { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi } = mod
@@ -200,7 +198,7 @@ const TABLE = '| úkol | stav |\n|---|---|\n| deploy | ✅ |'
   ok('j prose outside inline code still unescaped', r.effectiveText.includes('a real ping <@U2>'))
 }
 
-// (k) poller-brain#345: every method actually called via slackApi() in slack.mjs (derived
+// (k) poller-brain#345: every method actually called via slackApi() in slack-tools.mjs (derived
 // directly from its call sites) gets the encoding Slack's live
 // API actually requires for it — not just the two named in the original ticket. DevGuru's
 // live probe (2026-08-19) additionally caught pins.list failing the same way as
