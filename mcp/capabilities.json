@@ -1,6 +1,7 @@
 {
   "version": 1,
   "teamvibe": {
+    "entrypoint": "teamvibe.mjs",
     "catalogVersion": 1,
     "sharedHandlersVersion": 1,
     "instructionsVersion": 1

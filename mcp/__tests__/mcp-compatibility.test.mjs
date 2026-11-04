@@ -55,7 +55,7 @@ function assertHookParity(config) {
 
 test('capability declares catalog, shared handlers and instructions v1 together', () => {
   assert.deepEqual(JSON.parse(readFileSync(join(root, 'mcp/capabilities.json'), 'utf8')), {
-    version: 1, teamvibe: { catalogVersion: 1, sharedHandlersVersion: 1, instructionsVersion: 1 },
+    version: 1, teamvibe: { entrypoint: 'teamvibe.mjs', catalogVersion: 1, sharedHandlersVersion: 1, instructionsVersion: 1 },
   })
   assert.equal(slack.TOOLS.length, 23)
   assert.deepEqual(api.TOOLS.map(tool => tool.name).sort(), Object.keys(apiNames).sort())
@@ -165,3 +165,71 @@ for (const [domain, registry] of [['slack', slack], ['teamvibe-api', api]]) {
     assert.equal(responses.length, requests.length - 1)
   })
 }
+
+test('declared merged entrypoint lists catalog v1 and dispatches both real handler modules over stdio', async t => {
+  // Keep this independent of the production renaming map and shared catalogs:
+  // removing or renaming any published tool must fail this contract.
+  const expectedNames = [
+    'slack_send_message', 'slack_add_reaction', 'slack_remove_reaction', 'slack_list_reactions',
+    'slack_read_thread', 'slack_read_channel', 'slack_get_permalink', 'slack_list_thread_participants',
+    'slack_read_channel_info', 'slack_set_channel_topic', 'slack_set_channel_purpose', 'slack_list_pins',
+    'slack_pin_message', 'slack_unpin_message', 'slack_list_bookmarks', 'slack_upload_snippet',
+    'slack_download_file', 'slack_upload_file', 'slack_update_message', 'slack_set_status',
+    'slack_list_channels', 'slack_search_users', 'slack_set_expected_duration',
+    'schedule_create', 'schedule_list', 'schedule_delete', 'feedback_submit',
+  ]
+  const feedback = { type: 'bug', priority: 'low', context: 'Merged stdio dispatch test' }
+  const requests = [
+    { id: 1, method: 'initialize' }, { method: 'notifications/initialized' },
+    { id: 2, method: 'tools/list' },
+    { id: 3, method: 'tools/call', params: { name: 'slack_send_message', arguments: { text: 'Merged test', thread_ts: null } } },
+    { id: 4, method: 'tools/call', params: { name: 'schedule_list', arguments: {} } },
+    { id: 5, method: 'tools/call', params: { name: 'feedback_submit', arguments: feedback } },
+  ]
+  const capability = JSON.parse(readFileSync(join(root, 'mcp/capabilities.json'), 'utf8')).teamvibe
+  const child = spawnSync(process.execPath, [
+    '--import', fileURLToPath(new URL('./fixtures/merged-api-mock.mjs', import.meta.url)),
+    join(root, 'mcp', capability.entrypoint),
+  ], {
+    input: requests.map(request => JSON.stringify({ jsonrpc: '2.0', ...request })).join('\n') + '\n',
+    env: {
+      PATH: process.env.PATH, SLACK_BOT_TOKEN: 'slack-test', SLACK_CHANNEL: 'C_TEST',
+      TEAMVIBE_API_URL: 'https://api.invalid', TEAMVIBE_POLLER_TOKEN: 'api-test',
+      TEAMVIBE_WORKSPACE_ID: 'W_TEST', TEAMVIBE_CHANNEL_ID: 'TC_TEST',
+    },
+    encoding: 'utf8', timeout: 5000,
+  })
+  assert.equal(child.error, undefined)
+  assert.equal(child.status, 0, child.stderr)
+  const responses = child.stdout.trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(responses.map(response => response.id).sort(), [1, 2, 3, 4, 5])
+  const response = id => responses.find(response => response.id === id)
+  const result = id => {
+    assert.equal(response(id).result.isError, undefined, JSON.stringify(response(id)))
+    return JSON.parse(response(id).result.content[0].text)
+  }
+  await t.test('initialize and all 27 merged names', () => {
+    assert.deepEqual(response(1).result, {
+      protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'teamvibe', version: '1.0.0' },
+    })
+    assert.deepEqual(response(2).result.tools.map(tool => tool.name).sort(), expectedNames.sort())
+  })
+  await t.test('Slack handler reaches chat.postMessage', () => {
+    assert.equal(result(3).ok, true)
+    assert.equal(result(3).ts, '1234.567890')
+  })
+  await t.test('API handler reaches scheduled-messages', () => {
+    assert.deepEqual(result(4), { items: [], marker: 'schedule-dispatched' })
+  })
+  await t.test('API handler reaches feedback', () => {
+    assert.deepEqual(result(5), { ok: true, marker: 'feedback-dispatched' })
+  })
+  // The preload records actual fetches; no handler or routing implementation is mocked.
+  const calls = child.stderr.trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(calls, [
+    { url: 'https://slack.com/api/chat.postMessage', method: 'POST', authorization: 'Bearer slack-test',
+      body: { channel: 'C_TEST', text: 'Merged test', unfurl_links: false, unfurl_media: false } },
+    { url: 'https://api.invalid/scheduled-messages?workspaceId=W_TEST&channelId=TC_TEST', method: 'GET', authorization: 'Bearer api-test' },
+    { url: 'https://api.invalid/feedback', method: 'POST', authorization: 'Bearer api-test', body: { channelId: 'TC_TEST', ...feedback } },
+  ])
+})
