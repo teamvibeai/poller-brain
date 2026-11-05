@@ -10,7 +10,7 @@
 // prelude (everything before the transport section) and export-by-eval the
 // helpers. No network, no Slack. Run: node mcp/__tests__/slack-threadts-warning.test.mjs
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 // The env is read at module scope, so it has to be set before the import below.
@@ -25,6 +25,7 @@ process.env.SLACK_BOT_TOKEN = 'xoxb-test'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
+  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
 const exports =
   '\nexport { computeThreadOverrideWarning, referencesThreadTs, resolveThreadOverrideWarning }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))

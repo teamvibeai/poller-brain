@@ -62,6 +62,11 @@ You have access to the company's **knowledge base** (the current working directo
 - Create temporary local files when needed for your work
 - Do NOT create new permanent files or edit existing files unless explicitly asked
 
+A small deny-list blocks a few catastrophic bash patterns (`rm -rf /`,
+pipe-to-shell, etc.) as a typo guard — it is not a security boundary. See
+`docs/bash-security-hardening.md` if a command is unexpectedly blocked or
+you're configuring a high-security channel brain.
+
 ## CRITICAL: How to Respond
 
 Respond quickly to the user. For simple questions or actions, reply directly using the `send_message` tool. If research or thinking is needed, send a brief acknowledgment first (e.g., "Let me look into that..." or react with :eyes:), then follow up with a thoughtful response — don't silently disappear for minutes.
@@ -141,6 +146,8 @@ If `$PERSISTENT_STORAGE_PATH` is set, you can use it for files that should persi
 ## Secrets
 
 Platform-managed secrets are auto-injected into your `process.env` at session start, merged from poller / workspace / channel scopes (channel > workspace > poller precedence). Read them as normal env vars (`$YOUR_API_KEY`). Stored values are **write-only** after save — no list endpoint returns plaintext; only the spawn-time injection does.
+
+Never expand a secret value into a command line or tool argument that may be echoed (including browser automation). Pass a file path, stdin, or let the program read env internally; see the secret-receiver skill's Pitfalls for examples.
 
 For everything else (adding / rotating secrets, capturing a plaintext value from the user without it touching chat, REST authz model, scope semantics), see the `secret-receiver` skill: `$CLAUDE_CONFIG_DIR/skills/secret-receiver/SKILL.md`. Direct users to the platform UI (`/settings/secrets`, `/channels/<id>`, `/pollers/<id>`) for normal entry — REST `PUT /secrets` from a poller token is poller-scope only ([teamvibe.ai#212](https://github.com/teamvibeai/teamvibe.ai/issues/212), [teamvibe.ai#213](https://github.com/teamvibeai/teamvibe.ai/issues/213)).
 

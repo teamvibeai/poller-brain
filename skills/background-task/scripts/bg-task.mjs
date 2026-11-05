@@ -10,7 +10,7 @@
 //
 // Reliability bar: BEST-EFFORT (see SKILL.md). Survives the launching session. Does NOT
 // survive a poller restart. Never present it to a user as a durability guarantee.
-import { spawn } from 'node:child_process'
+import { ChildProcess, spawn } from 'node:child_process'
 import { mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -356,14 +356,45 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // detached: true puts the runner in its own session and process group, so the
   // spawner killing the session's process group at teardown cannot reach it. This is
   // the whole trick — verified empirically in pb#231 (survived a full teardown).
-  const child = spawn(
-    process.execPath,
-    [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
-      opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
-      opts.eagerCheckpoints ? '1' : '0',
-      '--', ...opts.cmd],
-    { detached: true, stdio: ['ignore', out, out] },
-  )
+  // Pollers with on-demand Git credentials (teamvibe.ai#633) export a launcher that
+  // registers the task so the session's credential files outlive the session, and strips
+  // the poller token from the runner env. Older pollers don't set it; a broken adapter
+  // must never stop a background task from starting, so fall back to plain spawn.
+  const runnerArgs = [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
+    opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
+    opts.eagerCheckpoints ? '1' : '0',
+    '--', ...opts.cmd]
+  const runnerOptions = { detached: true, stdio: ['ignore', out, out] }
+  let child
+  if (process.env.TV_GIT_BG_TASK_LAUNCHER) {
+    // Apply the adapter's token policy before either path starts the interpreter.
+    // With no launcher configured, preserve the older poller's inherited environment.
+    runnerOptions.env = { ...process.env }
+    delete runnerOptions.env.TEAMVIBE_POLLER_TOKEN
+    try {
+      const adapter = await import(process.env.TV_GIT_BG_TASK_LAUNCHER)
+      const originalSpawn = ChildProcess.prototype.spawn
+      let started
+      // A child spawned during the synchronous hook with this task's runner and task
+      // dir in its argv is the runner (interpreter flags allowed). Adopt it regardless
+      // of the hook's return value or a later exception; other helpers don't count.
+      try {
+        ChildProcess.prototype.spawn = function (options) {
+          const result = originalSpawn.call(this, options)
+          if (options?.args?.includes(RUNNER) && options.args.includes(dir)) started ??= this
+          return result
+        }
+        adapter.spawnBackgroundTask(process.execPath, runnerArgs, runnerOptions)
+      } finally {
+        ChildProcess.prototype.spawn = originalSpawn
+        child = started
+      }
+    } catch {
+      // Exception messages can contain credentials, paths or embedded newlines.
+      process.stderr.write('bg-task: git credential launcher unavailable; continuing background task\n')
+    }
+  }
+  child ??= spawn(process.execPath, runnerArgs, runnerOptions)
   child.unref()
 
   console.log(`bg-task launched: name=${opts.name} id=${id} ttl=${opts.ttl}s`)
