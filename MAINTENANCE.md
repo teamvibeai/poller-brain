@@ -110,6 +110,14 @@ The JSON file is written at the same time as the markdown report, in the same co
     "isOverdue": true,
     "nonConformingReflectionFiles": 0
   },
+  "pushHealth": {
+    "branch": "main",
+    "upstream": "refs/remotes/origin/main",
+    "unpushedCommits": 0,
+    "upstreamRefMissing": false,
+    "lastPushOkAt": "2026-01-01T12:00:00.000Z",
+    "oldestUnpushedAt": null
+  },
   "rescueBranches": {
     "count": 0,
     "oldestAgeDays": null,
@@ -137,6 +145,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `processImprovements` | `string[]` | Self-critique and proposals for process improvement. Each entry must be prefixed with `[self-critique]`, `[proposal]`, or `[blocked]`. At least one entry required per reflection. **One sentence per item after the prefix. Cap at 5 items.** |
 | `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
 | `reflectionStatus` | `object` | Self-reported reflection cadence, computed by `scripts/reflection-guard.sh` (poller-brain#157). `lastReflectionDate` (string \| null): date parsed from the newest `memory/episodic/reflection-*.md` filename, or `null` if none exists yet. `daysSinceReflection` (int \| null): days elapsed since that date. `overdueThresholdDays` (int): the threshold used, from `REFLECTION_OVERDUE_THRESHOLD_DAYS` (default 3). `isOverdue` (bool): normally `daysSinceReflection >= overdueThresholdDays` (or `true` when no reflection has ever run), **except** when `idleSkipped` is `true` — an idle-skip forces `isOverdue: false` even past the threshold (poller-brain#391). `nonConformingReflectionFiles` (int): count of `reflection-*.md` files that don't match the strict `reflection-YYYY-MM-DD.md` shape (e.g. a stray `reflection-template.md` or a split `reflection-2026-08-12-part2.md`) — lets the fleet metric distinguish "reflects, but under an unparseable filename" from "never reflected" when `lastReflectionDate` is `null`. `idleSkipped` (bool): `true` only when the guard skipped an otherwise-overdue reflection because no consolidation report since the last reflection promoted anything (`poller-brain#391`, mirrors `#168`'s consolidation idle-skip) — distinguishes "healthy idle, nothing new to reflect on" from "genuinely 3+ days lagging" for the fleet metric; always `false` when `isOverdue` is `true`. Used by the eval pipeline to track fleet-wide reflection lag. |
+| `pushHealth` | `object` | Required in every consolidation report: copy `PUSH_HEALTH_JSON` from `scripts/push-health.sh`. Local tracking-ref snapshot only, with no network calls: `branch`, configured full `upstream` ref (or null), `unpushedCommits` (HEAD commits absent from upstream, or null if missing), `upstreamRefMissing` (true when no upstream ref), `lastPushOkAt` (upstream tip commit ISO committer time, the last state known to reach the remote, not actual push time), `oldestUnpushedAt` (earliest unpushed ISO committer time, or null). Git errors yield all nulls plus `error`, exit 0. |
 | `rescueBranches` | `object` | Self-reported state of this brain's own outstanding git "rescue" branches — `conflict/<brainId>-<timestamp>` refs the platform pushes to `origin` when a brain's push hits a real (non-auto-rebasable) conflict, so no commits are lost (`teamvibeai/teamvibe.ai#247`). Populated by running `git ls-remote origin 'refs/heads/conflict/<own-brainId>-*'` — **not** `git branch -r --list`, which only sees already-fetched refs and misses branches pushed by the platform since the brain's last fetch. `count` (int): number of matching refs found for this brain's own `<brainId>` prefix (never another brain's — see "Rescue Branch Detection" below). `oldestAgeDays` (int \| null): age in days of the oldest match, derived from the `<timestamp>` segment embedded in its ref name; `null` when `count` is 0. `refs` (string[]): the matching ref names, so the aggregator/consumer can act on individual branches. Detection only — see "Rescue Branch Detection" for the non-goal of automated resolution and the cleanup convention. Used by the eval pipeline's fleet-wide "outstanding rescue branches" signal (count + oldest age). |
 | `skills` | `object` | Output of `brain-skills report` (`data`): `counts` per state (`current`, `outdated`, `modified`, `waiting-upstream`, `own`, `not-discovered`) and `entries` with each skill's state and provenance. Run every maintenance session; see "Skills" below. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
@@ -144,6 +153,8 @@ The JSON file is written at the same time as the markdown report, in the same co
 **Rules:**
 - `operationType` is a REQUIRED top-level field (`consolidation` or `reflection`) — the poller permanently deletes any report missing it, with no retry, before it reaches the eval pipeline. Always set it and verify it is present before committing.
 - The `brainCommitSha` MUST be obtained by running `git rev-parse HEAD` in the brain repo.
+- The `pushHealth` field is ALWAYS required in every consolidation report: run `bash "$CLAUDE_CONFIG_DIR/scripts/push-health.sh"` in the brain cwd and copy the `PUSH_HEALTH_JSON: {...}` object, including any `error`.
+- If `pushHealth.unpushedCommits > 50` or `pushHealth.upstreamRefMissing === true`, add an `observations` item.
 - The `rescueBranches` field MUST be obtained by running `git ls-remote origin 'refs/heads/conflict/<own-brainId>-*'` (not `git branch -r --list`) — populate it even when `count` is 0 (`refs: []`, `oldestAgeDays: null`). See "Rescue Branch Detection" below.
 - The `selfAssessment` keys MUST match the criterion IDs defined in the Eval Criteria section below.
 - The JSON file MUST be valid JSON (no trailing commas, no comments).
@@ -290,6 +301,11 @@ letting them silently rot on the remote forever.
 
 During every consolidation, self-report this brain's own outstanding rescue
 branches:
+
+Before the rescue-branch steps, run `bash "$CLAUDE_CONFIG_DIR/scripts/push-health.sh"`
+in this brain's cwd and copy its `PUSH_HEALTH_JSON` object to `pushHealth` in
+every consolidation report, including when it reports an error; this check uses
+only local refs and never fetches or contacts GitHub.
 
 1. Run `git ls-remote origin 'refs/heads/conflict/<own-brainId>-*'` —
    **not** `git branch -r --list`, which only sees refs already fetched into
