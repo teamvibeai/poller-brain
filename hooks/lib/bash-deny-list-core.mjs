@@ -1,57 +1,118 @@
 /**
  * Default bash deny-list — typo/accident protection, NOT adversarial
- * defense. See docs/bash-security-hardening.md and teamvibeai/teamvibe.ai#340
- * for the full threat model.
- *
- * This is deliberately a plain string/regex scan of the raw command text.
- * It is trivially bypassed by `bash -c`, variable indirection, base64|sh
- * decode-pipes, etc. — that is a known, accepted limitation (a floor, not
- * a ceiling), not a bug to fix here. The real enforcement boundary
- * (managed-settings.json + allowManagedHooksOnly, non-root execution) is
- * tracked separately as teamvibeai/teamvibe.ai#344.
+ * defense. See docs/bash-security-hardening.md and teamvibeai/teamvibe.ai#340.
+ * Only literal simple commands are understood; uncertain syntax fails open.
+ * Shell wrappers, expansions, etc. remain accepted bypasses. The enforcement
+ * boundary is tracked separately as teamvibeai/teamvibe.ai#344.
  */
 
+// Split literal words and command boundaries without executing shell input.
+// Unsupported syntax (expansions, redirects, compound commands) fails open.
+function simpleCommands(input) {
+  const commands = [];
+  let words = [], word = "", started = false, quote = null;
+  const finishWord = () => {
+    if (started) words.push(word);
+    word = "";
+    started = false;
+  };
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === "\\" && quote !== "'") {
+      const next = input[++i];
+      if (next === undefined) return [];
+      if (next !== "\n") {
+        // Inside double quotes, backslash only escapes these characters.
+        if (quote === '"' && !'\\"$`'.includes(next)) word += "\\";
+        word += next;
+        started = true;
+      }
+    } else if (quote && ch === quote) {
+      quote = null;
+    } else if (!quote && (ch === "'" || ch === '"')) {
+      quote = ch;
+      started = true;
+    } else if (quote !== "'" && (ch === "`" || ch === "$")) {
+      if (ch !== "$" || input[i + 1] !== "$") return [];
+      word += "$$"; // Known PID expansion, used in /proc/$$/mem.
+      started = true;
+      i++;
+    } else if (quote) {
+      word += ch;
+    } else if ("<>(){}".includes(ch)) {
+      return [];
+    } else if (ch === "#" && !started) {
+      while (i < input.length && input[i] !== "\n") i++;
+      i--; // Let the newline finish this simple command.
+    } else if ("&;|\n".includes(ch)) {
+      finishWord();
+      let separator = ch;
+      if ("&|".includes(ch) && input[i + 1] === ch) separator += input[++i];
+      commands.push({ words, separator });
+      words = [];
+    } else if (ch === " " || ch === "\t") {
+      finishWord();
+    } else {
+      word += ch;
+      started = true;
+    }
+  }
+  if (quote) return [];
+  finishWord();
+  commands.push({ words, separator: "" });
+  // Support the existing literal `sudo command ...` forms, without guessing options.
+  return commands.map(({ words, separator }) => ({
+    words: words[0] === "sudo" ? words.slice(1) : words,
+    separator,
+  }));
+}
+
+const READ_COMMANDS = new Set([
+  "cat", "less", "more", "head", "tail", "strings", "xxd", "hexdump", "od", "base64",
+]);
 const RULES = [
   {
     id: "rm-rf-root",
-    // rm with both -r and -f (any order, combined or separate flags, long
-    // or short form) targeting `/` or `/*` as a standalone argument.
-    pattern:
-      /\brm\s+(?:(?:-[a-zA-Z]*[rRfF][a-zA-Z]*|--recursive|--force)\s+)+\/\*?(?:\s|$)/,
+    matches: ([cmd, ...args]) => {
+      const flags = args.slice(0, args.indexOf("--") < 0 ? args.length : args.indexOf("--"));
+      return cmd === "rm" && args.some(arg => arg === "/" || arg === "/*") &&
+        flags.some(arg => arg === "--recursive" || /^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(arg)) &&
+        flags.some(arg => arg === "--force" || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(arg));
+    },
     reason: "recursive force-delete of the root filesystem (rm -rf /)",
   },
   {
     id: "pipe-to-shell",
-    // curl/wget piped (directly or via xargs) into a shell interpreter.
-    pattern: /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
+    matches: ([cmd], next, separator) =>
+      ["curl", "wget"].includes(cmd) && separator === "|" &&
+      ["sh", "bash", "zsh"].includes(next?.words[0]),
     reason: "piping a network download directly into a shell interpreter",
   },
   {
     id: "proc-mem-read",
-    pattern: /\/proc\/(?:\d+|\$\$|self)\/mem\b/,
+    matches: ([cmd, ...args]) =>
+      (READ_COMMANDS.has(cmd) && args.some(arg => /^\/proc\/(?:\d+|\$\$|self)\/mem$/.test(arg))) ||
+      (cmd === "dd" && args.some(arg => /^if=\/proc\/(?:\d+|\$\$|self)\/mem$/.test(arg))),
     reason: "reading process memory via /proc/*/mem",
   },
   {
     id: "ssh-key-read",
-    // A read-oriented command whose arguments touch ~/.ssh (or a relative
-    // or absolute .ssh/) — covers the common private-key exfil/typo shape
-    // without trying to be a full shell parser. Char class must include
-    // "/" (sibling to dotenv-read below) so absolute paths like
-    // /root/.ssh/id_rsa match, not just ~/.ssh/... or bare .ssh/...
-    pattern:
-      /\b(?:cat|less|more|head|tail|strings|xxd|hexdump|od|base64)\b[^\n]*(?:~\/\.ssh\/|(?:^|[\s'"/])\.ssh\/)/,
+    matches: ([cmd, ...args]) => READ_COMMANDS.has(cmd) &&
+      args.some(arg => /(?:^|\/)\.ssh\/.+/.test(arg)),
     reason: "reading files under ~/.ssh/",
   },
   {
     id: "dotenv-read",
-    pattern: /\b(?:cat|less|more|head|tail|strings|xxd|hexdump|od|base64)\b[^\n]*(?:^|[\s'"/])\.env\b/,
+    matches: ([cmd, ...args]) => READ_COMMANDS.has(cmd) &&
+      args.some(arg => /(?:^|\/)\.env(?:$|\.)/.test(arg)),
     reason: "reading a .env file",
   },
 ];
 
 export function checkBashCommand(command) {
+  const commands = simpleCommands(command);
   for (const rule of RULES) {
-    if (rule.pattern.test(command)) {
+    if (commands.some(({ words, separator }, i) => rule.matches(words, commands[i + 1], separator))) {
       return { denied: true, ruleId: rule.id, reason: rule.reason };
     }
   }
