@@ -48,7 +48,8 @@ function simpleCommands(input) {
       finishWord();
       let separator = ch;
       if ("&|".includes(ch) && input[i + 1] === ch) separator += input[++i];
-      commands.push({ words, separator });
+      // Empty boundaries (including continuation newlines/comments) keep adjacency.
+      if (words.length) commands.push({ words, separator });
       words = [];
     } else if (ch === " " || ch === "\t") {
       finishWord();
@@ -59,7 +60,7 @@ function simpleCommands(input) {
   }
   if (quote) return [];
   finishWord();
-  commands.push({ words, separator: "" });
+  if (words.length) commands.push({ words, separator: "" });
   // Support the existing literal `sudo command ...` forms, without guessing options.
   return commands.map(({ words, separator }) => ({
     words: words[0] === "sudo" ? words.slice(1) : words,
