@@ -9,11 +9,11 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
-const script = fileURLToPath(new URL("../brain-write.mjs", import.meta.url));
+const script = process.env.BRAIN_WRITE_TEST_SCRIPT || fileURLToPath(new URL("../brain-write.mjs", import.meta.url));
 const MAX_BYTES = 512 * 1024;
 
 function fixture(t, git = true) {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "brain-write-test-"));
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "brain-write-test-")));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const root = path.join(temporary, "brain");
   fs.mkdirSync(root);
@@ -32,10 +32,12 @@ function fixture(t, git = true) {
     fs.writeFileSync(absolute, content);
     return absolute;
   };
-  const run = (args, input = "replacement\n", cwd = root) => spawnSync(process.execPath, [script, ...args], {
+  const run = (args, input = "replacement\n", cwd = root) => spawnSync(process.execPath, [
+    ...(env.BRAIN_WRITE_TEST_PRELOAD ? ["--import", env.BRAIN_WRITE_TEST_PRELOAD] : []), script, ...args,
+  ], {
     cwd, env, input, encoding: "utf8", timeout: 10000,
   });
-  return { temporary, root, write, run };
+  return { temporary, root, env, write, run };
 }
 
 function success(result, summary) {
@@ -302,4 +304,148 @@ for (const args of [[], ["--delete"], [".claude/commands/demo.md", "--from"], ["
     const f = fixture(t);
     refuse(f, args, /Usage:|cannot be combined/);
   });
+}
+
+for (const variable of ["CLAUDE_CONFIG_DIR", "BRAIN_ROOT"]) {
+  for (const location of ["same", "nested", "symlink"]) {
+    for (const operation of ["write", "delete"]) {
+      test(`refuses ${operation} at ${location} base brain via ${variable}`, (t) => {
+        const f = fixture(t);
+        const target = ".claude/commands/base.md";
+        f.write(target);
+        if (location === "symlink") {
+          const alias = path.join(f.temporary, "base-alias");
+          fs.symlinkSync(f.root, alias);
+          f.env[variable] = alias;
+        } else {
+          f.env[variable] = location === "same" ? f.root : f.temporary;
+        }
+        refuse(f, [target, ...(operation === "delete" ? ["--delete"] : [])], /base brain is never writable/);
+      });
+    }
+  }
+}
+
+test("base brain prefix does not exclude a sibling channel brain", (t) => {
+  const f = fixture(t);
+  f.env.CLAUDE_CONFIG_DIR = path.join(f.temporary, "bra");
+  fs.mkdirSync(f.env.CLAUDE_CONFIG_DIR);
+  success(f.run([".claude/commands/sibling.md"]), /Created/);
+});
+
+// Preload stubs intercept real filesystem calls in a fresh CLI process; no
+// production test hook or timing-dependent concurrent process is needed.
+function swapFixture(t, boundary, operation) {
+  const f = fixture(t);
+  const target = ".claude/skills/slot/CLAUDE.md";
+  const absolute = f.write(target);
+  const slot = path.dirname(absolute);
+  const outside = path.join(f.temporary, "outside");
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "CLAUDE.md"), "outside must survive\n");
+  const before = snapshot(outside);
+  const marker = path.join(f.temporary, "swapped");
+  const audit = path.join(f.temporary, "unsafe-operation");
+  const preload = path.join(f.temporary, "swap.mjs");
+  fs.writeFileSync(preload, `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { syncBuiltinESMExports } from 'node:module';
+    const original = { ...fs };
+    const slot = ${JSON.stringify(slot)};
+    const target = ${JSON.stringify(absolute)};
+    const outside = ${JSON.stringify(outside)};
+    let swapped = false, validations = 0;
+    function swap() {
+      if (swapped) return;
+      swapped = true;
+      original.renameSync(slot, slot + '-moved');
+      original.symlinkSync(outside, slot);
+      original.writeFileSync(${JSON.stringify(marker)}, 'swapped');
+    }
+    fs.realpathSync = function(file, ...args) {
+      const result = original.realpathSync(file, ...args);
+      if (${JSON.stringify(boundary)} === 'validation' && file === target &&
+          ++validations === ${operation === "delete" ? 1 : 2}) swap();
+      return result;
+    };
+    fs.openSync = function(file, ...args) {
+      if (${JSON.stringify(boundary)} === 'temp-create' &&
+          path.basename(String(file)).startsWith('.brain-write-')) swap();
+      const fd = original.openSync(file, ...args);
+      if (${JSON.stringify(boundary)} === 'parent-open' &&
+          path.basename(String(file)) === 'slot') swap();
+      if (${JSON.stringify(boundary)} === 'temp-open' &&
+          path.basename(String(file)).startsWith('.brain-write-')) swap();
+      return fd;
+    };
+    for (const [method, trigger] of [['unlinkSync', 'unlink'], ['renameSync', 'rename'], ['mkdirSync', 'mkdir']]) {
+      fs[method] = function(file, ...args) {
+        if (${JSON.stringify(boundary)} === trigger) swap();
+        return original[method](file, ...args);
+      };
+    }
+    // Record even transient outside mutations, including temp creation/cleanup.
+    for (const method of ['openSync', 'mkdirSync', 'unlinkSync', 'renameSync']) {
+      const wrapped = fs[method];
+      fs[method] = function(file, ...args) {
+        const mutates = method !== 'openSync' || typeof args[0] === 'string' && /[wax]/.test(args[0]);
+        if (mutates && typeof file === 'string') {
+          try {
+            if (original.realpathSync(path.dirname(file)) === outside)
+              original.writeFileSync(${JSON.stringify(audit)}, method);
+          } catch {}
+        }
+        return wrapped(file, ...args);
+      };
+    }
+    syncBuiltinESMExports();
+  `);
+  f.env.BRAIN_WRITE_TEST_PRELOAD = preload;
+  return { ...f, target, outside, before, marker, audit };
+}
+
+for (const boundary of ["temp-create", "mkdir", "rename", "unlink"]) {
+  test(`Linux pins the operation to its opened parent during ${boundary}`, { skip: process.platform !== "linux" }, (t) => {
+    const operation = boundary === "unlink" ? "delete" : "write";
+    const f = swapFixture(t, boundary, operation);
+    const target = boundary === "mkdir" ? f.target.replace("CLAUDE.md", "new/deep/CLAUDE.md") : f.target;
+    const result = f.run([target, ...(operation === "delete" ? ["--delete"] : [])]);
+    assert.equal(result.error, undefined);
+    assert.equal(fs.existsSync(f.marker), true, "swap immediately before the syscall");
+    assert.deepEqual(snapshot(f.outside), f.before, "replacement symlink cannot redirect the syscall");
+    assert.equal(fs.existsSync(f.audit), false, "all mutations must use the pinned parent");
+    const moved = path.join(f.root, ".claude/skills/slot-moved/CLAUDE.md");
+    if (boundary === "unlink") {
+      success(result, /Deleted/);
+      assert.equal(fs.existsSync(moved), false);
+    } else if (boundary === "rename") {
+      success(result, /Updated/);
+      assert.equal(fs.readFileSync(moved, "utf8"), "replacement\n");
+    } else {
+      assert.equal(result.status, 1, "subsequent identity check refuses the moved parent");
+      assert.equal(fs.readFileSync(moved, "utf8"), "original\n");
+    }
+  });
+}
+
+for (const operation of ["write", "delete"]) {
+  for (const boundary of ["validation", "parent-open", ...(operation === "write" ? ["temp-open"] : [])]) {
+    test(`refuses ${operation} when a parent is swapped after ${boundary}`, (t) => {
+      const f = swapFixture(t, boundary, operation);
+      const result = f.run([f.target, ...(operation === "delete" ? ["--delete"] : [])]);
+      assert.equal(result.error, undefined);
+      assert.equal(fs.existsSync(f.marker), true, "the deterministic swap must execute");
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.equal(result.stdout, "");
+      assert.deepEqual(snapshot(f.outside), f.before, "outside directory must be unchanged");
+      assert.equal(fs.existsSync(f.audit), false, "no transient operation may mutate outside");
+      if (boundary === "temp-open") {
+        const moved = path.join(f.root, ".claude/skills/slot-moved");
+        for (const name of fs.readdirSync(moved).filter((name) => name.startsWith(".brain-write-"))) {
+          assert.equal(fs.statSync(path.join(moved, name)).size, 0, "verify the parent after open before writing content");
+        }
+      }
+    });
+  }
 }

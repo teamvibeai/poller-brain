@@ -12,10 +12,14 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/brain-write/scripts/brain-write.ts" .claude/c
 ```
 
 Only files below `.claude/skills/`, `.claude/commands/`, and `.claude/agents/` are allowed.
+CWD must not resolve to or inside `$CLAUDE_CONFIG_DIR` or `$BRAIN_ROOT`: the base brain is never writable.
 Skill-local `hooks` files and files below skill-local `hooks/` directories are skill content and allowed.
 All symlink components (even links within an allowed directory), absolute paths, `..`, and
 `settings*.json` names anywhere are refused. `.claude/hooks/` is refused.
 Input is limited to 512 KiB; writes create parents and atomically replace the file.
+Parent directories are opened and their real locations and identities verified before filesystem mutations.
+Linux operations use directory descriptor paths; other platforms retain a small check-to-syscall race
+because Node has no directory-relative mutation API there.
 Deletion removes one regular file, never a directory. The script prints a change summary.
 Commit changes as usual; the script does not commit.
 
