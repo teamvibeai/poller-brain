@@ -23,6 +23,22 @@ function run(command, args, dir = cwd, extraEnv = {}) {
 }
 function json(file, fallback) { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : fallback; }
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); }
+// Mirror brain-write's base-brain contract, including symlink aliases and a
+// separator boundary so a sibling sharing the base's prefix remains writable.
+function refuseBaseBrain(root) {
+  for (const name of ['CLAUDE_CONFIG_DIR', 'BRAIN_ROOT']) {
+    if (!process.env[name]) continue;
+    let base;
+    try { base = fs.realpathSync(process.env[name]); }
+    catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    if (root === base || root.startsWith(base.endsWith(path.sep) ? base : base + path.sep)) {
+      fail(`The base brain is never writable: cwd is at or inside $${name}`);
+    }
+  }
+}
 function canonicalDirectory(name) {
   const dir = canonical(name);
   if (!exists(dir) || !fs.lstatSync(dir).isDirectory()) fail(`Missing or invalid canonical directory (symlinks forbidden): ${name}`);
@@ -293,7 +309,7 @@ function install(source, subpath, ref, requestedName, replacing = false) {
     if (candidates.length !== 1) fail('Select exactly one skill with #path or --name');
     const selected = candidates[0], name = validName(selected.name);
     const selectedPath = path.relative(repo, selected.dir).split(path.sep).join('/') || '.';
-    if (!replacing && (exists(path.join(skillsDir, name)) || Object.hasOwn(lock().skills, name))) fail(`Skill ${name} already exists; use sync`);
+    if (!replacing && (exists(path.join(skillsDir, name)) || exists(canonical(name)) || Object.hasOwn(lock().skills, name))) fail(`Skill ${name} already exists; use sync`);
     // Remote sources use the CLI's native #SHA support. For local sources the
     // CLI has no ref syntax; use a clean checkout at that SHA as its input.
     let input = `${info.url}#${sha}`;
@@ -415,6 +431,7 @@ function push(name) {
 function main(args) {
   const root = run('git', ['rev-parse', '--show-toplevel']);
   if (fs.realpathSync(root) !== fs.realpathSync(cwd)) fail('Run brain-skills from the brain repository root');
+  refuseBaseBrain(fs.realpathSync(root));
   for (const relative of ['.claude', '.claude/skills', '.agents', '.agents/skills', 'skills-lock.json', '.claude/skills/skills.lock.yaml']) {
     const target = path.join(cwd, relative);
     if (exists(target) && fs.lstatSync(target).isSymbolicLink()) fail(`Refusing symlink target: ${relative}`);

@@ -40,8 +40,12 @@ function fixture() {
     PATH: `${bin}${path.delimiter}${process.env.PATH}`,
     NODE_OPTIONS: `--require=${deny}`, npm_config_offline: 'true', npm_config_audit: 'false', npm_config_update_notifier: 'false',
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${upstream}.insteadOf`, GIT_CONFIG_VALUE_0: source, GIT_ALLOW_PROTOCOL: 'file',
-    GH_CALL_LOG: path.join(root, 'gh.json'),
+    GH_CALL_LOG: path.join(root, 'gh.json'), INSTALL_CALL_LOG: path.join(root, 'installer.jsonl'),
+    // Keep fixtures independent of the invoking brain's environment.
+    CLAUDE_CONFIG_DIR: '', BRAIN_ROOT: '',
   };
+  fs.copyFileSync(new URL('./fixtures/npx.mjs', import.meta.url), path.join(bin, 'npx'));
+  fs.chmodSync(path.join(bin, 'npx'), 0o755);
   // Copy the JS-compatible .ts entrypoint so this suite works on Node 18+.
   const runner = path.join(root, 'brain-skills.mjs'); fs.copyFileSync(script, runner);
   write(path.join(brain, '.claude/skills/allowlist.yaml'), `sources:\n  - ${source}\n  - ${upstream}\n  - file://${upstream}\n`);
@@ -68,7 +72,7 @@ function fixture() {
   return { root, brain, upstream, source, sha, cli, git, add, state, update, edit, readLock, lockFile, fakeGh, env };
 }
 
-test('allowlisted local add delegates to real CLI and writes agreeing locks', () => {
+test('allowlisted local add delegates to the installer and writes agreeing locks', () => {
   const f = fixture(), data = f.cli(['add', `${f.upstream}#demo`]);
   assert.equal(data.sha, f.sha); assert.equal(data.path, 'demo'); assert.equal(data.ref, 'main');
   assert.equal(data.source, fs.realpathSync(f.upstream)); assert.equal(data.upstream_pr, null);
@@ -89,6 +93,49 @@ function assertLayout(f) {
   assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
   assert.equal(fs.readlinkSync(link), '../../.agents/skills/demo');
   assert.equal(fs.realpathSync(link), fs.realpathSync(canonical));
+}
+function snapshot(root) {
+  return fs.readdirSync(root).sort().map(name => {
+    const file = path.join(root, name), stat = fs.lstatSync(file);
+    return [name, stat.isSymbolicLink() ? ['link', fs.readlinkSync(file)] :
+      stat.isDirectory() ? snapshot(file) : fs.readFileSync(file).toString('base64')];
+  });
+}
+for (const variable of ['CLAUDE_CONFIG_DIR', 'BRAIN_ROOT']) {
+  for (const relation of ['equal', 'descendant', 'symlink alias']) {
+    test(`base brain refuses all mutations: ${variable}, ${relation}`, () => {
+      const f = fixture(); f.add(); f.edit(); f.fakeGh();
+      let base = relation === 'descendant' ? f.root : f.brain;
+      if (relation === 'symlink alias') {
+        base = path.join(f.root, 'base-alias'); fs.symlinkSync(f.brain, base);
+      }
+      f.env[variable] = base;
+      const before = snapshot(f.brain), calls = fs.readFileSync(f.env.INSTALL_CALL_LOG, 'utf8');
+      for (const args of [['add', '--new', 'own-demo'], ['add', `${f.source}#demo`],
+        ['ensure', 'demo', `${f.source}#demo`], ['sync', '--force'], ['push', 'demo']]) {
+        assert.match(f.cli(args, 1), new RegExp(`base brain is never writable.*\\$${variable}`));
+        assert.deepEqual(snapshot(f.brain), before);
+        assert.equal(fs.readFileSync(f.env.INSTALL_CALL_LOG, 'utf8'), calls);
+        assert.equal(fs.existsSync(f.env.GH_CALL_LOG), false);
+      }
+    });
+  }
+  test(`base brain guard allows sibling prefix: ${variable}`, () => {
+    const f = fixture(), base = path.join(f.root, 'bra'); fs.mkdirSync(base);
+    f.env[variable] = base;
+    f.cli(['add', '--new', 'own-demo']); f.add(); assertLayout(f);
+  });
+}
+for (const command of ['add', 'ensure']) {
+  test(`${command} refuses an existing untracked canonical skill and preserves custom content`, () => {
+    const f = fixture();
+    write(path.join(f.brain, '.agents/skills/demo/SKILL.md'), 'Custom canonical skill\n');
+    write(path.join(f.brain, '.agents/skills/demo/custom.txt'), 'Keep this too\n');
+    const before = snapshot(f.brain);
+    assert.match(f.cli(command === 'add' ? ['add', `${f.source}#demo`] : ['ensure', 'demo', `${f.source}#demo`], 1), /already exists/);
+    assert.deepEqual(snapshot(f.brain), before);
+    assert.equal(fs.existsSync(f.env.INSTALL_CALL_LOG), false);
+  });
 }
 test('add commits canonical content and a relative Claude symlink without touching gitignore', () => {
   const f = fixture(), ignore = path.join(f.brain, '.gitignore');
@@ -111,13 +158,15 @@ test('add, ensure and sync preserve symlink layout and never create gitignore', 
 });
 for (const canonicalExists of [false, true]) {
   test(`installer copy fallback creates canonical content and a relative link (canonical exists: ${canonicalExists})`, () => {
-    const f = fixture(), bin = path.join(f.root, 'bin/npx');
-    if (canonicalExists) write(path.join(f.brain, '.agents/skills/demo/stale.txt'), 'stale');
-    // Delegate to the real pinned CLI in copy mode, while asserting the wrapper
-    // requested its default symlink mode. No installer output is fabricated.
-    write(bin, `#!/usr/bin/env node\nconst {spawnSync}=require('node:child_process'); const args=process.argv.slice(2); if(args.includes('--copy')||args[1]!=='skills@1.7.2'||!args.includes('claude-code'))process.exit(9); const r=spawnSync(${JSON.stringify(cmd('which', ['npx'], f.brain))}, [...args,'--copy'], {stdio:'inherit'});process.exit(r.status ?? 1);\n`);
-    fs.chmodSync(bin, 0o755);
-    f.add(); assertLayout(f); f.cli(['lint']);
+    const f = fixture();
+    if (canonicalExists) {
+      f.add();
+      write(path.join(f.brain, '.agents/skills/demo/stale.txt'), 'stale');
+    }
+    f.env.INSTALL_MODE = 'copy';
+    if (canonicalExists) f.cli(['sync', '--force']);
+    else f.add();
+    assertLayout(f); f.cli(['lint']);
     assert.equal(fs.existsSync(path.join(f.brain, '.agents/skills/demo/stale.txt')), false);
   });
 }
