@@ -619,6 +619,8 @@ export function spawnBackgroundTask(command, args, options = {}) {
   const throwingImport = join(WORK, 'import-throws.mjs')
   const throwingCall = join(WORK, 'call-throws.mjs')
   const throwingAfterSpawn = join(WORK, 'spawn-then-throw.mjs')
+  const noReturnAfterSpawn = join(WORK, 'spawn-then-return-undefined.mjs')
+  const throwingAfterFlagSpawn = join(WORK, 'spawn-with-flag-then-throw.mjs')
   const secret = 'fake-poller-token-633'
   // Deliberately hostile error text: diagnostics must not echo it, even on import.
   const throwSecret = "throw new Error(process.env.TEAMVIBE_POLLER_TOKEN + '\\nprivate diagnostic')"
@@ -628,6 +630,19 @@ export function spawnBackgroundTask(command, args, options = {}) {
     import { spawn } from 'node:child_process'
     export function spawnBackgroundTask(command, args, options) {
       spawn(command, args, options)
+      ${throwSecret}
+    }
+  `)
+  writeFileSync(noReturnAfterSpawn, `
+    import { spawn } from 'node:child_process'
+    export function spawnBackgroundTask(command, args, options) {
+      spawn(command, args, options)
+    }
+  `)
+  writeFileSync(throwingAfterFlagSpawn, `
+    import { spawn } from 'node:child_process'
+    export function spawnBackgroundTask(command, args, options) {
+      spawn(command, ['--no-warnings', ...args], options)
       ${throwSecret}
     }
   `)
@@ -644,7 +659,7 @@ export function spawnBackgroundTask(command, args, options = {}) {
     } else {
       const original = ChildProcess.prototype.spawn
       ChildProcess.prototype.spawn = function(options) {
-        if (options.args[1]?.endsWith('/bg-task-runner.mjs')) {
+        if (options.args.some(arg => arg.endsWith('/bg-task-runner.mjs'))) {
           appendFileSync(process.env.BG_TASK_TEST_SPAWNS, JSON.stringify({
             args: options.args, detached: options.detached,
             stdio: options.stdio.map(s => typeof s === 'number' ? 'fd' : s),
@@ -667,21 +682,25 @@ export function spawnBackgroundTask(command, args, options = {}) {
     ['Shipped adapter, missing registry parent', pathToFileURL(shipped).href, join(WORK, 'missing-parent', 'registry'), 1],
     ['Shipped adapter, unwritable registry', pathToFileURL(shipped).href, WORK, 1], // EISDIR, also when root
     ['Adapter spawns then throws', pathToFileURL(throwingAfterSpawn).href, '', 1],
+    ['Adapter spawns then returns undefined', pathToFileURL(noReturnAfterSpawn).href, '', 0],
+    ['Adapter spawns with interpreter flag then throws', pathToFileURL(throwingAfterFlagSpawn).href, '', 1, ['--no-warnings']],
   ]
   const rows = []
-  for (const [label, adapter, tasksFile, diagnostics] of cases) {
+  for (const [label, adapter, tasksFile, diagnostics, flags = []] of cases) {
     const root = mkdtempSync(join(WORK, 'adapter-tasks-'))
     const audit = join(root, 'runner-audit.jsonl')
     const spawns = join(root, 'runner-spawns.jsonl')
+    const executions = join(root, 'command-executions')
     const credentials = [join(WORK, 'git-credentials'), join(WORK, 'gh-config'), '1',
       'credential.helper', '!test-credential-helper', ENV.PATH]
-    const cmd = ['sh', '-c', 'printf "ADAPTER-ONE\\n"; sleep 0.3; printf "ADAPTER-TWO\\n"']
+    const cmd = ['sh', '-c', 'printf "run\\n" >> "$BG_TASK_TEST_EXECUTIONS"; printf "ADAPTER-ONE\\n"; sleep 0.3; printf "ADAPTER-TWO\\n"']
     const result = launch(['--name', 'adapter-probe', '--ttl', '60', '--note', 'adapter fallback',
       '--notify-on', 'ADAPTER-ONE', '--eager-checkpoints', '--', ...cmd], {
       TV_GIT_BG_TASK_LAUNCHER: adapter, TV_GIT_BG_TASKS_FILE: tasksFile,
       TEAMVIBE_POLLER_TOKEN: secret, BG_TASK_ROOT: root,
       NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
       BG_TASK_TEST_AUDIT: audit, BG_TASK_TEST_SPAWNS: spawns,
+      BG_TASK_TEST_EXECUTIONS: executions,
       TV_GIT_CREDENTIAL_FILE: credentials[0], GH_CONFIG_DIR: credentials[1],
       GIT_CONFIG_COUNT: credentials[2], GIT_CONFIG_KEY_0: credentials[3], GIT_CONFIG_VALUE_0: credentials[4],
       BG_TASK_CHECK_INTERVAL_MS: '20',
@@ -705,10 +724,11 @@ export function spawnBackgroundTask(command, args, options = {}) {
     ok(`${label}: no secret in launcher output`, !`${result.stdout}${result.stderr}`.includes(secret))
     eq(`${label}: exactly one runner spawned`, spawned.length, 1)
     eq(`${label}: exactly one runner interpreter starts`, runners.length, 1)
+    eq(`${label}: exactly one command execution`, readFileSync(executions, 'utf8').trim().split('\n').length, 1)
     eq(`${label}: token policy applies before runner preloads`, runners[0]?.tokenPresent, !adapter)
     eq(`${label}: credential environment preserved`, JSON.stringify(runners[0]?.credentialEnv), JSON.stringify(credentials))
     eq(`${label}: identical runner args`, JSON.stringify(spawned[0]?.args), JSON.stringify([
-      process.execPath, join(HERE, 'bg-task-runner.mjs'), dir, '60', 'adapter-probe', THREAD_ID,
+      process.execPath, ...flags, join(HERE, 'bg-task-runner.mjs'), dir, '60', 'adapter-probe', THREAD_ID,
       '1', 'ADAPTER-ONE', '0', '', '1', '--', ...cmd,
     ]))
     eq(`${label}: detached spawn`, spawned[0]?.detached, true)

@@ -371,26 +371,26 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // With no launcher configured, preserve the older poller's inherited environment.
     runnerOptions.env = { ...process.env }
     delete runnerOptions.env.TEAMVIBE_POLLER_TOKEN
-    const originalSpawn = ChildProcess.prototype.spawn
-    let started
     try {
       const adapter = await import(process.env.TV_GIT_BG_TASK_LAUNCHER)
-      // The hook is synchronous. Observe its actual runner spawn so an adapter that
-      // spawns and THEN throws cannot make the fallback launch a second runner. This
-      // also catches adapters that captured `spawn` before the call. Restore the
-      // prototype immediately after the call, before yielding to any other work.
-      ChildProcess.prototype.spawn = function (options) {
-        const result = originalSpawn.call(this, options)
-        if (options.file === process.execPath && options.args[1] === RUNNER && options.args[2] === dir) started = this
-        return result
+      const originalSpawn = ChildProcess.prototype.spawn
+      let started
+      // Any child spawned during the synchronous hook counts as the runner. Adopt
+      // the first one regardless of the hook's return value or a later exception.
+      try {
+        ChildProcess.prototype.spawn = function (options) {
+          const result = originalSpawn.call(this, options)
+          started ??= this
+          return result
+        }
+        adapter.spawnBackgroundTask(process.execPath, runnerArgs, runnerOptions)
+      } finally {
+        ChildProcess.prototype.spawn = originalSpawn
+        child = started
       }
-      child = adapter.spawnBackgroundTask(process.execPath, runnerArgs, runnerOptions)
     } catch {
-      child = started
       // Exception messages can contain credentials, paths or embedded newlines.
       process.stderr.write('bg-task: git credential launcher unavailable; continuing background task\n')
-    } finally {
-      ChildProcess.prototype.spawn = originalSpawn
     }
   }
   child ??= spawn(process.execPath, runnerArgs, runnerOptions)
