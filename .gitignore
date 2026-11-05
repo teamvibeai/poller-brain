@@ -25,3 +25,5 @@
 !reports/**
 !.github/
 !.github/**
+!docs/
+!docs/**
