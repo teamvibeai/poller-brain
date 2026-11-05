@@ -53,6 +53,9 @@ export function redactSecrets(command) {
   if (command.includes("#")) return MARKER;
   const commands = simpleCommands(command, { allowEnvReferences: true, stripSudo: false });
   if (!commands.length) return command.trim() ? MARKER : command;
+  // Shell quote concatenation can split BEGIN or KEY in the raw text. Detect
+  // markers in decoded words too, and omit the whole key-bearing command.
+  if (commands.some(({ words }) => PEM.test(words.join(" ")))) return "[REDACTED PRIVATE KEY]";
   let changed = false;
   const sanitized = commands.map(({ words, separator }) => {
     const safe = words.map((word, i) => {

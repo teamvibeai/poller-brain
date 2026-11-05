@@ -163,4 +163,15 @@ for (const command of [
 // Long labels must stay bounded even if no '=' follows the label.
 assertUnchanged("KEY".repeat(20000), "long non-assignment");
 
+// Quote-decoded PEM markers must omit the WHOLE command, including other args.
+for (const marker of ['BE""GIN RSA PRIVATE KEY', 'BEGIN RSA PRIVATE KE""Y']) {
+  const command = `echo keep-before "-----${marker}-----\nCanaryKeyMaterial\n-----END RSA PRIVATE KEY-----" keep-after`;
+  const result = redactSecrets(command);
+  if (result !== "[REDACTED PRIVATE KEY]") {
+    console.error(`FAIL (quote-decoded PEM ${marker}): expected whole-command omission, got: ${result}`);
+    process.exit(1);
+  }
+  passed++;
+}
+
 console.log(`OK: ${passed} redaction assertions passed`);
