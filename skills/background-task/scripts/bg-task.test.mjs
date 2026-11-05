@@ -4,11 +4,11 @@
 //
 //   node bg-task.test.mjs                    # fast cases (~10 s)
 //   BG_TASK_TEST_SLOW=1 node bg-task.test.mjs   # + real TTL-kill case (~35 s)
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LAUNCHER = join(HERE, 'bg-task.mjs')
@@ -45,14 +45,10 @@ const ENV = {
 // Runs the launcher with its cwd pinned to a scratch dir, so a live (non-dry) run's
 // `.inbox/` write lands somewhere disposable instead of this repo's real one.
 function launch(args, envOverride = {}, cwd = WORK) {
-  try {
-    const stdout = execFileSync(process.execPath, [LAUNCHER, ...args], {
-      env: { ...ENV, ...envOverride }, encoding: 'utf8', cwd,
-    })
-    return { code: 0, stdout, stderr: '' }
-  } catch (e) {
-    return { code: e.status, stdout: e.stdout || '', stderr: e.stderr || '' }
-  }
+  const result = spawnSync(process.execPath, [LAUNCHER, ...args], {
+    env: { ...ENV, ...envOverride }, encoding: 'utf8', cwd,
+  })
+  return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '' }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -586,6 +582,181 @@ console.log('finish path')
     has('the drop carries the output', drops[0], 'CANARY-OK')
     has('the drop says the task finished, not a checkpoint', drops[0], 'has finished with exit code 0')
   }
+}
+
+console.log('git credential launcher — fallback contract (teamvibe.ai#633)')
+{
+  // Pinned fixture: poller merge ce98b65, packages/poller/bin/bg-task-launcher.mjs.
+  // Keep the shipped implementation here so its synchronous registry failure is tested
+  // without a checkout of the poller, installed dependencies, or network access.
+  const shipped = join(WORK, 'shipped-adapter.mjs')
+  writeFileSync(shipped, String.raw`// Spawn-compatible hook for base-brain's background-task launcher. Registration
+// must finish synchronously before the launcher can return and end its session.
+import { spawn } from 'node:child_process'
+import { appendFileSync, statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
+
+export function spawnBackgroundTask(command, args, options = {}) {
+  const env = { ...(options.env ?? process.env) }
+  // Strip before the runner's interpreter (including any preloads) starts.
+  // PATH, TV_GIT_*, GH_CONFIG_DIR and GIT_CONFIG_* otherwise stay intact.
+  delete env.TEAMVIBE_POLLER_TOKEN
+  if (env.TV_GIT_BG_TASKS_FILE) {
+    const dir = args[1]
+    if (typeof dir !== 'string' || !isAbsolute(dir) || /[\r\n]/.test(dir) || !statSync(dir).isDirectory()) {
+      throw new Error('Invalid background task directory')
+    }
+    // Use #618's existing status/PID/TTL registry and ownership guards. A
+    // failed registration must prevent launch rather than promise credentials
+    // that teardown is about to remove.
+    appendFileSync(env.TV_GIT_BG_TASKS_FILE, dir + '\n', { mode: 0o600 })
+  }
+  // Failed spawns keep the launcher's normal error behavior; the registry's
+  // existing unknown-status grace bounds retention for those registrations.
+  return spawn(command, args, { ...options, env })
+}
+`)
+  const throwingImport = join(WORK, 'import-throws.mjs')
+  const throwingCall = join(WORK, 'call-throws.mjs')
+  const throwingAfterSpawn = join(WORK, 'spawn-then-throw.mjs')
+  const noReturnAfterSpawn = join(WORK, 'spawn-then-return-undefined.mjs')
+  const throwingAfterFlagSpawn = join(WORK, 'spawn-with-flag-then-throw.mjs')
+  const secret = 'fake-poller-token-633'
+  // Deliberately hostile error text: diagnostics must not echo it, even on import.
+  const throwSecret = "throw new Error(process.env.TEAMVIBE_POLLER_TOKEN + '\\nprivate diagnostic')"
+  writeFileSync(throwingImport, throwSecret)
+  writeFileSync(throwingCall, `export function spawnBackgroundTask() { ${throwSecret} }`)
+  writeFileSync(throwingAfterSpawn, `
+    import { spawn } from 'node:child_process'
+    export function spawnBackgroundTask(command, args, options) {
+      spawn(command, args, options)
+      ${throwSecret}
+    }
+  `)
+  writeFileSync(noReturnAfterSpawn, `
+    import { spawn } from 'node:child_process'
+    export function spawnBackgroundTask(command, args, options) {
+      spawn(command, args, options)
+    }
+  `)
+  writeFileSync(throwingAfterFlagSpawn, `
+    import { spawn } from 'node:child_process'
+    export function spawnBackgroundTask(command, args, options) {
+      spawn(command, ['--no-warnings', ...args], options)
+      ${throwSecret}
+    }
+  `)
+  const helperThenThrow = join(WORK, 'helper-then-throw.mjs')
+  writeFileSync(helperThenThrow, `
+    import { spawn } from 'node:child_process'
+    export function spawnBackgroundTask(command, args, options) {
+      spawn(command, ['-e', ''], { stdio: 'ignore', env: options.env }).unref()
+      ${throwSecret}
+    }
+  `)
+  const preload = join(WORK, 'runner-audit.mjs')
+  writeFileSync(preload, `
+    import { ChildProcess } from 'node:child_process'
+    import { appendFileSync } from 'node:fs'
+    if (process.argv[1]?.endsWith('/bg-task-runner.mjs')) {
+      appendFileSync(process.env.BG_TASK_TEST_AUDIT, JSON.stringify({
+        tokenPresent: Object.hasOwn(process.env, 'TEAMVIBE_POLLER_TOKEN'),
+        credentialEnv: ['TV_GIT_CREDENTIAL_FILE', 'GH_CONFIG_DIR', 'GIT_CONFIG_COUNT',
+          'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'PATH'].map(k => process.env[k]),
+      }) + '\\n')
+    } else {
+      const original = ChildProcess.prototype.spawn
+      ChildProcess.prototype.spawn = function(options) {
+        if (options.args.some(arg => arg.endsWith('/bg-task-runner.mjs'))) {
+          appendFileSync(process.env.BG_TASK_TEST_SPAWNS, JSON.stringify({
+            args: options.args, detached: options.detached,
+            stdio: options.stdio.map(s => typeof s === 'number' ? 'fd' : s),
+            sameOutputFd: options.stdio[1] === options.stdio[2] && options.stdio[1] > 2,
+          }) + '\\n')
+        }
+        return original.call(this, options)
+      }
+    }
+  `)
+  const readJsonLines = (path) => existsSync(path)
+    ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []
+  const registry = join(WORK, 'registry')
+  const cases = [
+    ['Variable unset', undefined, '', 0],
+    ['Missing adapter URL', pathToFileURL(join(WORK, 'missing-adapter.mjs')).href, '', 1],
+    ['Adapter throws during import', pathToFileURL(throwingImport).href, '', 1],
+    ['Shipped adapter succeeds', pathToFileURL(shipped).href, registry, 0],
+    ['Adapter throws during call', pathToFileURL(throwingCall).href, '', 1],
+    ['Shipped adapter, missing registry parent', pathToFileURL(shipped).href, join(WORK, 'missing-parent', 'registry'), 1],
+    ['Shipped adapter, unwritable registry', pathToFileURL(shipped).href, WORK, 1], // EISDIR, also when root
+    ['Adapter spawns then throws', pathToFileURL(throwingAfterSpawn).href, '', 1],
+    ['Adapter spawns then returns undefined', pathToFileURL(noReturnAfterSpawn).href, '', 0],
+    ['Adapter spawns with interpreter flag then throws', pathToFileURL(throwingAfterFlagSpawn).href, '', 1, ['--no-warnings']],
+    ['Adapter spawns unrelated helper then throws', pathToFileURL(helperThenThrow).href, '', 1],
+  ]
+  const rows = []
+  for (const [label, adapter, tasksFile, diagnostics, flags = []] of cases) {
+    const root = mkdtempSync(join(WORK, 'adapter-tasks-'))
+    const audit = join(root, 'runner-audit.jsonl')
+    const spawns = join(root, 'runner-spawns.jsonl')
+    const executions = join(root, 'command-executions')
+    const credentials = [join(WORK, 'git-credentials'), join(WORK, 'gh-config'), '1',
+      'credential.helper', '!test-credential-helper', ENV.PATH]
+    const cmd = ['sh', '-c', 'printf "run\\n" >> "$BG_TASK_TEST_EXECUTIONS"; printf "ADAPTER-ONE\\n"; sleep 0.3; printf "ADAPTER-TWO\\n"']
+    const result = launch(['--name', 'adapter-probe', '--ttl', '60', '--note', 'adapter fallback',
+      '--notify-on', 'ADAPTER-ONE', '--eager-checkpoints', '--', ...cmd], {
+      TV_GIT_BG_TASK_LAUNCHER: adapter, TV_GIT_BG_TASKS_FILE: tasksFile,
+      TEAMVIBE_POLLER_TOKEN: secret, BG_TASK_ROOT: root,
+      NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+      BG_TASK_TEST_AUDIT: audit, BG_TASK_TEST_SPAWNS: spawns,
+      BG_TASK_TEST_EXECUTIONS: executions,
+      TV_GIT_CREDENTIAL_FILE: credentials[0], GH_CONFIG_DIR: credentials[1],
+      GIT_CONFIG_COUNT: credentials[2], GIT_CONFIG_KEY_0: credentials[3], GIT_CONFIG_VALUE_0: credentials[4],
+      BG_TASK_CHECK_INTERVAL_MS: '20',
+    })
+    const ns = join(root, '01TESTCHANNEL')
+    const dir = join(ns, readdirSync(ns)[0])
+    // A failing launcher may already have spawned a runner. Still wait for that runner
+    // so the spawn-then-throw case cannot pass by overlooking its side effects.
+    const status = result.code === 0 || readJsonLines(spawns).length
+      ? await waitDone(dir) : ''
+    const drops = dropTexts(dir)
+    const diagnosticLines = result.stderr.trim().split('\n').filter(Boolean)
+    const runners = readJsonLines(audit)
+    const spawned = readJsonLines(spawns)
+    eq(`${label}: launch exits 0`, result.code, 0)
+    has(`${label}: terminal status`, status || '', 'state=finished')
+    has(`${label}: command succeeds`, status || '', 'rc=0')
+    has(`${label}: final wake recorded`, status || '', 'terminal_drop=diverted')
+    eq(`${label}: exactly one diagnostic line when falling back`, diagnosticLines.length, diagnostics)
+    if (diagnostics) has(`${label}: diagnostic has bg-task prefix`, diagnosticLines[0], 'bg-task: git credential launcher')
+    ok(`${label}: no secret in launcher output`, !`${result.stdout}${result.stderr}`.includes(secret))
+    eq(`${label}: exactly one runner spawned`, spawned.length, 1)
+    eq(`${label}: exactly one runner interpreter starts`, runners.length, 1)
+    eq(`${label}: exactly one command execution`, existsSync(executions) ? readFileSync(executions, 'utf8').trim().split('\n').length : 0, 1)
+    eq(`${label}: token policy applies before runner preloads`, runners[0]?.tokenPresent, !adapter)
+    eq(`${label}: credential environment preserved`, JSON.stringify(runners[0]?.credentialEnv), JSON.stringify(credentials))
+    eq(`${label}: identical runner args`, JSON.stringify(spawned[0]?.args), JSON.stringify([
+      process.execPath, ...flags, join(HERE, 'bg-task-runner.mjs'), dir, '60', 'adapter-probe', THREAD_ID,
+      '1', 'ADAPTER-ONE', '0', '', '1', '--', ...cmd,
+    ]))
+    eq(`${label}: detached spawn`, spawned[0]?.detached, true)
+    eq(`${label}: identical stdio`, JSON.stringify(spawned[0]?.stdio), JSON.stringify(['ignore', 'fd', 'fd']))
+    eq(`${label}: stdout and stderr share the runner output file`, spawned[0]?.sameOutputFd, true)
+    const kv = parseStatus(status || '')
+    eq(`${label}: runner owns its session`, kv.sid, kv.pid)
+    eq(`${label}: command record preserved`, readFileSync(join(dir, 'cmd'), 'utf8'), cmd.join('\n') + '\n')
+    eq(`${label}: note preserved`, readFileSync(join(dir, 'note'), 'utf8'), 'adapter fallback\n')
+    eq(`${label}: exactly one final wake`, drops.filter(t => t.includes('has finished with exit code 0')).length, 1)
+    ok(`${label}: checkpoint precedes final wake`, drops.slice(0, -1).some(t => t.includes('interim checkpoint')))
+    if (drops.length) has(`${label}: final wake has command output`, drops.at(-1), 'ADAPTER-TWO')
+    ok(`${label}: no secret in task artifacts`, readdirSync(dir).every(f => !readFileSync(join(dir, f), 'utf8').includes(secret)))
+    if (tasksFile === registry) eq(`${label}: registry records task`, readFileSync(registry, 'utf8'), dir + '\n')
+    rows.push(`| ${label} | ${result.code} | ${/terminal_drop=/.test(status || '') && drops.length ? 'Present' : 'Absent'} | ${diagnosticLines.length} |`)
+  }
+  console.log('| Path | Exit | Runner/final wake | Diagnostic lines |')
+  console.log('|---|---:|---|---:|')
+  console.log(rows.join('\n'))
 }
 
 console.log('non-zero exit is a finish, not a timeout')
