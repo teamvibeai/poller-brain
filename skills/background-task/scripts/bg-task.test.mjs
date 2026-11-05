@@ -646,6 +646,14 @@ export function spawnBackgroundTask(command, args, options = {}) {
       ${throwSecret}
     }
   `)
+  const helperThenThrow = join(WORK, 'helper-then-throw.mjs')
+  writeFileSync(helperThenThrow, `
+    import { spawn } from 'node:child_process'
+    export function spawnBackgroundTask(command, args, options) {
+      spawn(command, ['-e', ''], { stdio: 'ignore', env: options.env }).unref()
+      ${throwSecret}
+    }
+  `)
   const preload = join(WORK, 'runner-audit.mjs')
   writeFileSync(preload, `
     import { ChildProcess } from 'node:child_process'
@@ -684,6 +692,7 @@ export function spawnBackgroundTask(command, args, options = {}) {
     ['Adapter spawns then throws', pathToFileURL(throwingAfterSpawn).href, '', 1],
     ['Adapter spawns then returns undefined', pathToFileURL(noReturnAfterSpawn).href, '', 0],
     ['Adapter spawns with interpreter flag then throws', pathToFileURL(throwingAfterFlagSpawn).href, '', 1, ['--no-warnings']],
+    ['Adapter spawns unrelated helper then throws', pathToFileURL(helperThenThrow).href, '', 1],
   ]
   const rows = []
   for (const [label, adapter, tasksFile, diagnostics, flags = []] of cases) {

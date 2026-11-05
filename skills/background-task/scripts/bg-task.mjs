@@ -375,12 +375,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const adapter = await import(process.env.TV_GIT_BG_TASK_LAUNCHER)
       const originalSpawn = ChildProcess.prototype.spawn
       let started
-      // Any child spawned during the synchronous hook counts as the runner. Adopt
-      // the first one regardless of the hook's return value or a later exception.
+      // A child spawned during the synchronous hook with this task's runner and task
+      // dir in its argv is the runner (interpreter flags allowed). Adopt it regardless
+      // of the hook's return value or a later exception; other helpers don't count.
       try {
         ChildProcess.prototype.spawn = function (options) {
           const result = originalSpawn.call(this, options)
-          started ??= this
+          if (options?.args?.includes(RUNNER) && options.args.includes(dir)) started ??= this
           return result
         }
         adapter.spawnBackgroundTask(process.execPath, runnerArgs, runnerOptions)
