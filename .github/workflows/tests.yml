@@ -1,0 +1,57 @@
+name: Tests
+
+# Runs every plain-Node test file in the repo (mcp/__tests__, hooks/__tests__, …).
+# The MCP servers and hooks are dependency-free scripts, so there is nothing to
+# install: each *.test.mjs is executed with `node` and must exit non-zero on failure.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-tests:
+    name: node tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run *.test.mjs with node
+        shell: bash
+        run: |
+          set -u
+          mapfile -t files < <(find mcp hooks skills -path '*/__tests__/*.test.mjs' -type f 2>/dev/null | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no *.test.mjs files found"
+            exit 1
+          fi
+          failed=0
+          {
+            echo "| Test file | Result |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            if node "$f"; then
+              echo "| $f | pass |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              failed=1
+              echo "::error file=$f::test file failed"
+              echo "| $f | FAIL |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "::endgroup::"
+          done
+          echo "${#files[@]} test files, failed=$failed"
+          exit "$failed"

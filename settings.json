@@ -27,6 +27,15 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_CONFIG_DIR/hooks/bash-deny-list.mjs\""
+          }
+        ]
+      },
+      {
         "matcher": "mcp__slack__send_message",
         "hooks": [
           {

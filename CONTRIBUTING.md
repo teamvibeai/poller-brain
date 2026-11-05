@@ -36,6 +36,8 @@ If the gap is too large to bridge in-PR, the safe default is *"assume this PR co
 
 Reviewers are empowered to block a base-brain PR on missing or GitHub-enumeration-based evidence. The PR template includes a one-line check for this.
 
+Run the Bash backgrounding hook regression tests with `node hooks/__tests__/block-background-escapes.test.mjs` (no dependencies).
+
 ## Why this guide is here, not in `CLAUDE.md`
 
 `CLAUDE.md` is loaded as system prompt for **every agent session** across the fleet. Per-conversation token cost. This contribution guide is read only when someone authors a PR — that's where it belongs.

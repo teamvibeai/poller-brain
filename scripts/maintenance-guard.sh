@@ -1,7 +1,7 @@
 #!/bin/bash
 # Checks if maintenance consolidation should run.
 # Exit 0 = consolidation needed, exit 1 = skip (not time yet, or idle brain).
-# Usage: bash scripts/maintenance-guard.sh [brain_dir]
+# Usage: bash "$CLAUDE_CONFIG_DIR/scripts/maintenance-guard.sh" [brain_dir]
 #
 # brain_dir defaults to current working directory.
 #
@@ -35,6 +35,14 @@
 # of recent runs has promoted nothing, never a partial one. Mirrors
 # reflection-guard.sh's cadence-gate pattern (poller-brain#157) applied to
 # the opposite problem (running too often instead of too rarely).
+#
+# Activity override (pb#560): TODAY.md with promotable [MEM]/[REMEMBER]
+# tag lines (the shape consolidation Step 1b promotes) or excessive bytes
+# bypasses the idle streak and restores the existing 24h window / 48h
+# fallback policy. Thresholds are CONSOLIDATION_ACTIVITY_MEM_MIN (1) and
+# CONSOLIDATION_ACTIVITY_BYTES_MIN (32768). Routine log volume alone still
+# does not imply promotable content; the byte cap bounds context size.
+# A non-numeric or `0` threshold disables the idle-skip (fail-open by design).
 
 BRAIN_DIR="${1:-.}"
 REPORTS_DIR="$BRAIN_DIR/reports"
@@ -44,6 +52,8 @@ IDLE_FALLBACK_HOURS="${CONSOLIDATION_IDLE_FALLBACK_HOURS:-168}"  # 7 days
 IDLE_STREAK_MIN="${CONSOLIDATION_IDLE_STREAK_MIN:-2}"  # consecutive zero-promotion reports required
 WINDOW_START="${CONSOLIDATION_WINDOW_START:-0}"   # hour UTC (inclusive)
 WINDOW_END="${CONSOLIDATION_WINDOW_END:-6}"       # hour UTC (exclusive)
+ACTIVITY_MEM_MIN="${CONSOLIDATION_ACTIVITY_MEM_MIN:-1}"
+ACTIVITY_BYTES_MIN="${CONSOLIDATION_ACTIVITY_BYTES_MIN:-32768}"
 
 # Get current UTC hour
 CURRENT_HOUR=$(date -u +%H | sed 's/^0//')
@@ -60,6 +70,48 @@ in_window() {
     # Wrapping range (e.g., 22-6)
     [ "$CURRENT_HOUR" -ge "$WINDOW_START" ] || [ "$CURRENT_HOUR" -lt "$WINDOW_END" ]
   fi
+}
+
+# Returns 0 when activity should bypass idle-skip, with the reason in
+# ACTIVITY_REASON. Missing/unreadable TODAY.md preserves the old behavior;
+# a failed detection on a readable file must fall through to time-only policy.
+has_new_activity() {
+  local today="$BRAIN_DIR/memory/TODAY.md"
+  [ -f "$today" ] && [ -r "$today" ] || return 1
+
+  local threshold
+  for threshold in "$ACTIVITY_MEM_MIN" "$ACTIVITY_BYTES_MIN"; do
+    if ! [[ "$threshold" =~ ^[0-9]+$ ]]; then
+      ACTIVITY_REASON="cannot parse TODAY.md activity threshold"
+      return 0
+    fi
+  done
+
+  # Count lines with the shape consolidation Step 1b promotes.
+  # awk prints an explicit zero and succeeds even when no tags match.
+  local mem_count bytes
+  if ! mem_count=$(awk '
+    /\[(MEM-[^]]+|REMEMBER)\]/ { mem++ }
+    END { print mem+0 }
+  ' "$today" 2>/dev/null); then
+    ACTIVITY_REASON="cannot read TODAY.md activity"
+    return 0
+  fi
+  if [ "$mem_count" -ge "$ACTIVITY_MEM_MIN" ]; then
+    ACTIVITY_REASON="$mem_count [MEM]/[REMEMBER] lines in TODAY.md"
+    return 0
+  fi
+  # wc -c is portable across GNU/Linux and BSD/macOS (unlike stat flags).
+  if ! bytes=$(wc -c 2>/dev/null < "$today"); then
+    ACTIVITY_REASON="cannot read TODAY.md size"
+    return 0
+  fi
+  read -r bytes <<< "$bytes"  # BSD wc pads its count with spaces.
+  if [ "$bytes" -ge "$ACTIVITY_BYTES_MIN" ]; then
+    ACTIVITY_REASON="$bytes bytes in TODAY.md"
+    return 0
+  fi
+  return 1
 }
 
 # Returns 0 (true/idle) only when we can positively confirm that the last
@@ -186,7 +238,10 @@ if [ "$ELAPSED_HOURS" -lt "$INTERVAL_HOURS" ]; then
 fi
 
 # 24h+ elapsed from here on — check idle state before any time-based escalation.
-if is_idle_since_last_run; then
+ACTIVITY_NOTE=""
+if has_new_activity; then
+  ACTIVITY_NOTE="; idle streak ignored: $ACTIVITY_REASON"
+elif is_idle_since_last_run; then
   if [ "$ELAPSED_HOURS" -ge "$IDLE_FALLBACK_HOURS" ]; then
     echo "consolidation_needed: true (idle but overdue — last ran ${ELAPSED_HOURS}h ago, last ${IDLE_STREAK_MIN} report(s) promoted nothing, idle fallback threshold ${IDLE_FALLBACK_HOURS}h — forcing check-in run)"
     exit 0
@@ -200,15 +255,15 @@ fi
 
 # Case 2: Overdue (48h+) — run regardless of time window (safety fallback)
 if [ "$ELAPSED_HOURS" -ge "$FALLBACK_HOURS" ]; then
-  echo "consolidation_needed: true (overdue — last ran ${ELAPSED_HOURS}h ago, fallback threshold ${FALLBACK_HOURS}h, running outside window)"
+  echo "consolidation_needed: true (overdue — last ran ${ELAPSED_HOURS}h ago, fallback threshold ${FALLBACK_HOURS}h, running outside window${ACTIVITY_NOTE})"
   exit 0
 fi
 
 # Case 3: Due (24h+) — only run inside the preferred window
 if in_window; then
-  echo "consolidation_needed: true (last ran ${ELAPSED_HOURS}h ago, inside window ${WINDOW_START}:00-${WINDOW_END}:00 UTC)"
+  echo "consolidation_needed: true (last ran ${ELAPSED_HOURS}h ago, inside window ${WINDOW_START}:00-${WINDOW_END}:00 UTC${ACTIVITY_NOTE})"
   exit 0
 else
-  echo "consolidation_needed: false (last ran ${ELAPSED_HOURS}h ago, outside window ${WINDOW_START}:00-${WINDOW_END}:00 UTC, current hour ${CURRENT_HOUR} UTC)"
+  echo "consolidation_needed: false (last ran ${ELAPSED_HOURS}h ago, outside window ${WINDOW_START}:00-${WINDOW_END}:00 UTC, current hour ${CURRENT_HOUR} UTC${ACTIVITY_NOTE})"
   exit 1
 fi

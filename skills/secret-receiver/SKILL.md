@@ -68,6 +68,10 @@ Use the announced path — don't reconstruct it.
 The plaintext lives in the output file with 0600 perms (owner-only). Read it into the consumer in a way that doesn't echo the value to the shell or to stdout. Two cross-platform options:
 
 ```bash
+# Prepare an auth header file without putting the token in argv (keep tracing off).
+AUTH_HEADER=$(mktemp)
+node -e 'require("fs").writeFileSync(process.argv[1], "Authorization: Bearer " + process.env.TEAMVIBE_POLLER_TOKEN, {mode: 0o600})' "$AUTH_HEADER"
+
 # Option A — node to construct a JSON body from the file + post
 node -e '
   const fs = require("fs");
@@ -80,7 +84,7 @@ node -e '
   }));
 ' /var/folders/.../secret-receiver-ab12cd34.txt |
   curl -X PUT \
-    -H "Authorization: Bearer $TEAMVIBE_POLLER_TOKEN" \
+    -H @"$AUTH_HEADER" \
     -H "Content-Type: application/json" \
     --data-binary @- \
     "$TEAMVIBE_API_URL/secrets"
@@ -90,18 +94,44 @@ jq -Rs --arg scope poller --arg scopeId "$TEAMVIBE_POLLER_ID" --arg name GITLAB_
   '{scope: $scope, scopeId: $scopeId, name: $name, value: .}' \
   /var/folders/.../secret-receiver-ab12cd34.txt |
   curl -X PUT \
-    -H "Authorization: Bearer $TEAMVIBE_POLLER_TOKEN" \
+    -H @"$AUTH_HEADER" \
     -H "Content-Type: application/json" \
     --data-binary @- \
     "$TEAMVIBE_API_URL/secrets"
 
 # Delete the file immediately after the POST resolves
-rm /var/folders/.../secret-receiver-ab12cd34.txt
+rm /var/folders/.../secret-receiver-ab12cd34.txt "$AUTH_HEADER"
 ```
 
 Avoid `value=$(cat <file>)` — that pulls the plaintext into the shell environment and any subsequent `set -x` / `env` / process listing leaks it.
 
 **Never diagnose the captured value by printing any part of its content** (`head -1`, "show me the first line", `wc -c` output piped through something that echoes the body, etc.). That is the one guarantee this skill exists to provide — the plaintext never reaches the agent's stdout or LLM context — and a debugging step that prints even a fragment defeats it. If the value looks wrong (auth fails, a downstream tool rejects it), assert over *derived* properties instead: byte length (`wc -c < <file>`), line count, a regex match (`grep -qE '^-----BEGIN' <file>`), or best of all, whether it actually works (sign something, call the API). If it's genuinely corrupt, ask the user to resubmit — don't inspect the broken value to find out why.
+
+## Pitfalls
+
+**Never put a secret value on a command line or into a tool argument that may be echoed.** Shell expansion happens before the CLI runs: `"$SECRET_VAR"` and `"$(cat <secret-file>)"` become plaintext arguments. Quoting does not prevent diagnostic echo-back (for example, Playwright's "Ran Playwright code"), process-list exposure, or logging by wrappers. This applies to every CLI, not just browser automation.
+
+Pass only a file path (`--password-file <path>`, `curl -H @<header-file>`), pipe the value to a consumer that reads stdin, or let the program read `process.env` itself. Keep secret files mode 0600 and delete them after use. Disable shell tracing (`set -x`), verbose HTTP logging (`curl -v`), and any consumer diagnostics that print secret inputs; moving a value off argv does not make such output safe.
+
+Bad — the shell expands the password before the browser CLI can echo its arguments:
+
+```bash
+playwright-cli fill <ref> "$SECRET_VAR"
+```
+
+Good — run a script file; the program reads the injected env internally:
+
+```bash
+node /tmp/browser-login.mjs
+```
+
+Inside `/tmp/browser-login.mjs`, after creating the Playwright `page` and opening the login form:
+
+```js
+await page.fill('input[type="password"]', process.env.SECRET_VAR);
+```
+
+The script contains only the env variable name. Do not generate it with an expanded secret literal or pass expanded code to `run-code`; ensure browser diagnostics, traces, and logging do not capture the filled value.
 
 ## Where the captured value can land
 
@@ -144,6 +174,8 @@ OUT=$(grep -o 'TOKEN_RECEIVED .*' /tmp/sr.log | tail -1 | awk '{print $2}')
 # 5. Pipe straight into the consumer (here: PUT /secrets at poller scope).
 #    See "Consuming the captured value" above — never use $(cat) or -d
 #    with the file contents, they pull plaintext through the shell env.
+AUTH_HEADER=$(mktemp)
+node -e 'require("fs").writeFileSync(process.argv[1], "Authorization: Bearer " + process.env.TEAMVIBE_POLLER_TOKEN, {mode: 0o600})' "$AUTH_HEADER"
 node -e '
   const fs = require("fs");
   const v = fs.readFileSync(process.argv[1], "utf8");
@@ -155,13 +187,13 @@ node -e '
   }));
 ' "$OUT" |
   curl -X PUT \
-    -H "Authorization: Bearer $TEAMVIBE_POLLER_TOKEN" \
+    -H @"$AUTH_HEADER" \
     -H "Content-Type: application/json" \
     --data-binary @- \
     "$TEAMVIBE_API_URL/secrets"
 
 # 6. Clean up
-rm "$OUT"
+rm "$OUT" "$AUTH_HEADER"
 kill $LT_PID 2>/dev/null
 rm /tmp/sr.log /tmp/lt.log
 ```
