@@ -9,12 +9,14 @@ import { execFileSync, spawnSync } from 'node:child_process'
 
 const script = fileURLToPath(new URL('../push-health.sh', import.meta.url))
 const baseDate = '2026-01-01T12:00:00.000Z'
+const gitEnv = dir => ({ ...process.env, GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: '/dev/null', HOME: dir })
 function brain(t) {
   const dir = mkdtempSync(join(tmpdir(), 'push-health-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const git = (...args) => execFileSync('git', args, {
     cwd: dir, encoding: 'utf8',
-    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+    env: { ...gitEnv(dir),
       GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com',
       GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com',
       GIT_AUTHOR_DATE: baseDate, GIT_COMMITTER_DATE: baseDate },
@@ -24,7 +26,7 @@ function brain(t) {
   return { dir, git }
 }
 function report(dir) {
-  const result = spawnSync('bash', [script], { cwd: dir, encoding: 'utf8' })
+  const result = spawnSync('bash', [script], { cwd: dir, encoding: 'utf8', env: gitEnv(dir) })
   assert.equal(result.status, 0)
   assert.equal(result.stderr, '')
   assert.match(result.stdout, /^PUSH_HEALTH_JSON: [^\n]+\n$/)
