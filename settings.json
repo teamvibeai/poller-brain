@@ -54,6 +54,17 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_CONFIG_DIR/hooks/bash-telemetry.mjs\""
+          }
+        ]
+      }
     ]
   }
 }
