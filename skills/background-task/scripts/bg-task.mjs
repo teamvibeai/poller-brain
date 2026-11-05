@@ -10,7 +10,7 @@
 //
 // Reliability bar: BEST-EFFORT (see SKILL.md). Survives the launching session. Does NOT
 // survive a poller restart. Never present it to a user as a durability guarantee.
-import { spawn } from 'node:child_process'
+import { ChildProcess, spawn } from 'node:child_process'
 import { mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -360,23 +360,40 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // registers the task so the session's credential files outlive the session, and strips
   // the poller token from the runner env. Older pollers don't set it; a broken adapter
   // must never stop a background task from starting, so fall back to plain spawn.
-  let spawnRunner = spawn
+  const runnerArgs = [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
+    opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
+    opts.eagerCheckpoints ? '1' : '0',
+    '--', ...opts.cmd]
+  const runnerOptions = { detached: true, stdio: ['ignore', out, out] }
+  let child
   if (process.env.TV_GIT_BG_TASK_LAUNCHER) {
+    // Apply the adapter's token policy before either path starts the interpreter.
+    // With no launcher configured, preserve the older poller's inherited environment.
+    runnerOptions.env = { ...process.env }
+    delete runnerOptions.env.TEAMVIBE_POLLER_TOKEN
+    const originalSpawn = ChildProcess.prototype.spawn
+    let started
     try {
       const adapter = await import(process.env.TV_GIT_BG_TASK_LAUNCHER)
-      if (typeof adapter.spawnBackgroundTask === 'function') spawnRunner = adapter.spawnBackgroundTask
-    } catch (e) {
-      process.stderr.write(`bg-task: git credential launcher unavailable (${e.message}); starting without it\n`)
+      // The hook is synchronous. Observe its actual runner spawn so an adapter that
+      // spawns and THEN throws cannot make the fallback launch a second runner. This
+      // also catches adapters that captured `spawn` before the call. Restore the
+      // prototype immediately after the call, before yielding to any other work.
+      ChildProcess.prototype.spawn = function (options) {
+        const result = originalSpawn.call(this, options)
+        if (options.file === process.execPath && options.args[1] === RUNNER && options.args[2] === dir) started = this
+        return result
+      }
+      child = adapter.spawnBackgroundTask(process.execPath, runnerArgs, runnerOptions)
+    } catch {
+      child = started
+      // Exception messages can contain credentials, paths or embedded newlines.
+      process.stderr.write('bg-task: git credential launcher unavailable; continuing background task\n')
+    } finally {
+      ChildProcess.prototype.spawn = originalSpawn
     }
   }
-  const child = spawnRunner(
-    process.execPath,
-    [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
-      opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
-      opts.eagerCheckpoints ? '1' : '0',
-      '--', ...opts.cmd],
-    { detached: true, stdio: ['ignore', out, out] },
-  )
+  child ??= spawn(process.execPath, runnerArgs, runnerOptions)
   child.unref()
 
   console.log(`bg-task launched: name=${opts.name} id=${id} ttl=${opts.ttl}s`)
