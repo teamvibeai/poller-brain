@@ -733,7 +733,7 @@ export function spawnBackgroundTask(command, args, options = {}) {
     ok(`${label}: no secret in launcher output`, !`${result.stdout}${result.stderr}`.includes(secret))
     eq(`${label}: exactly one runner spawned`, spawned.length, 1)
     eq(`${label}: exactly one runner interpreter starts`, runners.length, 1)
-    eq(`${label}: exactly one command execution`, readFileSync(executions, 'utf8').trim().split('\n').length, 1)
+    eq(`${label}: exactly one command execution`, existsSync(executions) ? readFileSync(executions, 'utf8').trim().split('\n').length : 0, 1)
     eq(`${label}: token policy applies before runner preloads`, runners[0]?.tokenPresent, !adapter)
     eq(`${label}: credential environment preserved`, JSON.stringify(runners[0]?.credentialEnv), JSON.stringify(credentials))
     eq(`${label}: identical runner args`, JSON.stringify(spawned[0]?.args), JSON.stringify([
