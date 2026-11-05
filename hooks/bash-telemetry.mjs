@@ -7,12 +7,14 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { prepareBashTelemetryHook } from "./lib/bash-telemetry-core.mjs";
+import { acquireWorkerSlot, assignWorkerSlot, releaseWorkerSlot } from "./lib/bash-telemetry-slots.mjs";
 
 const MAX_INPUT_BYTES = 256 * 1024;
 const receivedAt = new Date().toISOString();
 const deadline = setTimeout(() => process.exit(0), 2500);
 
 async function main() {
+  let lease, worker;
   try {
     const chunks = [];
     let bytes = 0;
@@ -24,10 +26,14 @@ async function main() {
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     const { event } = prepareBashTelemetryHook(payload, process.env, receivedAt);
     if (!event) return;
-    const worker = spawn(process.execPath, [fileURLToPath(new URL("./lib/bash-telemetry-worker.mjs", import.meta.url))], {
+    lease = acquireWorkerSlot();
+    if (!lease) return; // Optional telemetry drops immediately when saturated.
+    worker = spawn(process.execPath, [fileURLToPath(new URL("./lib/bash-telemetry-worker.mjs", import.meta.url))], {
       detached: true,
       stdio: ["pipe", "ignore", "ignore"],
     });
+    if (worker.pid) assignWorkerSlot(lease, worker.pid);
+    worker.on("error", () => releaseWorkerSlot(lease));
     worker.unref();
     // Keep secret-bearing input out of argv and detach stdout/stderr so the
     // caller's pipes close as soon as this parent exits. Flush only the local
@@ -40,6 +46,9 @@ async function main() {
   } catch {
     // Malformed input, redaction failure, and network errors all fail open.
   } finally {
+    // Successful workers keep their slots until a later caller observes their
+    // PID has exited. Failed spawns never consume capacity.
+    if (!worker?.pid) releaseWorkerSlot(lease);
     clearTimeout(deadline);
     process.exit(0);
   }

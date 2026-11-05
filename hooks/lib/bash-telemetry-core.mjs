@@ -34,7 +34,8 @@ export function prepareBashTelemetryHook(payload, env, receivedAt = new Date().t
     }
 
     // Redaction is deliberately conservative about unsupported shell syntax.
-    const redact = value => redactSecrets(value).split(TEAMVIBE_POLLER_TOKEN).join("[REDACTED]");
+    const redact = value => redactSecrets(value, { knownTokens: [TEAMVIBE_POLLER_TOKEN] })
+      .split(TEAMVIBE_POLLER_TOKEN).join("[REDACTED]");
     const cwd = typeof payload.cwd === "string" && payload.cwd.trim() && payload.cwd.length <= 1024
       ? redact(payload.cwd) : "[UNKNOWN]";
     const response = payload.tool_response;
@@ -46,7 +47,10 @@ export function prepareBashTelemetryHook(payload, env, receivedAt = new Date().t
         command: command.trim() ? redact(command) : "[EMPTY COMMAND]",
         cwd: cwd.length <= 1024 ? cwd : "[UNKNOWN]",
         // PostToolUse may omit an exit status or invocation timestamp. -1 is
-        // unknown, never assumed success; receivedAt is captured by the parent.
+        // unknown, never assumed success. The parent's receivedAt fallback is
+        // an APPROXIMATE start (post-execution receipt), not measured invocation
+        // time. The sanitizer persists only these four fields, so it cannot
+        // retain an approximation flag; see hooks/README.md for consumers.
         exitCode,
         invokedAt: isUtcTimestamp(payload.invokedAt) ? payload.invokedAt : receivedAt,
       },
