@@ -32,7 +32,7 @@ jobs:
         shell: bash
         run: |
           set -u
-          mapfile -t files < <(find mcp hooks skills -path '*/__tests__/*.test.mjs' -type f 2>/dev/null | sort)
+          mapfile -t files < <(find mcp hooks skills scripts -path '*/__tests__/*.test.mjs' -type f 2>/dev/null | sort)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::no *.test.mjs files found"
             exit 1
