@@ -484,7 +484,7 @@ try {
       await ended
     }
   }
-  for (const ms of [300, 2500]) await test(`BEGIN IMMEDIATE allows reads (${ms} ms writer)`, async () => {
+  for (const ms of [300, 8000]) await test(`BEGIN IMMEDIATE allows reads (${ms} ms writer)`, async () => {
     reset()
     await withLock('IMMEDIATE', ms, async () => {
       const result = await search()
@@ -501,12 +501,13 @@ try {
   })
   await test('long exclusive writer contention times out safely', async () => {
     reset()
-    await withLock('EXCLUSIVE', 2500, async () => {
+    await withLock('EXCLUSIVE', 8000, async () => {
       const started = Date.now()
       const result = await search()
       const elapsed = Date.now() - started
-      check(result.ok && result.count === 2, 'Node 22/25 return rows after the exclusive writer releases')
-      check(elapsed < 4000, 'bounded busy timeout')
+      assert.deepEqual(result, { ok: false, error: 'index_unavailable' })
+      check(elapsed >= 1000, 'reader waited for lock')
+      check(elapsed < 7000, 'busy timeout expires before writer releases')
       output(`    (g) ${process.version}: ${result.ok ? 'ok:true,count:2' : result.error}, ${elapsed} ms\n`)
     })
   })
