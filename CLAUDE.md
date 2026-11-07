@@ -188,7 +188,7 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detai
 
 **Where to write (regular sessions):**
 - Routine logs → `log-write.ts` (appends to TODAY.md with timestamp)
-- Important items (corrections, preferences, lessons) → `mem-write.ts` (tracked key in TODAY.md + MEM_REGISTRY.md; readers accept `MEM-<n>` and `MEM-YYYY-MM-DD-HHMMSS-<uuid>`, and existing IDs are never renumbered)
+- Important items (corrections, preferences, lessons) → `mem-write.ts` (tracked key in TODAY.md + MEM_REGISTRY.md; new writes allocate UTC `MEM-YYYY-MM-DD-HHMMSS-<uuid>` IDs with a full random lowercase UUID; readers accept `MEM-<n>` and `MEM-YYYY-MM-DD-HHMMSS-<uuid>`, and existing IDs are never renumbered)
 - Session capture (brainstorming, deep-dive) → `memory/semantic/{topic}.md` (see memory skill for full pattern)
 
 **NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `mem-write.ts` to create tracked memory entries (see memory skill).

@@ -199,7 +199,7 @@ Use kebab-case, short, no prefixes: `stepforge.md`, `vest-liquidation.md`. If ma
 
 Critical information gets a unique, tracked key — like Jira tickets for memory. Keys survive consolidation, are traceable via grep and git history, and have an explicit lifecycle that prevents silent data loss.
 
-**Readers accept both `MEM-<n>` and `MEM-YYYY-MM-DD-HHMMSS-<uuid>`** (UTC timestamp, full UUID in 8-4-4-4-12 hex form, either hex case). Validation is syntactic only, using `scripts/lib/mem-id.ts` (`isMemId`). Identity is the exact string as written; existing IDs are never renumbered. The writer still allocates the next sequential number: `MEM-1`, `MEM-2`, `MEM-3`, etc. No zero-padding needed.
+**Readers accept both `MEM-<n>` and `MEM-YYYY-MM-DD-HHMMSS-<uuid>`** (UTC timestamp, full UUID in 8-4-4-4-12 hex form, either hex case). Validation is syntactic only, using `scripts/lib/mem-id.ts` (`isMemId`). Identity is the exact string as written; existing IDs are never renumbered. New writes allocate `MEM-YYYY-MM-DD-HHMMSS-<uuid>` in UTC with a full random lowercase UUID.
 
 ```
 ✅ Correct:  [MEM-1] deploy: staging vyžaduje SSO
@@ -237,7 +237,7 @@ The script appends a timestamped line: `- [HH:MM] content`
 
 ### How to write a `[MEM-NNN]` entry
 
-**Do NOT pick the number yourself.** Use the `mem-write` script — it handles numbering, TODAY.md, and MEM_REGISTRY.md atomically:
+**Do NOT pick the ID yourself.** Use the `mem-write` script — it allocates the ID and performs two appends: TODAY.md, then MEM_REGISTRY.md. On failure, re-run with `--id <printed MEM_ID>` and the same content to complete the missing half without duplicating:
 
 ```bash
 npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "category: detail"
@@ -247,15 +247,16 @@ npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "category: detail"
 ```bash
 npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "deploy: staging vyžaduje SSO login"
 npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "komunikace: mužský rod, vždy česky"
-# Output: Written [MEM-4] to memory/TODAY.md and memory/MEM_REGISTRY.md
+# Stderr before writes: MEM_ID=MEM-YYYY-MM-DD-HHMMSS-<uuid>
+# Output: Written [MEM-YYYY-MM-DD-HHMMSS-<uuid>] to memory/TODAY.md and memory/MEM_REGISTRY.md
 ```
 
 The script:
-1. Reads `memory/MEM_REGISTRY.md`, finds the highest existing legacy number
-2. Increments to get the next key
-3. Appends `- [MEM-N] content` to `memory/TODAY.md`
-4. Appends a registry row to `memory/MEM_REGISTRY.md`
-5. Creates both files with correct headers if they don't exist yet
+1. Allocates a UTC `MEM-YYYY-MM-DD-HHMMSS-<uuid>` ID using the platform's full random UUID
+2. Prints `MEM_ID=<id>` to stderr before any file write; preserve this ID for retries
+3. Appends `- [<id>] content` to `memory/TODAY.md` if that ID is absent
+4. Appends the same ID to `memory/MEM_REGISTRY.md` if that key is absent
+5. Creates missing headers as needed; `--id <printed MEM_ID>` completes either missing append, returns `Already written [<id>]` if both exist, and rejects different content without writing
 
 **NEVER write `[MEM-NNN]` entries manually** — always use the script. This prevents malformed keys like `[MEM-feedback]`.
 
@@ -287,7 +288,7 @@ This file is the **source of truth** for all tracked memory keys. It lives at `m
 ```
 
 **Columns:**
-- **Key** — exact identifier in either accepted format; new writes still use the next sequential number (`MEM-1`, `MEM-2`, ...)
+- **Key** — exact identifier in either accepted format; new writes use `MEM-YYYY-MM-DD-HHMMSS-<uuid>` (UTC, full random lowercase UUID)
 - **Status** — `ACTIVE`, `OBSOLETE`, or `REMOVED`
 - **Created** — date the entry was first written
 - **Obsoleted** — date the entry was marked obsolete (or `—` if active)
@@ -311,7 +312,7 @@ ACTIVE → OBSOLETE → REMOVED
 
 ### Backward Compatibility
 
-The `[REMEMBER]` tag continues to work as an alias — consolidation will auto-assign the next available sequential number to any `[REMEMBER]` entry found in daily logs and register it. New entries should always use the `mem-write.ts` script (e.g., result: `[MEM-1]`).
+The `[REMEMBER]` tag continues to work as an alias — consolidation will allocate a UTC `MEM-YYYY-MM-DD-HHMMSS-<uuid>` ID with `mem-id-new.ts` for any `[REMEMBER]` entry found in daily logs and register that exact ID. New entries should always use the `mem-write.ts` script (e.g., result: `[MEM-YYYY-MM-DD-HHMMSS-<uuid>]`).
 
 ## Routing Logic
 
