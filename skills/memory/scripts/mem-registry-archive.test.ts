@@ -66,6 +66,7 @@ assert(
   "relocated the correct keys"
 );
 assert(c1.length === 3, "all 3 verify checks passed");
+assert(c1[2] === "live REMOVED count after run == 0 ✅", "zero-conflict verification line matches base exactly");
 
 // Live registry keeps ACTIVE + OBSOLETE, drops REMOVED, prose intact.
 assert(/\| MEM-1 \| ACTIVE/.test(r1.registry), "ACTIVE row kept");
@@ -162,7 +163,8 @@ assert(identicalDated.stats.alreadyInArchive === 1 && identicalDated.stats.liveR
 for (const row of [datedRow, legacyRow]) {
   const conflicting = row.replace("memo |", "memo with different content |");
   const result = archiveRemovedRows([conflicting, otherRow].join("\n"), row + "\n");
-  verifyStats(result.stats);
+  assert(verifyStats(result.stats)[2] === "live REMOVED count after run == 1 retained conflicting row(s) ✅",
+    "conflict verification line reports retained count");
   assert(result.registry.split("\n").includes(conflicting), "conflicting same-ID live row stays verbatim");
   assert(!result.archive.includes(conflicting), "conflicting row is not appended or substituted in archive");
   assert(result.stats.liveRemovedAfter === 1 && result.stats.removedFromLive === 1, "only nonconflicting row relocated");
@@ -174,10 +176,17 @@ const conflictRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mem-id-archive-"));
 try {
   fs.mkdirSync(path.join(conflictRoot, "memory"));
   fs.writeFileSync(path.join(conflictRoot, "CLAUDE.md"), "fixture");
+  fs.writeFileSync(path.join(conflictRoot, "memory/MEM_REGISTRY.md"), REGISTRY);
+  const noConflictCli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-registry-archive.ts")],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: conflictRoot } });
+  assert(noConflictCli.status === 0 && noConflictCli.stdout.split("\n").at(-2) === "  verify: live REMOVED count after run == 0 ✅",
+    "zero-conflict CLI prints the byte-identical base verification line");
   fs.writeFileSync(path.join(conflictRoot, "memory/MEM_REGISTRY.md"), datedRow + "\n" + otherRow + "\n");
   fs.writeFileSync(path.join(conflictRoot, "memory/MEM_REGISTRY_ARCHIVE.md"), datedRow.replace("original", "archived") + "\n");
   const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-registry-archive.ts")],
     { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: conflictRoot } });
+  assert(cli.stdout.split("\n").includes("  verify: live REMOVED count after run == 1 retained conflicting row(s) ✅"),
+    "CLI prints retained-conflict verification wording");
   assert(cli.status === 0, `archive CLI succeeds while retaining conflict: ${cli.stderr}`);
   const diagnostic = `duplicate MEM id ${DATED_A}: live row differs from archived row (not archived)`;
   assert(cli.stdout.split("\n").filter((line) => line === diagnostic).length === 1, "CLI prints exactly one required conflict diagnostic");

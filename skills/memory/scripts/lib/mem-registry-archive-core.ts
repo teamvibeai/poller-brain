@@ -244,7 +244,9 @@ export function verifyStats(stats: ArchiveStats): string[] {
       `Live registry still has ${stats.liveRemovedAfter} REMOVED row(s) after archival — expected ${stats.conflictingKeys.length} retained conflicting row(s).`
     );
   }
-  checks.push(`live REMOVED count after run == ${stats.conflictingKeys.length} retained conflicting row(s) ✅`);
+  checks.push(stats.conflictingKeys.length === 0
+    ? "live REMOVED count after run == 0 ✅"
+    : `live REMOVED count after run == ${stats.conflictingKeys.length} retained conflicting row(s) ✅`);
 
   return checks;
 }

@@ -763,5 +763,29 @@ try {
   fs.rmSync(learningRoot, { recursive: true, force: true });
 }
 
+// Lifecycle-tagged destination headings remain ineligible, as on 0ce65634.
+// Exercise the real apply CLI: rejection must preserve the source bytes.
+for (const key of ["MEM-1", DATED_A]) {
+  const original = `- [${key}:obsolete] ${"Original superseded memo, kept for one consolidation cycle. ".repeat(40)}\n`;
+  const destination = `### Preserve the complete original lesson [${key}:obsolete]\n\nSuperseded promoted narrative [${key}:obsolete]\n`;
+  const found = findLearningsTrimCandidates(original, [{ file: "semantic/topic.md", text: destination }]);
+  assert(found.candidates.length === 0, `LEARNINGS lifecycle-tagged heading is ineligible: ${key}`);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-obsolete-learnings-"));
+  try {
+    fs.mkdirSync(path.join(root, "memory/core"), { recursive: true });
+    fs.mkdirSync(path.join(root, "memory/semantic"));
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "fixture");
+    const source = path.join(root, "memory/core/LEARNINGS.md");
+    fs.writeFileSync(source, original);
+    fs.writeFileSync(path.join(root, "memory/semantic/topic.md"), destination);
+    const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts"), "--apply", "--only", key],
+      { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: root } });
+    assert(cli.status === 1, `LEARNINGS CLI rejects lifecycle-tagged destination: ${key}`);
+    assert(fs.readFileSync(source, "utf8") === original, `LEARNINGS CLI preserves obsolete source byte-for-byte: ${key}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

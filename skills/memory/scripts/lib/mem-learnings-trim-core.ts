@@ -78,7 +78,7 @@
  * real brain's memory/.
  */
 
-import { MEM_ID_PATTERN, compareMemIds, isMemId } from "./mem-id.js";
+import { MEM_ID_PATTERN, MEM_CITATION_PATTERN, compareMemIds, isMemId } from "./mem-id.js";
 
 import {
   type DestinationFile,
@@ -263,7 +263,10 @@ export function findLearningsTrimCandidates(
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
 
     const hook = extractHook(citation);
-    if (hook === null || !isReliableHook(hook)) {
+    // Keep lifecycle-tagged destination headings ineligible, as on the
+    // legacy reader, even though extractHook now recognises their tags.
+    const lifecycleHeading = new RegExp(String.raw`\b${MEM_CITATION_PATTERN}:obsolete\b`).test(citation.heading ?? "");
+    if (lifecycleHeading || hook === null || !isReliableHook(hook)) {
       unreliableHooks.push({
         key,
         file: citation.file,
