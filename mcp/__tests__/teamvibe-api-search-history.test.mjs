@@ -1,5 +1,6 @@
 // Run: node mcp/__tests__/teamvibe-api-search-history.test.mjs
 // HISTORY_SEARCH_BASELINE=1 loads git show's server into a temporary file.
+// HISTORY_SEARCH_MODULE=/tmp/base.mjs HISTORY_SEARCH_FIX_ONLY=1 proves review fixes red.
 import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -25,8 +26,11 @@ const originalConsole = Object.fromEntries(['log', 'warn', 'error', 'info', 'deb
 const logs = []
 let calls = [], reply, module, sequence = 0
 const baseline = process.env.HISTORY_SEARCH_BASELINE === '1'
+const fixOnly = process.env.HISTORY_SEARCH_FIX_ONLY === '1'
+const historyModulePath = process.env.HISTORY_SEARCH_MODULE || join(mcpDir, 'lib', 'history-search.mjs')
 const check = (condition, label) => { assert.ok(condition, label); pass++ }
 async function test(label, fn) {
+  if (fixOnly && !/^\((j|k|m)\)|^no application stdout/.test(label)) return
   try { await fn(); output(`  ✓ ${label}\n`) }
   catch (e) { fail++; output(`  ✗ ${label}: ${e.code === 'ERR_ASSERTION' ? e.message : 'unexpected exception'}\n`) }
 }
@@ -126,11 +130,11 @@ try {
   }
   const prelude = fs.readFileSync(serverPath, 'utf8').split('// --- stdio transport ---')[0]
     .replaceAll("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(mcpDir, 'lib', 'validate-args.mjs')).href))
-    .replaceAll("'./lib/history-search.mjs'", JSON.stringify(pathToFileURL(join(mcpDir, 'lib', 'history-search.mjs')).href))
+    .replaceAll("'./lib/history-search.mjs'", JSON.stringify(pathToFileURL(historyModulePath).href))
   const { handleRequest } = await import('data:text/javascript,' + encodeURIComponent(prelude + '\nexport { handleRequest }\n'))
   // Do not use the head implementation's helper seams when proving baseline red.
   if (!baseline && fs.existsSync(join(mcpDir, 'lib', 'history-search.mjs'))) {
-    module = await import(pathToFileURL(join(mcpDir, 'lib', 'history-search.mjs')))
+    module = await import(pathToFileURL(historyModulePath))
   }
   const request = async (name, args) => JSON.parse(await handleRequest({ id: ++sequence, method: 'tools/call', params: { name, arguments: args } }))
   const search = async (args = { query: 'needle' }) => JSON.parse((await request('search_history', args)).result.content[0].text)
@@ -249,6 +253,43 @@ try {
       try { deny(await search(), 'index_unavailable') } finally { process.env.TEAMVIBE_CHANNEL_ID = 'TC1' }
     })
   }
+  for (const kind of ['unexpected-column', 'other-content', 'missing-deleted', 'extra-column']) {
+    await test(`(j) v1 schema: ${kind}`, async () => {
+      const channelId = `schema-${kind}`
+      const db = new DatabaseSync(join(root, 'history', `${channelId}.sqlite`))
+      const columns = ['channel', 'ts', 'thread_ts', 'user_id', 'author', 'text', 'attachment_names', 'source', 'updated_at', 'deleted']
+        .filter(name => kind !== 'missing-deleted' || name !== 'deleted')
+      if (kind === 'extra-column') columns.push('extra')
+      const ftsColumns = kind === 'unexpected-column' ? 'unexpected_column' : 'text, attachment_names'
+      const content = kind === 'other-content' ? 'other' : 'messages'
+      try {
+        db.exec(`CREATE TABLE messages(${columns.join(',')});
+          CREATE TABLE other(text, attachment_names);
+          CREATE VIRTUAL TABLE history USING fts5(${ftsColumns}, content='${content}', content_rowid='rowid');
+          PRAGMA user_version = 1;`)
+        const row = { channel: 'CSESSION', ts: '9.1', thread_ts: '9.1', user_id: 'U00001', author: 'x',
+          text: 'needle schema private', attachment_names: '', source: 'inbound', updated_at: '2026', deleted: 0, extra: 'tolerated' }
+        db.prepare(`INSERT INTO messages VALUES(${columns.map(() => '?').join(',')})`).run(...columns.map(name => row[name]))
+        db.exec("INSERT INTO other VALUES('needle schema private', '')")
+        if (kind === 'unexpected-column') db.exec("INSERT INTO history(rowid, unexpected_column) VALUES(1, 'needle')")
+        else db.exec("INSERT INTO history(rowid, text, attachment_names) VALUES(1, 'needle schema private', '')")
+      } finally { db.close() }
+      const statements = []
+      const result = reader({ channelId }, { loadSqlite: () => class {
+        constructor(path, options) { this.db = new DatabaseSync(path, options) }
+        exec(sql) { statements.push(sql); this.db.exec(sql) }
+        prepare(sql) { statements.push(sql); return this.db.prepare(sql) }
+        close() { this.db.close() }
+      } })
+      if (kind === 'extra-column') {
+        check(result.ok && result.count === 1 && result.results[0].ts === '9.1', 'extra messages column is tolerated')
+        check(statements.some(sql => /MATCH/.test(sql)), 'valid index searched')
+      } else {
+        check(!statements.some(sql => /MATCH/.test(sql)), 'schema drift rejected before MATCH')
+        deny(result, 'index_unavailable')
+      }
+    })
+  }
   await test('constructor/loader exceptions never leak', async () => {
     const message = 'private secret SELECT xoxb-test needle'
     for (const loadSqlite of [() => class { constructor() { throw new Error(message) } }, () => { throw new Error(message) }]) {
@@ -261,18 +302,20 @@ try {
     let options, bound, closed = 0
     const statements = []
     const loadSqlite = () => class {
-      constructor(_path, opts) { options = opts }
-      exec(sql) { statements.push(sql) }
+      constructor(path, opts) { options = opts; this.db = new DatabaseSync(path, opts) }
+      exec(sql) { statements.push(sql); this.db.exec(sql) }
       prepare(sql) {
         statements.push(sql)
-        return { get: () => ({ user_version: 1 }), all: (...args) => { bound = args; return [] } }
+        if (!/MATCH/.test(sql)) return this.db.prepare(sql)
+        return { all: (...args) => { bound = args; return [] } }
       }
-      close() { closed++ }
+      close() { closed++; this.db.close() }
     }
     const result = reader({ query: '"needle" OR bar', limit: 500 }, { loadSqlite })
     check(result.ok && options.readOnly === true, 'readOnly option')
     check(JSON.stringify(bound) === JSON.stringify(['"needle" OR "OR" OR "bar"', 'CSESSION', 100]), 'bound token expression/channel/limit')
-    check(statements.filter(s => /^PRAGMA/.test(s)).join(';') === 'PRAGMA busy_timeout = 2000;PRAGMA user_version', 'only contracted pragmas')
+    check(statements.filter(s => /^PRAGMA/.test(s)).join(';') === 'PRAGMA busy_timeout = 2000;PRAGMA user_version;PRAGMA table_info(messages);PRAGMA table_info(history)', 'only contracted pragmas')
+    check(statements.length === 6 && statements[2] === "SELECT type, name, sql FROM sqlite_master WHERE name IN ('messages','history')", 'closed statement set')
     check(!statements.some(s => /CREATE|INSERT|UPDATE|DELETE|journal_mode/.test(s)), 'no writes or DDL')
     check(closed === 1, 'handle closed')
     for (const message of ['no such module: fts5', 'private SQL failure']) {
@@ -397,6 +440,24 @@ try {
     check(paths[0] === join(process.cwd(), '.inbox', 'B1:CSESSION:1.1', 'context.json'), 'cwd fallback and literal colons')
     check(cache.get(JSON.stringify(['COTHER', 'W00002'])) === true, 'positive verdict in injected cache')
   })
+  await test('(m) unsafe inbox thread IDs never read requester context', async () => {
+    reset()
+    const escaped = join(root, 'other', '.inbox', 'x', 'context.json')
+    fs.mkdirSync(dirname(escaped), { recursive: true })
+    fs.writeFileSync(escaped, JSON.stringify({ sender: { id: 'U00001' } }))
+    for (const threadId of ['../../other/.inbox/x', '', '..', 'x/y', 'x\\y']) {
+      let reads = 0
+      const result = await module.guardHistoryChannel({
+        channel: 'COTHER', sessionChannel: 'CSESSION', token: 'xoxb-test', brainPath: join(root, 'brain'), threadId,
+      }, {
+        cache: new Map(), fetch: globalThis.fetch,
+        fs: { readFileSync(...args) { reads++; return fs.readFileSync(...args) } },
+      })
+      check(reads === 0, 'unsafe thread ID causes zero filesystem reads')
+      deny(result, 'requester_unresolved')
+    }
+    check(!calls.some(c => c.method === 'conversations.members'), 'unresolved requester never reaches membership lookup')
+  })
   await test('guard blocks before SQLite is loaded or opened', async () => {
     reset()
     // With a corrupt index, each denied request must still return only its guard code.
@@ -442,10 +503,33 @@ try {
     reset()
     await withLock('EXCLUSIVE', 2500, async () => {
       const started = Date.now()
-      deny(await search(), 'index_unavailable')
+      const result = await search()
       const elapsed = Date.now() - started
-      check(elapsed >= 1800 && elapsed < 4000, 'bounded busy timeout')
+      check(result.ok && result.count === 2, 'Node 22/25 return rows after the exclusive writer releases')
+      check(elapsed < 4000, 'bounded busy timeout')
+      output(`    (g) ${process.version}: ${result.ok ? 'ok:true,count:2' : result.error}, ${elapsed} ms\n`)
     })
+  })
+  await test('(k) slow successful SELECT is always honoured', async () => {
+    let closed = 0, selects = 0
+    const started = performance.now()
+    const result = reader({}, { loadSqlite: () => class {
+      constructor(path, options) { this.db = new DatabaseSync(path, options) }
+      exec(sql) { this.db.exec(sql) }
+      prepare(sql) {
+        const statement = this.db.prepare(sql)
+        if (!/MATCH/.test(sql)) return statement
+        return { all: (...args) => {
+          selects++
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2500)
+          return statement.all(...args)
+        } }
+      }
+      close() { closed++; this.db.close() }
+    } })
+    check(result.ok && result.count === 2 && result.results.map(row => row.ts).join(',') === '1.2,1.1', 'successful slow SELECT returns the real rows')
+    check(selects === 1 && performance.now() - started >= 2500, 'SELECT delayed synchronously for 2500 ms')
+    check(closed === 1, 'slow SELECT handle closed')
   })
   await test('all searches leave sqlite bytes and side files unchanged', async () => {
     check(digest() === initialHash, 'SHA-256 unchanged')

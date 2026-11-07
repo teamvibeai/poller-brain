@@ -24,20 +24,25 @@ export function searchHistory({ storagePath, channelId, slackChannel, query, lim
     const path = join(storagePath, 'history', `${channelId}.sqlite`)
     if (!fs.existsSync(path)) return empty('no_history')
     const Sqlite = (deps.loadSqlite ?? loadSqlite)()
-    const deadline = performance.now() + 2000
     // Verified on Node 22: readOnly is honoured, so no query_only fallback.
     db = new Sqlite(path, { readOnly: true })
     db.exec('PRAGMA busy_timeout = 2000')
     if (db.prepare('PRAGMA user_version').get()?.user_version !== 1) return denied('index_unavailable')
-    // SQLite can retry internally beyond a single busy interval on Node 22/25.
-    // Fail closed if it returns after our contention budget has expired.
-    if (performance.now() >= deadline) return denied('index_unavailable')
+    const tables = db.prepare("SELECT type, name, sql FROM sqlite_master WHERE name IN ('messages','history')").all()
+    if (!['messages', 'history'].every(name => tables.some(table => table.name === name && table.type === 'table'))) return denied('index_unavailable')
+    const columns = db.prepare('PRAGMA table_info(messages)').all().map(column => column.name)
+    if (!['channel', 'ts', 'thread_ts', 'user_id', 'author', 'text', 'attachment_names', 'source', 'updated_at', 'deleted']
+      .every(name => columns.includes(name))) return denied('index_unavailable')
+    const historyColumns = db.prepare('PRAGMA table_info(history)').all().map(column => column.name)
+    const historySql = tables.find(table => table.name === 'history').sql?.toLowerCase().replace(/\s+/g, ' ').replace(/\s*([=(])\s*/g, '$1') ?? ''
+    if (JSON.stringify(historyColumns) !== '["text","attachment_names"]' ||
+      !["using fts5(", "content='messages'", "content_rowid='rowid'"].every(binding => historySql.includes(binding))) return denied('index_unavailable')
+    // busy_timeout handles contention; every successful SELECT is honoured regardless of elapsed time.
     const match = terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')
     const rows = db.prepare(`SELECT m.ts, m.thread_ts, m.user_id, m.author, m.text, m.attachment_names, m.source, m.updated_at
       FROM history h JOIN messages m ON m.rowid = h.rowid
       WHERE history MATCH ? AND m.channel = ? AND m.deleted = 0
       ORDER BY bm25(history) LIMIT ?`).all(match, slackChannel, limit)
-    if (performance.now() >= deadline) return denied('index_unavailable')
     const results = rows.map(row => ({
       ts: row.ts, thread_ts: row.thread_ts, user_id: row.user_id, author: row.author,
       text: row.text, attachment_names: row.attachment_names ? row.attachment_names.split('\n') : [],
@@ -58,7 +63,7 @@ export async function guardHistoryChannel({ channel, sessionChannel, token, brai
 
   let requester
   try {
-    if (threadId) {
+    if (typeof threadId === 'string' && threadId && !/[\/\\]/.test(threadId) && threadId !== '..') {
       const context = JSON.parse((deps.fs ?? fs).readFileSync(
         join(brainPath || process.cwd(), '.inbox', threadId, 'context.json'), 'utf8'))
       if (typeof context?.sender?.id === 'string' && /^[UW][A-Z0-9]{5,}$/.test(context.sender.id)) requester = context.sender.id

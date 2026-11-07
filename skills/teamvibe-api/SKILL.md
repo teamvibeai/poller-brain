@@ -37,7 +37,7 @@ runs cannot search other channels. Successful checks are cached for this server'
 | `requester_unresolved` | Session's human requester could not be resolved |
 | `not_a_member` | Requester is absent from the channel |
 | `membership_unverified` | Membership API failed or exceeded 20 pages |
-| `index_unavailable` | Local index cannot be read or has an unsupported schema |
+| `index_unavailable` | Local index cannot be read (including unsupported version or schema mismatch) |
 
 Missing indexes return `note: "no_history"`; punctuation-only queries return
 `note: "empty_query"`. Both are successful empty results.
