@@ -1,3 +1,5 @@
+import * as crypto from "node:crypto";
+
 /** Shared syntactic MEM identity grammar. Identity preserves the exact spelling. */
 export const LEGACY_MEM_ID_PATTERN = String.raw`MEM-\d+(?!\d|-\d)`;
 export const DATED_MEM_ID_PATTERN = String.raw`MEM-\d{4}-\d{2}-\d{2}-\d{6}-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`;
@@ -21,6 +23,14 @@ export function parseMemId(value: string): MemId | null {
   if (!isMemId(value)) return null;
   if (!DATED_RE.test(value)) return { kind: "legacy", n: Number(value.slice(4)) };
   return { kind: "dated", date: value.slice(4, 14), time: value.slice(15, 21), uuid: value.slice(22) };
+}
+
+/** Allocate once per new memo; callers preserve this identity across retries. */
+export function newMemId(now = new Date()): string {
+  const utc = now.toISOString();
+  const id = `MEM-${utc.slice(0, 10)}-${utc.slice(11, 19).replace(/:/g, "")}-${crypto.randomUUID().toLowerCase()}`;
+  if (!isMemId(id)) throw new RangeError("MEM ID requires a four-digit UTC year");
+  return id;
 }
 
 function compareStrings(a: string, b: string): number {

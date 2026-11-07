@@ -70,17 +70,17 @@ If no matching report exists, process the last 14 days of logs.
 Validate IDs with `scripts/lib/mem-id.ts` (`isMemId`): readers accept legacy `MEM-<n>` and dated `MEM-YYYY-MM-DD-HHMMSS-<uuid>` (full 8-4-4-4-12 hex UUID, either hex case; syntactic validation only). Preserve the exact spelling. **Never repair or renumber an ID that `isMemId` accepts**, including one carrying the lifecycle suffix `:obsolete` (validate the ID before the suffix).
 
 If a `[MEM-…]` tag fails that validation (e.g., `[MEM-feedback]`, `[MEM-TAG]`):
-1. Assign the next available sequential number (read `memory/MEM_REGISTRY.md`, find highest legacy number, increment)
-2. Replace the malformed tag in the daily log with the correct `[MEM-N]` format
-3. Add the corrected key to the registry with status `ACTIVE`
-4. Log the fix in the report: "Auto-fixed malformed key: [MEM-feedback] → [MEM-4]"
+1. Allocate an ID with `npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-id-new.ts`; preserve its exact stdout ID for this memo
+2. Replace the malformed tag in the daily log with `[<allocated ID>]`
+3. Register that exact allocated ID with status `ACTIVE`
+4. Log the fix in the report: "Auto-fixed malformed key: [MEM-feedback] → [<allocated ID>]"
 5. Process as a normal `[MEM-NNN]` entry
 
 #### Handling `[REMEMBER]` backward compatibility
 
 If a `[REMEMBER]` tag is found (without a `[MEM-NNN]` key):
-1. Assign the next available key (read `memory/MEM_REGISTRY.md`, find highest legacy number, increment)
-2. Add the new key to the registry with status `ACTIVE`
+1. Allocate an ID with `npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-id-new.ts`; preserve its exact stdout ID for this memo
+2. Replace `[REMEMBER]` with `[<allocated ID>]` and register that exact ID with status `ACTIVE`
 3. Process as if it were a `[MEM-NNN]` entry
 
 #### For each `[MEM-NNN]` entry:

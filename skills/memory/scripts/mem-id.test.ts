@@ -1,5 +1,6 @@
 #!/usr/bin/env npx tsx
 /** Shared grammar and its citation consumers; run with npx tsx. */
+import * as ids from "./lib/mem-id.js";
 import {
   LEGACY_MEM_ID_PATTERN, DATED_MEM_ID_PATTERN, MEM_ID_PATTERN,
   isMemId, parseMemId, compareMemIds,
@@ -76,5 +77,17 @@ const indexes = firstCitations([{ file: "semantic/a.md", text: [
 ].join("\n") }]);
 assert(indexes.citations.size === 0 && indexes.indexRejections.map((r) => r.key).join(",") === [A, B].join(","),
   "citation stripping removes whole dated tokens before residual prose/index detection");
+// Allocator: injected non-UTC clock, platform full UUID, lowercase, no counter.
+assert(typeof ids.newMemId === "function", "allocator exported");
+if (typeof ids.newMemId === "function") {
+  const stamp = new Date("2026-01-01T00:00:01.999+02:00");
+  const id = ids.newMemId(stamp);
+  const parsed = parseMemId(id);
+  assert(isMemId(id) && parsed?.kind === "dated", "allocated ID satisfies shared grammar");
+  assert(parsed?.kind === "dated" && parsed.date === "2025-12-31" && parsed.time === "220001", "allocator uses UTC including date rollover and zero padding");
+  assert(parsed?.kind === "dated" && parsed.uuid === parsed.uuid.toLowerCase() && parsed.uuid.length === 36 && parsed.uuid[14] === "4" && "89ab".includes(parsed.uuid[19]), "allocator emits lowercase full platform v4 UUID");
+  assert(ids.newMemId(stamp) !== id, "same instant still allocates distinct random IDs");
+  assert(isMemId(ids.newMemId()), "default clock allocates a valid ID");
+}
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

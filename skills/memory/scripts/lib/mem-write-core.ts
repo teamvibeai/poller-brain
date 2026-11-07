@@ -1,5 +1,5 @@
 /**
- * Pure MEM-key counter logic for mem-write.ts.
+ * Pure MEM write planning and legacy scan behaviour.
  *
  * Extracted so the scan behavior can be fixture-tested without touching a
  * real brain's memory/ files. Directly targets the 2026-06-08 incident class:
@@ -16,7 +16,7 @@
  *     (`- [MEM-N]` at line start), tolerating a trailing `:` for format drift.
  */
 
-import { LEGACY_MEM_ID_PATTERN, parseMemId } from "./mem-id.js";
+import { LEGACY_MEM_ID_PATTERN, isMemId, parseMemId } from "./mem-id.js";
 
 export function scanMaxKey(content: string, pattern: RegExp): number {
   const matches = content.matchAll(pattern);
@@ -43,4 +43,70 @@ export function getNextKeyFromContents(
   const fromArchive = scanMaxKey(archiveContent, ARCHIVE_KEY_PATTERN);
   const fromToday = scanMaxKey(todayContent, TODAY_CANONICAL_KEY_PATTERN);
   return Math.max(fromRegistry, fromArchive, fromToday) + 1;
+}
+
+export type MemWritePlan =
+  | { kind: "ready"; todayAppend: string; registryAppend: string }
+  | { kind: "error"; code: 2 | 3; message: string };
+
+/** Retain escaped pipes in description cells rather than treating them as separators. */
+function registryCells(line: string): string[] {
+  return line.trim().split(/(?<!\\)\|/).slice(1, -1).map((cell) => cell.trim());
+}
+
+/** Decide both appends before either file is changed; never allocate an identity here. */
+export function planMemWrite(input: {
+  today: string;
+  registry: string;
+  id: string;
+  content: string;
+}): MemWritePlan {
+  const { today, registry, id, content } = input;
+  const parsed = parseMemId(id);
+  if (!isMemId(id) || parsed?.kind !== "dated") {
+    return { kind: "error", code: 2, message: "--id requires a dated MEM ID" };
+  }
+
+  const tag = `[${id}]`;
+  const lines = today.split("\n");
+  const contentLineCount = content.split("\n").length;
+  let todayPresent = false;
+  let conflict = false;
+  for (let i = 0; i < lines.length; i++) {
+    const tagAt = lines[i].indexOf(tag);
+    if (tagAt === -1) continue;
+    todayPresent = true;
+    // Compare the full requested text, including continuation lines that may
+    // themselves look like log rows. Additional prose is conflicting content;
+    // a subsequent log row/date section and rollover whitespace are separate.
+    const text = [lines[i].slice(tagAt + tag.length).replace(/^ /, ""),
+      ...lines.slice(i + 1, i + contentLineCount)].join("\n");
+    const following = lines.slice(i + contentLineCount).find((line) => line !== "");
+    if (text !== content || (following !== undefined && !/^(?:- \[|# \d{4}-\d{2}-\d{2})/.test(following))) conflict = true;
+  }
+
+  const desc = content.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  let registryPresent = false;
+  for (const line of registry.split("\n")) {
+    if (!line.trim().startsWith("|")) continue;
+    const cells = registryCells(line);
+    if (cells[0] !== id) continue;
+    registryPresent = true;
+    if (cells[cells.length - 1] !== desc) conflict = true;
+  }
+  if (conflict) {
+    return { kind: "error", code: 3, message: `MEM id ${id} already used with different content` };
+  }
+
+  // Keep the writer's existing four/five-column header detection.
+  const headerLine = registry.split("\n").find((line) => line.startsWith("|") && /Key/.test(line));
+  const colCount = headerLine ? headerLine.split("|").filter((cell) => cell.trim()).length : 5;
+  const row = colCount <= 4
+    ? `| ${id} | ACTIVE | ${parsed.date} | ${desc} |\n`
+    : `| ${id} | ACTIVE | ${parsed.date} | — | ${desc} |\n`;
+  return {
+    kind: "ready",
+    todayAppend: todayPresent ? "" : `- [${id}] ${content}\n`,
+    registryAppend: registryPresent ? "" : row,
+  };
 }
