@@ -39,7 +39,8 @@ function suggestKey(key, allowed) {
 function checkValue(value, schema, path, toolName) {
   const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : []
   const actual = valueType(value)
-  if (types.length && (!types.includes(actual) || (actual === 'number' && !Number.isFinite(value)))) {
+  const matchesType = types.includes(actual) || (types.includes('integer') && Number.isInteger(value))
+  if (types.length && (!matchesType || (actual === 'number' && !Number.isFinite(value)))) {
     return `Invalid type for parameter \`${path}\` for ${toolName}: expected ${types.join(' or ')}, got ${actual}`
   }
   if (schema.enum && !schema.enum.includes(value)) {
@@ -47,6 +48,17 @@ function checkValue(value, schema, path, toolName) {
   }
   if (typeof value === 'number' && schema.minimum !== undefined && value < schema.minimum) {
     return `Invalid value for parameter \`${path}\` for ${toolName}: minimum ${schema.minimum}`
+  }
+  if (typeof value === 'string') {
+    if (schema.minLength !== undefined && value.length < schema.minLength) {
+      return `Invalid value for parameter \`${path}\` for ${toolName}: minimum length ${schema.minLength}`
+    }
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) {
+      return `Invalid value for parameter \`${path}\` for ${toolName}: maximum length ${schema.maxLength}`
+    }
+    if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
+      return `Invalid value for parameter \`${path}\` for ${toolName}: pattern mismatch`
+    }
   }
   return null
 }
