@@ -12,6 +12,38 @@ All tools are prefixed `mcp__teamvibe-api__`. Channel and workspace context are 
 
 ## Tools
 
+### search_history
+
+Search Slack conversation history local to this poller. Indexing is default off
+(`HISTORY_INDEX_ENABLED`), with no backfill — empty results on a fresh brain are normal.
+Search words match with OR; punctuation is treated as separators. Results include
+message text, author, timestamps, source and attachment filenames, ranked by relevance.
+
+| Argument | Required | Default / meaning |
+|---|---|---|
+| `query` | yes | String, 1–500 characters |
+| `channel` | no | Session's `SLACK_CHANNEL`; Slack ID matching `^[CDG][A-Z0-9]{5,}$` |
+| `limit` | no | Integer, default 20, clamped to 1–100 |
+
+Your own session channel needs no Slack API check. Other channels require bot
+access (bot membership, or a DM/group DM) and verified requester membership.
+The requester is the human in the session inbox context; scheduled `system`
+runs cannot search other channels. Successful checks are cached for this server's lifetime.
+
+| Error code | Meaning |
+|---|---|
+| `no_channel` | No explicit or session channel |
+| `channel_not_accessible` | Bot access could not be verified |
+| `requester_unresolved` | Session's human requester could not be resolved |
+| `not_a_member` | Requester is absent from the channel |
+| `membership_unverified` | Membership API failed or exceeded 20 pages |
+| `index_unavailable` | Local index cannot be read (including unsupported version or schema mismatch) |
+
+Missing indexes return `note: "no_history"`; punctuation-only queries return
+`note: "empty_query"`. Both are successful empty results.
+
+Example: `mcp__teamvibe-api__search_history({"query":"release notes","limit":10})`.
+
 ### create_scheduled_message
 
 Create or update a schedule.
