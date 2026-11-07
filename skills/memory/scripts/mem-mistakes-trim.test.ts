@@ -16,9 +16,13 @@
  * mis-read as sibling entries.
  *
  * Run: npx tsx skills/memory/scripts/mem-mistakes-trim.test.ts
- * Exits non-zero on the first failed assertion.
+ * Exits non-zero if any assertion fails.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   findMistakesTrimCandidates,
   applyMistakesTrimCandidates,
@@ -29,10 +33,12 @@ import {
 } from "./lib/mem-mistakes-trim-core.js";
 
 let passed = 0;
+let failed = 0;
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
     console.error(`❌ FAIL: ${msg}`);
-    process.exit(1);
+    failed++;
+    return;
   }
   passed++;
 }
@@ -526,4 +532,67 @@ assert(
   "applyMistakesTrimCandidates throws instead of overwriting an entry that doesn't actually cite the candidate's key"
 );
 
-console.log(`✅ all ${passed} assertions passed`);
+// Mixed pointer markers and archive provenance keep dated identities intact.
+const DATED_A = "MEM-2026-11-07-203000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const DATED_B = "MEM-2026-11-07-203001-aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
+
+const mixedMistakePointers = findMistakesTrimCandidates([
+  `- [${DATED_A}] → see semantic/one.md:1 — Already promoted rule`,
+  "- [MEM-12] → see semantic/legacy.md:1 — Legacy promoted rule",
+  `## [${DATED_B}:obsolete] → see semantic/two.md:1 — Another promoted rule`,
+].join("\n"), []);
+assert(mixedMistakePointers.alreadyPointer === 3, "MISTAKES recognises dated and legacy bullet/heading pointers");
+const datedMistake = `- **Important dated mistake** — ${"Original incident detail worth preserving. ".repeat(12)} (Source: incident, [${DATED_A}])\n`;
+const datedDest = [{ file: "core/LEARNINGS.md", text: `### Stable dated lesson heading\nCondensed lesson [${DATED_A}]` }];
+const datedMistakeFound = findMistakesTrimCandidates(datedMistake, datedDest);
+assert(datedMistakeFound.candidates[0]?.key === DATED_A, "MISTAKES extracts whole dated identity");
+const datedMistakeApplied = applyMistakesTrimCandidates(datedMistake, "", datedMistakeFound.candidates, "2026-11-07", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+assert(datedMistakeApplied.mistakes.startsWith(`- [${DATED_A}] → see `), "MISTAKES writes full dated pointer");
+assert(datedMistakeApplied.mistakes.includes("(Source: incident)"), "MISTAKES removes redundant dated provenance tag");
+assert(datedMistakeApplied.archive.includes(datedMistake.trim()), "MISTAKES archives original dated entry verbatim");
+assert(datedMistakeApplied.mistakes.includes(`Keys: ${DATED_A}`), "dated archive pointer lookup builds stub");
+assert(datedMistakeApplied.stats.distinctKeysBefore === 1 && datedMistakeApplied.stats.distinctKeysAfter === 1, "MISTAKES dated identity count preserved");
+const repeatDated = applyMistakesTrimCandidates(datedMistakeApplied.mistakes, datedMistakeApplied.archive, [], "2026-11-07", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+assert(repeatDated.mistakes === datedMistakeApplied.mistakes && repeatDated.archive === datedMistakeApplied.archive, "dated MISTAKES pointer/archive lookup is idempotent");
+const multiMistake = findMistakesTrimCandidates(`- Mixed incident [${DATED_A}] [${DATED_B}]`, datedDest);
+assert(multiMistake.multiKeyEntries === 1 && multiMistake.candidates.length === 0, "two same-year dated mistake keys never collapse");
+const mistakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mem-id-mistakes-"));
+try {
+  fs.mkdirSync(path.join(mistakeRoot, "memory/core"), { recursive: true });
+  fs.writeFileSync(path.join(mistakeRoot, "CLAUDE.md"), "fixture");
+  fs.writeFileSync(path.join(mistakeRoot, "memory/core/MISTAKES.md"), datedMistake);
+  fs.writeFileSync(path.join(mistakeRoot, "memory/core/LEARNINGS.md"), datedDest[0].text);
+  const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-mistakes-trim.ts"), "--apply", "--only", DATED_A],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: mistakeRoot } });
+  assert(cli.status === 0, `MISTAKES --only dated ID finds candidate: ${cli.stderr}`);
+  assert(fs.readFileSync(path.join(mistakeRoot, "memory/core/MISTAKES.md"), "utf8").startsWith(`- [${DATED_A}] → see `), "MISTAKES CLI preserves full ID");
+} finally {
+  fs.rmSync(mistakeRoot, { recursive: true, force: true });
+}
+
+// Lifecycle-tagged destination headings remain ineligible, as on 0ce65634.
+// Exercise the real apply CLI: rejection must preserve the source bytes.
+for (const key of ["MEM-1", DATED_A]) {
+  const original = `- [${key}:obsolete] ${"Original superseded memo, kept for one consolidation cycle. ".repeat(40)}\n`;
+  const destination = `### Preserve the complete original lesson [${key}:obsolete]\n\nSuperseded promoted narrative [${key}:obsolete]\n`;
+  const found = findMistakesTrimCandidates(original, [{ file: "semantic/topic.md", text: destination }]);
+  assert(found.candidates.length === 0, `MISTAKES lifecycle-tagged heading is ineligible: ${key}`);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-obsolete-mistakes-"));
+  try {
+    fs.mkdirSync(path.join(root, "memory/core"), { recursive: true });
+    fs.mkdirSync(path.join(root, "memory/semantic"));
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "fixture");
+    const source = path.join(root, "memory/core/MISTAKES.md");
+    fs.writeFileSync(source, original);
+    fs.writeFileSync(path.join(root, "memory/semantic/topic.md"), destination);
+    const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-mistakes-trim.ts"), "--apply", "--only", key],
+      { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: root } });
+    assert(cli.status === 1, `MISTAKES CLI rejects lifecycle-tagged destination: ${key}`);
+    assert(fs.readFileSync(source, "utf8") === original, `MISTAKES CLI preserves obsolete source byte-for-byte: ${key}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+console.log(`${passed} assertions passed, ${failed} failed`);
+if (failed) process.exitCode = 1;

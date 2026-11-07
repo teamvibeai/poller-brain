@@ -11,19 +11,25 @@
  *   - ACTIVE / OBSOLETE rows and header prose are preserved
  *
  * Run: npx tsx skills/memory/scripts/mem-registry-archive.test.ts
- * Exits non-zero on the first failed assertion.
+ * Exits non-zero if any assertion fails.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   archiveRemovedRows,
   verifyStats,
 } from "./lib/mem-registry-archive-core.js";
 
 let passed = 0;
+let failed = 0;
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
     console.error(`❌ FAIL: ${msg}`);
-    process.exit(1);
+    failed++;
+    return;
   }
   passed++;
 }
@@ -60,6 +66,7 @@ assert(
   "relocated the correct keys"
 );
 assert(c1.length === 3, "all 3 verify checks passed");
+assert(c1[2] === "live REMOVED count after run == 0 ✅", "zero-conflict verification line matches base exactly");
 
 // Live registry keeps ACTIVE + OBSOLETE, drops REMOVED, prose intact.
 assert(/\| MEM-1 \| ACTIVE/.test(r1.registry), "ACTIVE row kept");
@@ -131,4 +138,62 @@ assert(
   "MEM-4 not duplicated in archive"
 );
 
-console.log(`✅ all ${passed} assertions passed`);
+// Mixed formats relocate verbatim; conflicting content is retained for explicit repair.
+const DATED_A = "MEM-2026-11-07-203000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const DATED_B = "MEM-2026-11-07-203001-aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
+
+const datedRow = `| ${DATED_A} | REMOVED | 2026-11-07 | — | original dated memo |`;
+const otherRow = `| ${DATED_B} | REMOVED | 2026-11-07 | — | second dated memo |`;
+const legacyRow = "| MEM-12 | REMOVED | 2026-11-07 | — | legacy memo |";
+const mixedArchive = archiveRemovedRows([otherRow, legacyRow, datedRow].join("\n"), "");
+verifyStats(mixedArchive.stats);
+assert(mixedArchive.stats.newlyArchived === 3, "archives all mixed-format REMOVED rows");
+assert(mixedArchive.archive.includes(datedRow) && mixedArchive.archive.includes(otherRow), "dated rows archived verbatim");
+assert(mixedArchive.stats.archivedKeys.join(",") === ["MEM-12", DATED_A, DATED_B].join(","), "archive keys use mixed-format ordering");
+assert(!mixedArchive.registry.includes(datedRow), "dated REMOVED row leaves live table");
+const caseDistinct = archiveRemovedRows(datedRow + "\n" + datedRow.replace(DATED_A, DATED_A.slice(0, 22) + DATED_A.slice(22).toUpperCase()), "");
+assert(caseDistinct.stats.newlyArchived === 2 && caseDistinct.stats.totalArchived === 2, "UUID case spellings remain separate archive identities");
+const liveConflict = archiveRemovedRows(datedRow + "\n" + datedRow.replace("original", "different"), "");
+verifyStats(liveConflict.stats);
+assert(liveConflict.registry.includes(datedRow.replace("original", "different")) && liveConflict.archive.includes(datedRow),
+  "same-run archival never suppresses a later conflicting live row");
+const identicalDated = archiveRemovedRows(datedRow, mixedArchive.archive);
+assert(identicalDated.stats.alreadyInArchive === 1 && identicalDated.stats.liveRemovedAfter === 0,
+  "identical dated archive row retains existing suppression behavior");
+for (const row of [datedRow, legacyRow]) {
+  const conflicting = row.replace("memo |", "memo with different content |");
+  const result = archiveRemovedRows([conflicting, otherRow].join("\n"), row + "\n");
+  assert(verifyStats(result.stats)[2] === "live REMOVED count after run == 1 retained conflicting row(s) ✅",
+    "conflict verification line reports retained count");
+  assert(result.registry.split("\n").includes(conflicting), "conflicting same-ID live row stays verbatim");
+  assert(!result.archive.includes(conflicting), "conflicting row is not appended or substituted in archive");
+  assert(result.stats.liveRemovedAfter === 1 && result.stats.removedFromLive === 1, "only nonconflicting row relocated");
+  const repeat = archiveRemovedRows(result.registry, result.archive);
+  verifyStats(repeat.stats);
+  assert(repeat.registry === result.registry && repeat.archive === result.archive, "conflict repeat run is byte-identical");
+}
+const conflictRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mem-id-archive-"));
+try {
+  fs.mkdirSync(path.join(conflictRoot, "memory"));
+  fs.writeFileSync(path.join(conflictRoot, "CLAUDE.md"), "fixture");
+  fs.writeFileSync(path.join(conflictRoot, "memory/MEM_REGISTRY.md"), REGISTRY);
+  const noConflictCli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-registry-archive.ts")],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: conflictRoot } });
+  assert(noConflictCli.status === 0 && noConflictCli.stdout.split("\n").at(-2) === "  verify: live REMOVED count after run == 0 ✅",
+    "zero-conflict CLI prints the byte-identical base verification line");
+  fs.writeFileSync(path.join(conflictRoot, "memory/MEM_REGISTRY.md"), datedRow + "\n" + otherRow + "\n");
+  fs.writeFileSync(path.join(conflictRoot, "memory/MEM_REGISTRY_ARCHIVE.md"), datedRow.replace("original", "archived") + "\n");
+  const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-registry-archive.ts")],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: conflictRoot } });
+  assert(cli.stdout.split("\n").includes("  verify: live REMOVED count after run == 1 retained conflicting row(s) ✅"),
+    "CLI prints retained-conflict verification wording");
+  assert(cli.status === 0, `archive CLI succeeds while retaining conflict: ${cli.stderr}`);
+  const diagnostic = `duplicate MEM id ${DATED_A}: live row differs from archived row (not archived)`;
+  assert(cli.stdout.split("\n").filter((line) => line === diagnostic).length === 1, "CLI prints exactly one required conflict diagnostic");
+  assert(fs.readFileSync(path.join(conflictRoot, "memory/MEM_REGISTRY.md"), "utf8").includes(datedRow), "CLI preserves conflicting live content");
+} finally {
+  fs.rmSync(conflictRoot, { recursive: true, force: true });
+}
+
+console.log(`${passed} assertions passed, ${failed} failed`);
+if (failed) process.exitCode = 1;

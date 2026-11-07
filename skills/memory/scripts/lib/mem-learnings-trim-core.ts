@@ -78,6 +78,8 @@
  * real brain's memory/.
  */
 
+import { MEM_ID_PATTERN, MEM_CITATION_PATTERN, compareMemIds, isMemId } from "./mem-id.js";
+
 import {
   type DestinationFile,
   firstCitations,
@@ -129,10 +131,10 @@ const HEADING_START_RE = /^###\s+/;
 const BULLET_START_RE = /^-\s+/;
 
 /** Matches an already-trimmed pointer bullet entry. */
-export const POINTER_BULLET_RE = /^-\s*\[MEM-\d+\]\s*→\s*see\s+\S/;
+export const POINTER_BULLET_RE = new RegExp(String.raw`^-\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
 
 /** Matches an already-trimmed pointer heading entry. */
-export const POINTER_HEADING_RE = /^###\s*\[MEM-\d+\]\s*→\s*see\s+\S/;
+export const POINTER_HEADING_RE = new RegExp(String.raw`^###\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
 
 function entryFormatOf(line: string): EntryFormat | null {
   if (HEADING_START_RE.test(line)) return "heading";
@@ -261,7 +263,10 @@ export function findLearningsTrimCandidates(
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
 
     const hook = extractHook(citation);
-    if (hook === null || !isReliableHook(hook)) {
+    // Keep lifecycle-tagged destination headings ineligible, as on the
+    // legacy reader, even though extractHook now recognises their tags.
+    const lifecycleHeading = new RegExp(String.raw`\b${MEM_CITATION_PATTERN}:obsolete\b`).test(citation.heading ?? "");
+    if (lifecycleHeading || hook === null || !isReliableHook(hook)) {
       unreliableHooks.push({
         key,
         file: citation.file,
@@ -296,7 +301,7 @@ export function findLearningsTrimCandidates(
 
 function sortCandidates(candidates: LearningsTrimCandidate[]): LearningsTrimCandidate[] {
   return [...candidates].sort(
-    (a, b) => parseInt(a.key.slice(4), 10) - parseInt(b.key.slice(4), 10)
+    (a, b) => compareMemIds(a.key, b.key)
   );
 }
 
@@ -322,7 +327,7 @@ export interface LearningsTrimResult {
 }
 
 /** Trailing `(Source: ..., [MEM-N])` provenance anywhere in an entry — captures everything except the redundant `[MEM-N]` tag, which the pointer already carries as its own prefix. Searches the WHOLE entry (the tag may be on its own trailing line in a multi-line entry), takes the LAST match. */
-const SOURCE_RE = /\(Source:\s*([^)]*?)(?:,\s*\[MEM-\d+\])?\)/g;
+const SOURCE_RE = new RegExp(String.raw`\(Source:\s*([^)]*?)(?:,\s*\[${MEM_ID_PATTERN}(?::obsolete)?\])?\)`, "g");
 
 function extractSource(entryText: string): string | null {
   let last: RegExpExecArray | null = null;
@@ -467,6 +472,7 @@ export function parseOnlySelectors(raw: string): OnlySelector[] {
         throw new Error(`--only span selector "${tok}" has more than one "@" — expected MEM-N@<entryStartLine>`);
       }
       const [key, lineStr] = parts;
+      if (!isMemId(key)) throw new Error(`--only has an invalid MEM id "${key}"`);
       if (lineStr === undefined) return { key, line: null };
       if (!/^\d+$/.test(lineStr)) {
         throw new Error(

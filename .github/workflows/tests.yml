@@ -55,3 +55,11 @@ jobs:
           done
           echo "${#files[@]} test files, failed=$failed"
           exit "$failed"
+
+      - name: Run MEM TypeScript suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suite in mem-id mem-write mem-registry-archive mem-registry-trim mem-learnings-trim mem-mistakes-trim mem-scaled-threshold; do
+            npx --yes tsx@4.23.15 "skills/memory/scripts/${suite}.test.ts"
+          done

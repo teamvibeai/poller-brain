@@ -47,7 +47,11 @@ function main(): void {
   // Machine count-verify BEFORE writing — throws (→ exit 1) on any violation.
   const checks = verifyStats(stats);
 
-  if (stats.removedFromLive === 0) {
+  for (const key of new Set(stats.conflictingKeys)) {
+    console.log(`duplicate MEM id ${key}: live row differs from archived row (not archived)`);
+  }
+
+  if (stats.removedFromLive === 0 && stats.conflictingKeys.length === 0) {
     console.log(
       `No REMOVED rows in live registry — already archived (${stats.totalArchived} in archive). No-op.`
     );

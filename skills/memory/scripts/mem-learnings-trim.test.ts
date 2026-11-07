@@ -55,9 +55,13 @@
  *     itself (not just the CLI's DEST_DIRS convention).
  *
  * Run: npx tsx skills/memory/scripts/mem-learnings-trim.test.ts
- * Exits non-zero on the first failed assertion.
+ * Exits non-zero if any assertion fails.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   findLearningsTrimCandidates,
   applyLearningsTrimCandidates,
@@ -70,10 +74,12 @@ import {
 } from "./lib/mem-learnings-trim-core.js";
 
 let passed = 0;
+let failed = 0;
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
     console.error(`❌ FAIL: ${msg}`);
-    process.exit(1);
+    failed++;
+    return;
   }
   passed++;
 }
@@ -720,4 +726,66 @@ assert(
   "same invariant holds for heading-format entries"
 );
 
-console.log(`✅ all ${passed} assertions passed`);
+// Dated bullet/heading pointers, provenance and full-key counts coexist with legacy entries.
+const DATED_A = "MEM-2026-11-07-203000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const DATED_B = "MEM-2026-11-07-203001-aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
+
+const mixedLearnings = [
+  `- [${DATED_A}] → see semantic/one.md:1 — Already promoted rule`,
+  "- [MEM-12] → see semantic/legacy.md:1 — Legacy promoted rule",
+  `### [${DATED_B}:obsolete] → see semantic/two.md:1 — Another promoted rule`,
+].join("\n");
+const mixedPointers = findLearningsTrimCandidates(mixedLearnings, []);
+assert(mixedPointers.alreadyPointer === 3, "LEARNINGS recognises legacy and dated pointers in both formats");
+const datedLearning = `- **Important dated lesson** — ${"Original detail worth preserving. ".repeat(12)} (Source: incident, [${DATED_A}])\n`;
+const datedDest = [{ file: "semantic/lesson.md", text: `### Stable dated lesson heading\nCondensed lesson [${DATED_A}]` }];
+const datedFound = findLearningsTrimCandidates(datedLearning, datedDest);
+assert(datedFound.candidates[0]?.key === DATED_A, "LEARNINGS extracts the whole dated identity");
+const datedApplied = applyLearningsTrimCandidates(datedLearning, datedFound.candidates);
+assert(datedApplied.learnings.startsWith(`- [${DATED_A}] → see `), "LEARNINGS writes full dated pointer");
+assert(datedApplied.learnings.includes("(Source: incident)"), "LEARNINGS removes redundant full dated provenance tag");
+assert(datedApplied.stats.distinctKeysBefore === 1 && datedApplied.stats.distinctKeysAfter === 1, "LEARNINGS full identity count survives trim");
+const multiDatedLearning = findLearningsTrimCandidates(`- Mixed lesson [${DATED_A}] [${DATED_B}]`, datedDest);
+assert(multiDatedLearning.multiKeyEntries === 1 && multiDatedLearning.candidates.length === 0, "two same-year dated keys stay multi-key and cannot be trimmed");
+assert(parseOnlySelectors(`${DATED_A},${DATED_B}@3`)[1].key === DATED_B, "dated --only span selectors retain exact identity");
+const learningRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mem-id-learnings-"));
+try {
+  fs.mkdirSync(path.join(learningRoot, "memory/core"), { recursive: true });
+  fs.mkdirSync(path.join(learningRoot, "memory/semantic"));
+  fs.writeFileSync(path.join(learningRoot, "CLAUDE.md"), "fixture");
+  fs.writeFileSync(path.join(learningRoot, "memory/core/LEARNINGS.md"), datedLearning);
+  fs.writeFileSync(path.join(learningRoot, "memory/semantic/lesson.md"), datedDest[0].text);
+  const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts"), "--apply", "--only", `${DATED_A}@1`],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: learningRoot } });
+  assert(cli.status === 0, `LEARNINGS --only dated span finds candidate: ${cli.stderr}`);
+  assert(fs.readFileSync(path.join(learningRoot, "memory/core/LEARNINGS.md"), "utf8").startsWith(`- [${DATED_A}] → see `), "LEARNINGS CLI preserves full ID");
+} finally {
+  fs.rmSync(learningRoot, { recursive: true, force: true });
+}
+
+// Lifecycle-tagged destination headings remain ineligible, as on 0ce65634.
+// Exercise the real apply CLI: rejection must preserve the source bytes.
+for (const key of ["MEM-1", DATED_A]) {
+  const original = `- [${key}:obsolete] ${"Original superseded memo, kept for one consolidation cycle. ".repeat(40)}\n`;
+  const destination = `### Preserve the complete original lesson [${key}:obsolete]\n\nSuperseded promoted narrative [${key}:obsolete]\n`;
+  const found = findLearningsTrimCandidates(original, [{ file: "semantic/topic.md", text: destination }]);
+  assert(found.candidates.length === 0, `LEARNINGS lifecycle-tagged heading is ineligible: ${key}`);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-obsolete-learnings-"));
+  try {
+    fs.mkdirSync(path.join(root, "memory/core"), { recursive: true });
+    fs.mkdirSync(path.join(root, "memory/semantic"));
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "fixture");
+    const source = path.join(root, "memory/core/LEARNINGS.md");
+    fs.writeFileSync(source, original);
+    fs.writeFileSync(path.join(root, "memory/semantic/topic.md"), destination);
+    const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts"), "--apply", "--only", key],
+      { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: root } });
+    assert(cli.status === 1, `LEARNINGS CLI rejects lifecycle-tagged destination: ${key}`);
+    assert(fs.readFileSync(source, "utf8") === original, `LEARNINGS CLI preserves obsolete source byte-for-byte: ${key}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+console.log(`${passed} assertions passed, ${failed} failed`);
+if (failed) process.exitCode = 1;

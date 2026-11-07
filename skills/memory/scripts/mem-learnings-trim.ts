@@ -43,6 +43,7 @@
  *   npx tsx mem-learnings-trim.ts --apply --only MEM-25@67    # apply MEM-25's candidate at entryStartLine 67 specifically
  */
 
+import { MEM_ID_PATTERN } from "./lib/mem-id.js";
 import * as fs from "fs";
 import * as path from "path";
 import { brainPath } from "./lib/brain-root.js";
@@ -75,7 +76,7 @@ const DEST_DIRS = ["semantic", "episodic", "procedural"];
 // Duplicated here so the CLI's own fail-safe (below) doesn't depend on
 // being invoked correctly by the skill.
 const LEARNINGS_CAP_BYTES = 5000;
-const HAS_MEM_KEY_RE = /\bMEM-\d+\b/;
+const HAS_MEM_KEY_RE = new RegExp(String.raw`\b${MEM_ID_PATTERN}\b`);
 
 // episodic/archive/mistakes-*.md holds relocated, dead history from Step 9f
 // — a key cited there is evidence it USED to live somewhere, not that it's

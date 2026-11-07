@@ -7,17 +7,19 @@
  * counter past the next real canonical key.
  *
  * Run: npx tsx skills/memory/scripts/mem-write.test.ts
- * Exits non-zero on the first failed assertion.
+ * Exits non-zero if any assertion fails.
  */
 
 import { getNextKeyFromContents } from "./lib/mem-write-core.js";
 import { computeRollover } from "./lib/today-md-core.js";
 
 let passed = 0;
+let failed = 0;
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
     console.error(`❌ FAIL: ${msg}`);
-    process.exit(1);
+    failed++;
+    return;
   }
   passed++;
 }
@@ -114,4 +116,18 @@ function assert(cond: boolean, msg: string): void {
   assert(action.kind === "none", "same-day mem-write.ts call must be a no-op");
 }
 
-console.log(`✅ all ${passed} assertions passed`);
+// Mixed sources: dated IDs never advance the numeric allocator, even in stubs.
+const DATED_A = "MEM-2026-11-07-203000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const DATED_B = "MEM-2026-11-07-203001-aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
+
+assert(getNextKeyFromContents(`| MEM-9 | ACTIVE | x |\n| ${DATED_A} | ACTIVE | x |`, "", "") === 10,
+  "dated registry rows do not inflate the legacy maximum");
+assert(getNextKeyFromContents("MEM-9", `| ${DATED_B} | REMOVED | x |`, "") === 10,
+  "dated archive rows do not inflate the legacy maximum");
+assert(getNextKeyFromContents("MEM-9", "", `- [${DATED_A}] x\n- [${DATED_B}:obsolete] y\n`) === 10,
+  "dated canonical TODAY rows do not inflate the legacy maximum");
+assert(getNextKeyFromContents(`Keys: ${DATED_A}, ${DATED_B}`, DATED_A, `- [${DATED_B}] x\n`) === 1,
+  "dated-only sources leave next numeric key at one");
+
+console.log(`${passed} assertions passed, ${failed} failed`);
+if (failed) process.exitCode = 1;

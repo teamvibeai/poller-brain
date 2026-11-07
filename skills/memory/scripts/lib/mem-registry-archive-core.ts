@@ -18,12 +18,15 @@
  *      so nothing is re-matched or duplicated.
  *   2. Count-verifiable — every REMOVED row leaving the live table must land
  *      in the archive (round-trip identity, MEM-6), and the live REMOVED count
- *      must be 0 afterward. Callers assert on the returned stats and FAIL LOUD.
+ *      must equal the retained conflicting rows afterward. Callers assert on the
+ *      returned stats and FAIL LOUD.
  *   3. Stub is a pointer (count + link + key list), never a bare deletion.
  *
  * This module is intentionally fs-free so the invariants can be unit-tested
  * against string fixtures without touching a real brain's memory/.
  */
+
+import { MEM_ID_PATTERN, compareMemIds } from "./mem-id.js";
 
 export const ARCHIVE_HEADER = `# MEM Registry — Archive
 
@@ -39,10 +42,10 @@ the live registry keeps only ACTIVE / OBSOLETE rows plus a pointer stub.
 /** Matches the pointer stub so it can be regenerated (never appended twice). */
 export const STUB_RE = /^> 📦 \d+ REMOVED /;
 
-const DATA_ROW_RE = /^\|\s*(MEM-\d+)\s*\|/;
+const DATA_ROW_RE = new RegExp(String.raw`^\|\s*(${MEM_ID_PATTERN})\s*\|`);
 
 export interface ArchiveStats {
-  /** REMOVED data rows found in the live registry before the run. */
+  /** REMOVED data rows relocated from the live registry this run. */
   removedFromLive: number;
   /** Rows newly appended to the archive this run (were not already there). */
   newlyArchived: number;
@@ -50,7 +53,9 @@ export interface ArchiveStats {
   alreadyInArchive: number;
   /** Total distinct MEM keys in the archive after the run. */
   totalArchived: number;
-  /** REMOVED data rows still in the live registry after the run (must be 0). */
+  /** Conflicting rows retained in place for explicit repair (one key per row). */
+  conflictingKeys: string[];
+  /** REMOVED data rows still live after the run (must equal conflictingKeys.length). */
   liveRemovedAfter: number;
   /** Keys that failed round-trip (removed from live but absent from archive). */
   missing: string[];
@@ -86,7 +91,7 @@ function keysIn(content: string): Set<string> {
 
 function sortKeys(keys: Iterable<string>): string[] {
   return [...keys].sort(
-    (a, b) => parseInt(a.slice(4), 10) - parseInt(b.slice(4), 10)
+    (a, b) => compareMemIds(a, b)
   );
 }
 
@@ -103,11 +108,28 @@ export function archiveRemovedRows(
 ): ArchiveResult {
   const removedRows: { key: string; line: string }[] = [];
   const kept: string[] = [];
+  const conflictingKeys: string[] = [];
+  const archivedRows = new Map<string, Set<string>>();
+  for (const line of archive.split("\n")) {
+    const key = dataKey(line);
+    if (key) {
+      if (!archivedRows.has(key)) archivedRows.set(key, new Set());
+      archivedRows.get(key)!.add(line);
+    }
+  }
 
   for (const line of registry.split("\n")) {
     const key = dataKey(line);
     if (key && statusOf(line) === "REMOVED") {
-      removedRows.push({ key, line });
+      const rows = archivedRows.get(key);
+      if (rows && [...rows].some((row) => row !== line)) {
+        kept.push(line);
+        conflictingKeys.push(key);
+      } else {
+        removedRows.push({ key, line });
+        // Also preserve conflicting live rows encountered later in this run.
+        archivedRows.set(key, new Set([line]));
+      }
     } else if (STUB_RE.test(line)) {
       // Drop any prior stub; it is regenerated below from the archive total.
       continue;
@@ -116,7 +138,7 @@ export function archiveRemovedRows(
     }
   }
 
-  // Seed / extend the archive, deduping by key so re-runs never duplicate.
+  // Seed / extend the archive; only identical same-key rows are suppressed.
   const archiveBody = archive.trim().length ? archive : ARCHIVE_HEADER;
   const archiveLines = archiveBody.replace(/\n+$/, "").split("\n");
   const archiveKeys = keysIn(archiveBody);
@@ -180,6 +202,7 @@ export function archiveRemovedRows(
       alreadyInArchive,
       totalArchived: archiveKeysAfter.size,
       liveRemovedAfter,
+      conflictingKeys,
       missing,
       archivedKeys: sortKeys(removedRows.map((r) => r.key)),
     },
@@ -216,12 +239,14 @@ export function verifyStats(stats: ArchiveStats): string[] {
     `count: removedFromLive(${stats.removedFromLive}) == newlyArchived(${stats.newlyArchived}) + alreadyInArchive(${stats.alreadyInArchive}) ✅`
   );
 
-  if (stats.liveRemovedAfter !== 0) {
+  if (stats.liveRemovedAfter !== stats.conflictingKeys.length) {
     throw new Error(
-      `Live registry still has ${stats.liveRemovedAfter} REMOVED row(s) after archival — expected 0.`
+      `Live registry still has ${stats.liveRemovedAfter} REMOVED row(s) after archival — expected ${stats.conflictingKeys.length} retained conflicting row(s).`
     );
   }
-  checks.push(`live REMOVED count after run == 0 ✅`);
+  checks.push(stats.conflictingKeys.length === 0
+    ? "live REMOVED count after run == 0 ✅"
+    : `live REMOVED count after run == ${stats.conflictingKeys.length} retained conflicting row(s) ✅`);
 
   return checks;
 }

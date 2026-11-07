@@ -36,6 +36,7 @@
  *   npx tsx mem-registry-trim.ts --apply --only MEM-1,MEM-5  # apply exactly these approved keys
  */
 
+import { isMemId } from "./lib/mem-id.js";
 import * as fs from "fs";
 import * as path from "path";
 import { brainPath } from "./lib/brain-root.js";
@@ -94,7 +95,14 @@ function parseOnlyFlag(): string[] | null {
     console.error("--only requires a comma-separated key list, e.g. --only MEM-1,MEM-5");
     process.exit(1);
   }
-  return raw.split(",").map((k) => k.trim()).filter(Boolean);
+  const keys = raw.split(",").map((k) => k.trim()).filter(Boolean);
+  for (const key of keys) {
+    if (!isMemId(key)) {
+      console.error(`--only has an invalid MEM id "${key}"`);
+      process.exit(1);
+    }
+  }
+  return keys;
 }
 
 function printProposals(candidates: TrimCandidate[]): void {

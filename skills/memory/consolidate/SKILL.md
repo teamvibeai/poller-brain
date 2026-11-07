@@ -60,15 +60,17 @@ If no matching report exists, process the last 14 days of logs.
 
 ### 1b. Process `[MEM-NNN]` Tracked Keys (priority)
 
-**Before** extracting general facts, scan all daily logs from step 1 for lines containing `[MEM-\d+]`, `[MEM-<word>]` (malformed), or `[REMEMBER]` (backward compat). These are tracked memory entries and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
+**Before** extracting general facts, scan all daily logs from step 1 for lines containing either accepted ID format (`[MEM-<n>]` or `[MEM-YYYY-MM-DD-HHMMSS-<uuid>]`), malformed `[MEM-…]` tags, or `[REMEMBER]` (backward compat). These are tracked memory entries and must be promoted with **guaranteed priority** — they are never filtered by heuristics.
 
 > **⚠️ Anti-pattern: auto-memory is NOT persistent memory.**
 > Claude Code's built-in auto-memory (`~/.claude/projects/.../memory/`) is ephemeral — it does not survive re-clones, machine changes, or container restarts. NEVER treat auto-memory as a substitute for writing to the brain's `memory/` tier files. `[MEM-NNN]` items MUST be physically written to `memory/core/` or `memory/semantic/` files. Claiming "already captured in auto-memory" is NOT valid — auto-memory is provider-specific and not part of our memory model.
 
 #### Auto-fix malformed keys
 
-If a `[MEM-<word>]` tag is found where `<word>` is NOT a number (e.g., `[MEM-feedback]`, `[MEM-TAG]`):
-1. Assign the next available sequential number (read `memory/MEM_REGISTRY.md`, find highest number, increment)
+Validate IDs with `scripts/lib/mem-id.ts` (`isMemId`): readers accept legacy `MEM-<n>` and dated `MEM-YYYY-MM-DD-HHMMSS-<uuid>` (full 8-4-4-4-12 hex UUID, either hex case; syntactic validation only). Preserve the exact spelling. **Never repair or renumber an ID that `isMemId` accepts**, including one carrying the lifecycle suffix `:obsolete` (validate the ID before the suffix).
+
+If a `[MEM-…]` tag fails that validation (e.g., `[MEM-feedback]`, `[MEM-TAG]`):
+1. Assign the next available sequential number (read `memory/MEM_REGISTRY.md`, find highest legacy number, increment)
 2. Replace the malformed tag in the daily log with the correct `[MEM-N]` format
 3. Add the corrected key to the registry with status `ACTIVE`
 4. Log the fix in the report: "Auto-fixed malformed key: [MEM-feedback] → [MEM-4]"
@@ -77,7 +79,7 @@ If a `[MEM-<word>]` tag is found where `<word>` is NOT a number (e.g., `[MEM-fee
 #### Handling `[REMEMBER]` backward compatibility
 
 If a `[REMEMBER]` tag is found (without a `[MEM-NNN]` key):
-1. Assign the next available key (read `memory/MEM_REGISTRY.md`, find highest number, increment)
+1. Assign the next available key (read `memory/MEM_REGISTRY.md`, find highest legacy number, increment)
 2. Add the new key to the registry with status `ACTIVE`
 3. Process as if it were a `[MEM-NNN]` entry
 
@@ -113,7 +115,7 @@ Review entries in `memory/MEM_REGISTRY.md` with status `ACTIVE`:
 
 1. **Check for contradictions** — if newer daily log entries contradict or supersede an existing ACTIVE entry, mark it `OBSOLETE`:
    - Update registry: status → `OBSOLETE`, set obsoleted date
-   - Update the content file: change `[MEM-N]` to `[MEM-N:obsolete]`
+   - Update the content file: append `:obsolete` to the existing ID in either format, e.g. change `[MEM-N]` to `[MEM-N:obsolete]`; never renumber it
    - The entry stays in the content file for one consolidation cycle
 
 2. **Process previously OBSOLETE entries** — for entries marked `OBSOLETE` in a *previous* consolidation run (check git history or the obsoleted date vs. last consolidation date):
@@ -403,7 +405,7 @@ If `memory/MEM_REGISTRY.md` exists:
 
 1. **Count ACTIVE keys** — grep the registry for ACTIVE entries
 2. **Verify presence** — for each ACTIVE key, grep across `memory/` (excluding `MEM_REGISTRY.md` and `daily/`) to confirm the key exists in at least one content file. A missing ACTIVE key = integrity violation. Step 5c's pointer-stub mode leaves the key in `LEARNINGS.md` (via the stub), so this check is unaffected by it either way — an ACTIVE key whose *only* home is `episodic/archive/` (e.g. because a later edit dropped the stub) is a Step 5c discoverability violation even though this grep would still find it there.
-3. **Check sequence** — extract all key numbers, verify gaps match REMOVED/OBSOLETE entries in the registry. An unexplained gap = potential data loss.
+3. **Check sequence (legacy IDs only)** — extract numbers only from complete `MEM-<n>` IDs (never a dated ID prefix), verify gaps match REMOVED/OBSOLETE entries in the registry. An unexplained gap = potential data loss.
 4. **Compare with previous run** — if the previous consolidation report exists, compare ACTIVE counts. A decrease without corresponding OBSOLETE/REMOVED entries = alarm.
 
 Record results in the markdown report under `## MEM Audit`:
@@ -414,11 +416,11 @@ Record results in the markdown report under `## MEM Audit`:
 - New this cycle: 2 (MEM-011, MEM-012)
 - Obsoleted this cycle: 0
 - Integrity: ✅ all ACTIVE keys found in content files
-- Sequence: ✅ no unexplained gaps
+- Sequence (legacy IDs only): ✅ no unexplained gaps
 ```
 
 Populate JSON report `selfAssessment`:
-- `mem-integrity-check` — `true` if all ACTIVE keys are present and sequence is clean, `false` otherwise
+- `mem-integrity-check` — `true` if all ACTIVE keys in either format are present and the legacy-only sequence is clean, `false` otherwise
 
 If `memory/MEM_REGISTRY.md` doesn't exist (pre-migration brains), skip and set `mem-integrity-check` to `true` (no keys to check).
 
@@ -502,19 +504,19 @@ If the Memory Metrics table (Step 9b) shows `MEM_REGISTRY.md` over its (scaled) 
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-archive.ts"
 ```
 
-The script is **idempotent** (a second consecutive run is a byte-identical no-op) and performs its own **count-verify** before writing — it aborts (exit 1) without writing if any REMOVED row would be dropped (round-trip identity) or if the live REMOVED count would not reach 0. Do not hand-edit `MEM_REGISTRY.md` to remove REMOVED rows; always use the script.
+The script accepts both ID formats without renumbering. It is **idempotent** (a second consecutive run is a byte-identical no-op) and performs its own **count-verify** before writing — it aborts (exit 1) without writing if any relocated REMOVED row would be dropped (round-trip identity). A same-ID row whose content differs from the archived row stays untouched in the live registry, with a `duplicate MEM id <id>: live row differs from archived row (not archived)` diagnostic for explicit repair; only these conflicting rows may remain REMOVED. Do not hand-edit `MEM_REGISTRY.md` to remove REMOVED rows; always use the script.
 
 1. **Run it** and read the printed summary (relocated keys, `removedFromLive`, `newlyArchived`, `alreadyInArchive`, `liveRemovedAfter`, size delta, verify checks).
 2. **On non-zero exit**, treat it as an integrity alarm: do NOT commit a partial state, and record the failure in the report. Investigate before retrying.
-3. **Log it** in the markdown report under `## MEM_REGISTRY Archival`: relocated keys, size delta, and the three verify checks (`round-trip`, `count`, `live REMOVED == 0`).
+3. **Log it** in the markdown report under `## MEM_REGISTRY Archival`: relocated keys, size delta, and the three verify checks (`round-trip`, `count`, `live REMOVED == retained conflicting rows`); report any duplicate diagnostic for explicit repair.
 4. **Report tracking:** add `memory/MEM_REGISTRY.md` and `memory/MEM_REGISTRY_ARCHIVE.md` to `filesChanged` when the script relocated any rows (skip both when it was a no-op).
 5. If `MEM_REGISTRY.md` is under its (scaled) threshold, or the script reports a no-op, skip logging this step.
 
-The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries archived to [MEM_REGISTRY_ARCHIVE.md](...) — Keys: ...` — so the audit trail stays navigable from the live registry. The key list in the stub also keeps the `mem-write.ts` next-key counter correct (it additionally scans the archive as defense-in-depth).
+The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries archived to [MEM_REGISTRY_ARCHIVE.md](...) — Keys: ...` — so the audit trail stays navigable from the live registry. The key list in the stub also keeps the `mem-write.ts` next-key counter correct for legacy IDs (it additionally scans the archive as defense-in-depth; dated IDs do not affect numeric allocation).
 
 #### 9e. MEM_REGISTRY.md Promoted-Row Trim
 
-`MEM_REGISTRY.md` keeps the full-length narrative for every row forever, even after that same content has been condensed into prose and merged into `memory/core/LEARNINGS.md` (or a semantic/episodic/procedural file) — the same fact then lives twice, once in each file, in full length. This is the actual current growth driver for registries whose bulk is live (non-REMOVED) rows. This step rewrites a row to a short pointer once its content has demonstrably been promoted, leaving Key/Status/Created untouched.
+`MEM_REGISTRY.md` keeps the full-length narrative for every row forever, even after that same content has been condensed into prose and merged into `memory/core/LEARNINGS.md` (or a semantic/episodic/procedural file) — the same fact then lives twice, once in each file, in full length. This is the actual current growth driver for registries whose bulk is live (non-REMOVED) rows. This step accepts both ID formats, including full dated IDs in `--only`, and rewrites a row to a short pointer once its content has demonstrably been promoted, leaving Key/Status/Created untouched; existing IDs are never renumbered.
 
 > **Detection is content-based, not status-based, and it only PROPOSES — it never auto-writes from a blind scan.** A row is a trim candidate only if some destination file literally cites its `MEM-N` key as the sole key on that line (works regardless of a brain's own lifecycle-status convention for "promoted" — never reads Status). Three adversarial review rounds with DevGuru (poller-brain#244) each surfaced a *new* false-positive shape for "a file cites this key, therefore it's safe to trim" — bookkeeping mentions in `episodic/`, "sibling family" listings in `core/`/`semantic/`, and citations that are a single key but an incidental "per this rule" justification inside an unrelated sentence. Citing a key is not proof of being that key's condensed content, and getting it wrong means irreversibly overwriting real narrative with an unrelated pointer — so this script never trusts a blind scan enough to write on its own. It has two modes:
 >
@@ -540,7 +542,7 @@ A row the script cannot find cited anywhere (or only ever cited ambiguously) is 
 
 #### 9f. MISTAKES.md Promoted-Entry Trim & Archival
 
-`memory/core/MISTAKES.md` is meant to be an active staging to-do list, but it has no reduction path — the existing Step 5 ("Promote Mistakes") is supposed to retire an entry once its lesson is promoted, but nothing in the actual write path (`mem-write.ts`, Step 1b.4) ever emits the `status:` field Step 5's trigger depends on, so it cannot fire on any brain (`teamvibeai/poller-brain#328`). This step rewrites an entry to a short pointer once its lesson has demonstrably been promoted elsewhere, same content-based detection as Step 5d/9e — never keyed off `status:`.
+`memory/core/MISTAKES.md` is meant to be an active staging to-do list, but it has no reduction path — the existing Step 5 ("Promote Mistakes") is supposed to retire an entry once its lesson is promoted, but nothing in the actual write path (`mem-write.ts`, Step 1b.4) ever emits the `status:` field Step 5's trigger depends on, so it cannot fire on any brain (`teamvibeai/poller-brain#328`). This step accepts both ID formats, including full dated IDs in `--only`, without renumbering existing IDs. It rewrites an entry to a short pointer once its lesson has demonstrably been promoted elsewhere, same content-based detection as Step 5d/9e — never keyed off `status:`.
 
 > **Two things happen on a trim, not one.** `MISTAKES.md` entries often carry incident-specific detail (exact date, exact failure scenario) that a condensed `LEARNINGS.md`/`semantic/`/`procedural/` restatement drops, so pointer-shrinking in place (Step 5d's approach) would silently lose that detail forever:
 > 1. The full original entry is archived **verbatim** to `memory/episodic/archive/mistakes-YYYY-Hn.md` (half-year bucket, same convention as Step 5c's learnings archive) — nothing is deleted, only relocated.

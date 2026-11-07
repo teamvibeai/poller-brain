@@ -20,6 +20,7 @@
  * There is no "--apply --all" mode on purpose.
  */
 
+import { MEM_ID_PATTERN, isMemId } from "./lib/mem-id.js";
 import * as fs from "fs";
 import * as path from "path";
 import { brainPath } from "./lib/brain-root.js";
@@ -47,7 +48,7 @@ const DEST_FILES = ["core/LEARNINGS.md"];
 const DEST_DIRS = ["semantic", "procedural"];
 
 const MISTAKES_CAP_BYTES = 5000;
-const HAS_MEM_KEY_RE = /\bMEM-\d+\b/;
+const HAS_MEM_KEY_RE = new RegExp(String.raw`\b${MEM_ID_PATTERN}\b`);
 // Below this, "the entries we found" cover too little of the file to trust
 // the parse — see mem-mistakes-trim-core.ts module doc for the real-data
 // case this guards against (0% of real entries recognized, sub-bullets
@@ -114,7 +115,14 @@ function parseOnlyFlag(): string[] | null {
     console.error("--only requires a comma-separated key list, e.g. --only MEM-1,MEM-5");
     process.exit(1);
   }
-  return raw.split(",").map((k) => k.trim()).filter(Boolean);
+  const keys = raw.split(",").map((k) => k.trim()).filter(Boolean);
+  for (const key of keys) {
+    if (!isMemId(key)) {
+      console.error(`--only has an invalid MEM id "${key}"`);
+      process.exit(1);
+    }
+  }
+  return keys;
 }
 
 function printProposals(candidates: MistakesTrimCandidate[], archiveLabel: string): void {
