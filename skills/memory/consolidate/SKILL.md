@@ -512,7 +512,7 @@ The script accepts both ID formats without renumbering. It is **idempotent** (a 
 4. **Report tracking:** add `memory/MEM_REGISTRY.md` and `memory/MEM_REGISTRY_ARCHIVE.md` to `filesChanged` when the script relocated any rows (skip both when it was a no-op).
 5. If `MEM_REGISTRY.md` is under its (scaled) threshold, or the script reports a no-op, skip logging this step.
 
-The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries archived to [MEM_REGISTRY_ARCHIVE.md](...) — Keys: ...` — so the audit trail stays navigable from the live registry. The key list in the stub also keeps the `mem-write.ts` next-key counter correct for legacy IDs (it additionally scans the archive as defense-in-depth; dated IDs do not affect numeric allocation).
+The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries archived to [MEM_REGISTRY_ARCHIVE.md](...) — Keys: ...` — so the audit trail stays navigable from the live registry. The key list keeps archived legacy IDs navigable; new IDs are dated and `mem-write.ts` allocates no counter.
 
 #### 9e. MEM_REGISTRY.md Promoted-Row Trim
 

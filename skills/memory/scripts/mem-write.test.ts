@@ -346,6 +346,54 @@ acceptance("CLI wiring", () => {
     check(ids.isMemId(allocator.stdout.trim()));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
-console.log(`PR2 acceptance: ${acceptancePassed} passed, ${acceptanceFailed} failed (a–h + CLI)`);
+// Reviewer content-boundary-cli.py, ported with checkbox and real-row pins.
+function retryAfterFollowingLine(following: string, status: 0 | 3): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-write-boundary-"));
+  const memory = path.join(root, "memory");
+  fs.mkdirSync(memory);
+  fs.writeFileSync(path.join(root, "CLAUDE.md"), "fixture");
+  const todayPath = path.join(memory, "TODAY.md");
+  const registryPath = path.join(memory, "MEM_REGISTRY.md");
+  const id = "MEM-2026-11-07-123456-11111111-2222-4333-8444-555555555555";
+  const text = "deploy checklist:";
+  const snapshot = () => [todayPath, registryPath].map((file) => fs.readFileSync(file));
+  try {
+    fs.writeFileSync(todayPath, `# 2026-11-07\n\n- [${id}] ${text}\n${following}\n`);
+    fs.writeFileSync(registryPath, header5);
+    const saved = snapshot();
+    const result = spawnSync(process.execPath, [...process.execArgv,
+      fileURLToPath(new URL("./mem-write.ts", import.meta.url)), "--id", id, text], {
+      env: { ...process.env, BRAIN_ROOT: root }, encoding: "utf8",
+    });
+    check.equal(result.status, status, `${following}: ${result.stderr}`);
+    if (status === 3) {
+      check.equal(result.stdout, "");
+      check.equal(result.stderr, `MEM id ${id} already used with different content\n`);
+      check.deepEqual(snapshot(), saved, "conflicting retry leaves both files byte-identical");
+    } else {
+      check.equal(result.stderr, "");
+      check(result.stdout.startsWith(`Written [${id}] to `));
+      check.deepEqual(snapshot(), [saved[0], Buffer.from(header5 +
+        `| ${id} | ACTIVE | 2026-11-07 | — | ${text} |\n`)], "only the missing registry row is appended");
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+acceptance("o CLI rejects a prefix before a bracketed content item", () => {
+  retryAfterFollowingLine("- [item] require SSO", 3);
+});
+acceptance("p CLI rejects a prefix before a checkbox continuation", () => {
+  retryAfterFollowingLine("- [ ] todo", 3);
+});
+acceptance("q CLI completes partial retries before writer-produced boundaries", () => {
+  for (const following of [
+    "- [12:34] next log entry",
+    "# 2026-11-08",
+    "- [MEM-12] legacy memo",
+    `- [${DATED_B}] dated memo`,
+    "- [REMEMBER] remembered memo",
+    "- 12:34 — memory consolidation started",
+  ]) retryAfterFollowingLine("\n" + following, 0);
+});
+console.log(`PR2 acceptance: ${acceptancePassed} passed, ${acceptanceFailed} failed (a–h + CLI + o–q)`);
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed || acceptanceFailed) process.exitCode = 1;

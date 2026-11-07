@@ -16,7 +16,7 @@
  *     (`- [MEM-N]` at line start), tolerating a trailing `:` for format drift.
  */
 
-import { LEGACY_MEM_ID_PATTERN, isMemId, parseMemId } from "./mem-id.js";
+import { LEGACY_MEM_ID_PATTERN, MEM_ID_PATTERN, isMemId, parseMemId } from "./mem-id.js";
 
 export function scanMaxKey(content: string, pattern: RegExp): number {
   const matches = content.matchAll(pattern);
@@ -54,6 +54,12 @@ function registryCells(line: string): string[] {
   return line.trim().split(/(?<!\\)\|/).slice(1, -1).map((cell) => cell.trim());
 }
 
+// log-write.ts timestamps, memo tags, consolidation markers, and rollover headers.
+// Arbitrary bracketed bullets/checkboxes remain part of the memo's content.
+const TODAY_ENTRY_BOUNDARY_PATTERN = new RegExp(
+  String.raw`^(?:- \[(?:\d{2}:\d{2}|${MEM_ID_PATTERN}|REMEMBER)\] |- \d{2}:\d{2} — |# \d{4}-\d{2}-\d{2}$)`
+);
+
 /** Decide both appends before either file is changed; never allocate an identity here. */
 export function planMemWrite(input: {
   today: string;
@@ -78,11 +84,11 @@ export function planMemWrite(input: {
     todayPresent = true;
     // Compare the full requested text, including continuation lines that may
     // themselves look like log rows. Additional prose is conflicting content;
-    // a subsequent log row/date section and rollover whitespace are separate.
+    // only a writer-produced row/date section after rollover whitespace is separate.
     const text = [lines[i].slice(tagAt + tag.length).replace(/^ /, ""),
       ...lines.slice(i + 1, i + contentLineCount)].join("\n");
     const following = lines.slice(i + contentLineCount).find((line) => line !== "");
-    if (text !== content || (following !== undefined && !/^(?:- \[|# \d{4}-\d{2}-\d{2})/.test(following))) conflict = true;
+    if (text !== content || (following !== undefined && !TODAY_ENTRY_BOUNDARY_PATTERN.test(following))) conflict = true;
   }
 
   const desc = content.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
