@@ -18,6 +18,7 @@ const WORKSPACE_ID = process.env.TEAMVIBE_WORKSPACE_ID
 const CHANNEL_ID = process.env.TEAMVIBE_CHANNEL_ID
 
 async function apiCall(method, path, body) {
+  if (!API_URL || !TOKEN) throw new Error('TeamVibe API not configured')
   const url = `${API_URL}${path}`
   const headers = {
     Authorization: `Bearer ${TOKEN}`,
@@ -125,6 +126,20 @@ function buildScheduleResponse(result, storedOrigin, wasExplicit) {
 
 const TOOLS = [
   {
+    name: 'search_history',
+    description: 'Search this poller’s local Slack conversation history. Defaults to this session’s channel; other channels require bot access and verified membership of the requesting human. Fresh or disabled indexes normally return no history.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', minLength: 1, maxLength: 500, description: 'Plain search words (OR matching, no query syntax)' },
+        channel: { type: 'string', pattern: '^[CDG][A-Z0-9]{5,}$', description: 'Slack conversation ID (default: session SLACK_CHANNEL)' },
+        limit: { type: 'integer', default: 20, description: 'Maximum results, clamped to 1–100' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'list_scheduled_messages',
     description: 'List scheduled messages for the current workspace/channel. Returns all schedules with their status, cron expression, and next run time. Run timestamps are ISO-UTC; the matching *Local fields render them in the schedule timezone with the weekday — read those before concluding a schedule misfired.',
     inputSchema: {
@@ -205,9 +220,26 @@ const TOOLS = [
 ]
 
 async function handleTool(name, args) {
-  if (!API_URL || !TOKEN) throw new Error('TeamVibe API not configured')
-
   switch (name) {
+    case 'search_history': {
+      const channel = args.channel || process.env.SLACK_CHANNEL
+      if (!channel) return { ok: false, error: 'no_channel' }
+      try {
+        // Lazy loading also keeps SQLite optional for the four API tools.
+        const { guardHistoryChannel, searchHistory } = await import('./lib/history-search.mjs')
+        const verdict = await guardHistoryChannel({
+          channel, sessionChannel: process.env.SLACK_CHANNEL,
+          token: process.env.SLACK_BOT_TOKEN, brainPath: process.env.POLLER_BRAIN_PATH,
+          threadId: process.env.INBOX_THREAD_ID,
+        })
+        if (!verdict.ok) return verdict
+        return searchHistory({
+          storagePath: process.env.PERSISTENT_STORAGE_PATH, channelId: process.env.TEAMVIBE_CHANNEL_ID,
+          slackChannel: channel, query: args.query, limit: args.limit,
+        })
+      } catch { return { ok: false, error: 'index_unavailable' } }
+    }
+
     case 'list_scheduled_messages': {
       const channelId = args.channelId || CHANNEL_ID
       const params = new URLSearchParams({ workspaceId: WORKSPACE_ID })
