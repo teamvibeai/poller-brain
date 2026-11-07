@@ -33,6 +33,8 @@
  * brain and an entry-format convention exist to calibrate against.
  */
 
+import { MEM_ID_PATTERN } from "./mem-id.js";
+
 export const BASE_FLOOR_BYTES = 5000;
 
 /** Non-table prose overhead (title, HOLD-rule sections, etc.) is brain-specific and NOT
@@ -61,7 +63,7 @@ export const LEARNINGS_PER_ENTRY_BYTES = 150;
 // Module-scoped with /g — safe with .match() (used below, resets per call) but stateful
 // (lastIndex) if ever called with .test() instead. Keep call sites on .match()/matchAll();
 // don't add a .test() use of this constant without dropping /g first.
-const REGISTRY_ROW_RE = /^\|\s*MEM-\d+\s*\|/gm;
+const REGISTRY_ROW_RE = new RegExp(String.raw`^\|\s*${MEM_ID_PATTERN}\s*\|`, "gm");
 
 /** Count live data rows in a MEM_REGISTRY.md-shaped table (any status — ACTIVE, OBSOLETE,
  * or a REMOVED row not yet relocated by Step 9d this cycle). Matches poller-brain#324's

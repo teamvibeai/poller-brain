@@ -49,9 +49,13 @@
  *   - size never grows
  *
  * Run: npx tsx skills/memory/scripts/mem-registry-trim.test.ts
- * Exits non-zero on the first failed assertion.
+ * Exits non-zero if any assertion fails.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   findTrimCandidates,
   applyTrimCandidates,
@@ -62,10 +66,12 @@ import {
 import { isReliableHook } from "./lib/citation-detect.js";
 
 let passed = 0;
+let failed = 0;
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
     console.error(`❌ FAIL: ${msg}`);
-    process.exit(1);
+    failed++;
+    return;
   }
   passed++;
 }
@@ -513,4 +519,42 @@ assert(
 );
 assert(isReliableHook("Tag PR author at review end"), "a real heading passes the guard");
 
-console.log(`✅ all ${passed} assertions passed`);
+// Full identities drive proposal, ordering, hook stripping and exact --only selection.
+const DATED_A = "MEM-2026-11-07-203000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const DATED_B = "MEM-2026-11-07-203001-aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
+
+const mixedRegistry = [DATED_B, "MEM-12", DATED_A].map((key) =>
+  `| ${key} | ACTIVE | 2026-11-07 | — | ${"Full narrative retained until explicitly approved. ".repeat(12)} |`).join("\n");
+const mixedDest = [{ file: "semantic/mixed.md", text: [
+  `### [${DATED_A}] Keep dated identities intact [${DATED_A}:obsolete]`,
+  `Full condensed narrative for the first memo. [${DATED_A}]`,
+  `### Preserve the second memo separately [${DATED_B}]`,
+  `Full condensed narrative for the second memo. [${DATED_B}]`,
+  "### Preserve the existing legacy memo [MEM-12]",
+  "Full condensed narrative for the legacy memo. [MEM-12]",
+].join("\n") }];
+const mixedFound = findTrimCandidates(mixedRegistry, mixedDest);
+assert(mixedFound.totalDataRows === 3, "registry parser counts mixed formats");
+assert(mixedFound.candidates.map((c) => c.key).join(",") === ["MEM-12", DATED_A, DATED_B].join(","), "dated candidates remain distinct and sorted");
+assert(mixedFound.candidates.find((c) => c.key === DATED_A)?.hook === "Keep dated identities intact", "dated leading/trailing lifecycle tags strip completely");
+const mixedApplied = applyTrimCandidates(mixedRegistry, mixedFound.candidates.filter((c) => c.key === DATED_B));
+assert(mixedApplied.stats.trimmedKeys.join(",") === DATED_B, "exact dated key selects one rewrite");
+assert(mixedApplied.registry.includes(`| ${DATED_A} | ACTIVE | 2026-11-07 | — | Full narrative`), "unselected same-year dated row stays untouched");
+const trimRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mem-id-registry-"));
+try {
+  fs.mkdirSync(path.join(trimRoot, "memory/semantic"), { recursive: true });
+  fs.writeFileSync(path.join(trimRoot, "CLAUDE.md"), "fixture");
+  fs.writeFileSync(path.join(trimRoot, "memory/MEM_REGISTRY.md"), mixedRegistry);
+  fs.writeFileSync(path.join(trimRoot, "memory/semantic/mixed.md"), mixedDest[0].text);
+  const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-registry-trim.ts"), "--apply", "--only", DATED_B],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: trimRoot } });
+  assert(cli.status === 0, `registry --only dated ID finds candidate: ${cli.stderr}`);
+  const written = fs.readFileSync(path.join(trimRoot, "memory/MEM_REGISTRY.md"), "utf8");
+  assert(written.includes(`| ${DATED_B} | ACTIVE | 2026-11-07 | semantic/mixed.md:`), "CLI rewrites dated selected row");
+  assert(written.includes(`| ${DATED_A} | ACTIVE | 2026-11-07 | — | Full narrative`), "CLI preserves unselected dated row");
+} finally {
+  fs.rmSync(trimRoot, { recursive: true, force: true });
+}
+
+console.log(`${passed} assertions passed, ${failed} failed`);
+if (failed) process.exitCode = 1;

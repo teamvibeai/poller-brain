@@ -28,6 +28,8 @@
  * against string fixtures without touching a real brain's memory/.
  */
 
+import { MEM_ID_PATTERN, compareMemIds } from "./mem-id.js";
+
 import {
   type DestinationFile,
   type Citation,
@@ -68,7 +70,7 @@ export interface UnreliableHook {
   hook: string;
 }
 
-const DATA_ROW_RE = /^\|\s*(MEM-\d+)\s*\|/;
+const DATA_ROW_RE = new RegExp(String.raw`^\|\s*(${MEM_ID_PATTERN})\s*\|`);
 
 /** Matches an already-trimmed pointer row's Description cell. */
 export const POINTER_DESC_RE = /^see .+\.md( —| -)/;
@@ -145,7 +147,7 @@ export function findTrimCandidates(
 
 function sortCandidates(candidates: TrimCandidate[]): TrimCandidate[] {
   return [...candidates].sort(
-    (a, b) => parseInt(a.key.slice(4), 10) - parseInt(b.key.slice(4), 10)
+    (a, b) => compareMemIds(a.key, b.key)
   );
 }
 

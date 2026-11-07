@@ -26,6 +26,8 @@
  * real brain's memory/.
  */
 
+import { MEM_ID_PATTERN, MEM_CITATION_PATTERN, compareMemIds } from "./mem-id.js";
+
 /** A destination file's content, path relative to `memory/` (e.g. "semantic/foo.md"). */
 export interface DestinationFile {
   file: string;
@@ -72,7 +74,7 @@ export interface CitationScan {
 }
 
 /** Matches a compact citation cluster: `MEM-93`, `MEM-93/94/122`, `MEM-1,2,3`. */
-const CLUSTER_CITE_RE = /\bMEM-(\d+(?:[/,]\d+)*)\b/g;
+const CLUSTER_CITE_RE = new RegExp(String.raw`\b${MEM_CITATION_PATTERN}\b`, "g");
 
 /** A markdown table row — starts (ignoring leading whitespace) with `|`. */
 const TABLE_ROW_RE = /^\s*\|/;
@@ -125,7 +127,7 @@ const WIKILINK_RE = /\[\[[^\]]+\]\]/;
 function residualProse(line: string): string {
   return line
     .replace(/\[\[[^\]]+\]\]/g, "")
-    .replace(/`?\[?MEM-\d+(?:[/,]\d+)*\]?`?/g, "")
+    .replace(new RegExp("`?\\[?" + MEM_CITATION_PATTERN + "(?::obsolete)?\\]?`?", "g"), "")
     .replace(/`[^`]*`/g, "")
     .replace(/[\s\-*#·—–|:;,.()§→>]+/g, " ")
     .trim();
@@ -143,7 +145,9 @@ export function distinctCitedKeysInLine(line: string): string[] {
   CLUSTER_CITE_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = CLUSTER_CITE_RE.exec(line))) {
-    for (const n of m[1].split(/[/,]/)) keys.add(`MEM-${n}`);
+    const [first, ...rest] = m[0].split(/[/,]/);
+    keys.add(first);
+    for (const n of rest) keys.add(`MEM-${n}`);
   }
   return [...keys];
 }
@@ -232,7 +236,7 @@ export function isReliableHook(hook: string): boolean {
   // regardless of whether the guard happens to catch it. Reject outright
   // rather than attempt a cosmetic repair that can only produce a worse
   // fragment.
-  if (/\bMEM-\d+\b/.test(s)) return false;
+  if (new RegExp(String.raw`\b${MEM_ID_PATTERN}\b`).test(s)) return false;
   return true;
 }
 
@@ -255,8 +259,9 @@ export function isReliableHook(hook: string): boolean {
  * anywhere is never "tag position", so it always falls through to
  * `isReliableHook`'s embedded-MEM- rejection instead.
  */
+const TAG_ID_SRC = `${MEM_CITATION_PATTERN}(?::obsolete)?`;
 const TAG_TOKEN_SRC =
-  "(?:`\\[MEM-\\d+(?:[/,]\\d+)*\\]`|\\[MEM-\\d+(?:[/,]\\d+)*\\]|`MEM-\\d+(?:[/,]\\d+)*`)";
+  "(?:`\\[" + TAG_ID_SRC + "\\]`|\\[" + TAG_ID_SRC + "\\]|`" + TAG_ID_SRC + "`)";
 /** A run of one or more tag tokens (multi-key clusters like `[MEM-213][MEM-214]`), anchored to the START of the string. */
 const LEADING_TAGS_RE = new RegExp(`^(?:${TAG_TOKEN_SRC}\\s*)+`);
 /** Same, anchored to the END of the string. */
@@ -352,5 +357,5 @@ export function extractHook(citation: Citation): string | null {
 }
 
 export function sortKeys(keys: Iterable<string>): string[] {
-  return [...keys].sort((a, b) => parseInt(a.slice(4), 10) - parseInt(b.slice(4), 10));
+  return [...keys].sort((a, b) => compareMemIds(a, b));
 }

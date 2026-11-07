@@ -199,14 +199,15 @@ Use kebab-case, short, no prefixes: `stepforge.md`, `vest-liquidation.md`. If ma
 
 Critical information gets a unique, tracked key — like Jira tickets for memory. Keys survive consolidation, are traceable via grep and git history, and have an explicit lifecycle that prevents silent data loss.
 
-**IMPORTANT: Keys are ALWAYS sequential numbers, never words.** The key format is `MEM-` followed by a number: `MEM-1`, `MEM-2`, `MEM-3`, etc. No zero-padding needed.
+**Readers accept both `MEM-<n>` and `MEM-YYYY-MM-DD-HHMMSS-<uuid>`** (UTC timestamp, full UUID in 8-4-4-4-12 hex form, either hex case). Validation is syntactic only, using `scripts/lib/mem-id.ts` (`isMemId`). Identity is the exact string as written; existing IDs are never renumbered. The writer still allocates the next sequential number: `MEM-1`, `MEM-2`, `MEM-3`, etc. No zero-padding needed.
 
 ```
 ✅ Correct:  [MEM-1] deploy: staging vyžaduje SSO
 ✅ Correct:  [MEM-42] komunikace: mužský rod
-❌ WRONG:   [MEM-feedback] ...     ← NOT a number!
-❌ WRONG:   [MEM-TAG] ...          ← NOT a number!
-❌ WRONG:   [MEM-deploy] ...       ← NOT a number!
+✅ Correct:  [MEM-2026-11-07-203000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee] dated memo
+❌ WRONG:   [MEM-feedback] ...     ← NOT a valid ID!
+❌ WRONG:   [MEM-TAG] ...          ← NOT a valid ID!
+❌ WRONG:   [MEM-deploy] ...       ← NOT a valid ID!
 ```
 
 ### When to create a `[MEM-NNN]` entry
@@ -250,7 +251,7 @@ npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "komunikace: mužs
 ```
 
 The script:
-1. Reads `memory/MEM_REGISTRY.md`, finds the highest existing number
+1. Reads `memory/MEM_REGISTRY.md`, finds the highest existing legacy number
 2. Increments to get the next key
 3. Appends `- [MEM-N] content` to `memory/TODAY.md`
 4. Appends a registry row to `memory/MEM_REGISTRY.md`
@@ -286,7 +287,7 @@ This file is the **source of truth** for all tracked memory keys. It lives at `m
 ```
 
 **Columns:**
-- **Key** — unique identifier, sequential per brain (`MEM-1`, `MEM-2`, ...)
+- **Key** — exact identifier in either accepted format; new writes still use the next sequential number (`MEM-1`, `MEM-2`, ...)
 - **Status** — `ACTIVE`, `OBSOLETE`, or `REMOVED`
 - **Created** — date the entry was first written
 - **Obsoleted** — date the entry was marked obsolete (or `—` if active)
@@ -299,14 +300,14 @@ ACTIVE → OBSOLETE → REMOVED
 ```
 
 1. **ACTIVE** — the memory is current and must be preserved during consolidation. Tag in content files: `[MEM-3]`
-2. **OBSOLETE** — the memory is outdated or superseded. Marked during consolidation with reason + date. Tag in content files changes to `[MEM-3:obsolete]`. The entry stays in its promoted location for one consolidation cycle.
+2. **OBSOLETE** — the memory is outdated or superseded. Marked during consolidation with reason + date. Tag in content files changes to `[MEM-3:obsolete]`; the same `:obsolete` suffix applies to dated IDs. The entry stays in its promoted location for one consolidation cycle.
 3. **REMOVED** — the entry is deleted from content files on the next consolidation after being marked OBSOLETE. Registry row remains (with REMOVED status) for audit trail — never delete registry rows.
 
 **Rules:**
 - A `[MEM-NNN]` entry must **never** be deleted from content files without first going through `OBSOLETE` status
 - Keys persist through promotion: if `[MEM-3]` starts in TODAY.md and gets promoted to `LEARNINGS.md`, the key `[MEM-3]` stays in the promoted entry
 - Consolidation must verify all ACTIVE keys from the registry exist somewhere in `memory/` — a missing ACTIVE key is an integrity violation
-- Sequential gaps in key numbers are acceptable (from REMOVED entries) but must match the registry — an unexpected gap signals data loss
+- Sequence/gap checks apply to legacy `MEM-<n>` IDs only. Sequential gaps in key numbers are acceptable (from REMOVED entries) but must match the registry — an unexpected gap signals data loss
 
 ### Backward Compatibility
 

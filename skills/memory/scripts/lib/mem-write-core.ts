@@ -10,25 +10,29 @@
  *
  * Scan rules (do not loosen without a fixture proving the old bug stays fixed):
  *   - MEM_REGISTRY.md / MEM_REGISTRY_ARCHIVE.md: pipe-table rows have no
- *     prose-drift risk — full `MEM-(\d+)` scan is safe and is defense-in-depth.
+ *     prose-drift risk — legacy-only scan ignores dated IDs and is defense-in-depth.
  *   - TODAY.md mixes canonical write rows with free-text prose that may
  *     mention a MEM key in passing. Restrict to anchored canonical rows
  *     (`- [MEM-N]` at line start), tolerating a trailing `:` for format drift.
  */
 
+import { LEGACY_MEM_ID_PATTERN, parseMemId } from "./mem-id.js";
+
 export function scanMaxKey(content: string, pattern: RegExp): number {
   const matches = content.matchAll(pattern);
   let max = 0;
   for (const m of matches) {
-    const n = parseInt(m[1], 10);
+    const id = parseMemId(m[1]);
+    if (id?.kind !== "legacy") continue;
+    const n = id.n;
     if (n > max) max = n;
   }
   return max;
 }
 
-export const REGISTRY_KEY_PATTERN = /MEM-(\d+)/g;
-export const ARCHIVE_KEY_PATTERN = /MEM-(\d+)/g;
-export const TODAY_CANONICAL_KEY_PATTERN = /^- \[MEM-(\d+)\][\s:\]]/gm;
+export const REGISTRY_KEY_PATTERN = new RegExp(`\\b(${LEGACY_MEM_ID_PATTERN})\\b`, "g");
+export const ARCHIVE_KEY_PATTERN = new RegExp(`\\b(${LEGACY_MEM_ID_PATTERN})\\b`, "g");
+export const TODAY_CANONICAL_KEY_PATTERN = new RegExp(String.raw`^- \[(${LEGACY_MEM_ID_PATTERN})\][\s:\]]`, "gm");
 
 export function getNextKeyFromContents(
   registryContent: string,

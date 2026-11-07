@@ -4,7 +4,7 @@
  * (poller-brain#324, poller-brain#300). No fs — pure string fixtures.
  *
  * Run: npx tsx skills/memory/scripts/mem-scaled-threshold.test.ts
- * Exits non-zero on the first failed assertion.
+ * Exits non-zero if any assertion fails.
  */
 
 import {
@@ -20,10 +20,12 @@ import {
 import { countLearningsEntries } from "./lib/mem-learnings-trim-core.js";
 
 let passed = 0;
+let failed = 0;
 function assert(cond: boolean, msg: string): void {
   if (!cond) {
     console.error(`❌ FAIL: ${msg}`);
-    process.exit(1);
+    failed++;
+    return;
   }
   passed++;
 }
@@ -99,4 +101,14 @@ assert(learningsEval.entryCount === 2, "learnings evaluate() picks up entry coun
 const devguruSampleThreshold = scaledThreshold(84, LEARNINGS_OVERHEAD_BYTES, LEARNINGS_PER_ENTRY_BYTES);
 assert(devguruSampleThreshold < 24110, "DevGuru's 84-entry/24110B sample must stay OVER cap, not flip to OK");
 
-console.log(`✅ all ${passed} assertions passed`);
+// Both forms are complete registry identities; malformed dated prefixes are not rows.
+const DATED_A = "MEM-2026-11-07-203000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const DATED_B = "MEM-2026-11-07-203001-aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
+
+const mixedRows = REGISTRY + `| ${DATED_A} | ACTIVE | x | — | a |\n| ${DATED_B} | REMOVED | x | — | b |\n`;
+assert(countRegistryRows(mixedRows) === 5, "counts legacy and both distinct dated rows");
+assert(countRegistryRows(`| ${DATED_A.toUpperCase()} | ACTIVE | x |\n`) === 1, "uppercase UUID row counts");
+assert(countRegistryRows("| MEM-2026-11-07-broken | ACTIVE | x |\n") === 0, "malformed dated ID is not a numeric row");
+
+console.log(`${passed} assertions passed, ${failed} failed`);
+if (failed) process.exitCode = 1;

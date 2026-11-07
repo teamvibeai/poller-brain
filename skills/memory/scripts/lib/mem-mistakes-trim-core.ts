@@ -75,6 +75,8 @@
  * from a real clock and passes it in.
  */
 
+import { MEM_ID_PATTERN, compareMemIds, isMemId } from "./mem-id.js";
+
 import {
   type DestinationFile,
   firstCitations,
@@ -109,10 +111,10 @@ const HEADING_START_RE = /^(#{2,3})\s+/;
 const BULLET_START_RE = /^-\s+/;
 
 /** Matches an already-trimmed pointer entry — same shape as Step 5d's LEARNINGS.md pointer. */
-const POINTER_BULLET_RE = /^-\s*\[MEM-\d+\]\s*→\s*see\s+\S/;
-const POINTER_HEADING_RE = /^#{2,3}\s*\[MEM-\d+\]\s*→\s*see\s+\S/;
+const POINTER_BULLET_RE = new RegExp(String.raw`^-\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
+const POINTER_HEADING_RE = new RegExp(String.raw`^#{2,3}\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
 /** Extracts the key from a matched pointer line (either marker, either heading level). */
-const POINTER_KEY_RE = /^(?:-|#{2,3})\s*\[(MEM-\d+)\]\s*→\s*see\s/;
+const POINTER_KEY_RE = new RegExp(String.raw`^(?:-|#{2,3})\s*\[(${MEM_ID_PATTERN})(?::obsolete)?\]\s*→\s*see\s`);
 
 function entryStartOf(line: string): { format: EntryFormat; marker: string } | null {
   const heading = HEADING_START_RE.exec(line);
@@ -180,7 +182,7 @@ function entryCitedKeys(lines: string[], entry: Entry): string[] {
   return [...keys];
 }
 
-const SOURCE_RE = /\(Source:\s*([^)]*?)(?:,\s*\[MEM-\d+\])?\)/g;
+const SOURCE_RE = new RegExp(String.raw`\(Source:\s*([^)]*?)(?:,\s*\[${MEM_ID_PATTERN}(?::obsolete)?\])?\)`, "g");
 
 function extractSource(text: string): string | null {
   let last: RegExpExecArray | null = null;
@@ -315,7 +317,7 @@ export function findMistakesTrimCandidates(
 }
 
 function sortCandidates(candidates: MistakesTrimCandidate[]): MistakesTrimCandidate[] {
-  return [...candidates].sort((a, b) => parseInt(a.key.slice(4), 10) - parseInt(b.key.slice(4), 10));
+  return [...candidates].sort((a, b) => compareMemIds(a.key, b.key));
 }
 
 export interface MistakesTrimStats {
@@ -364,6 +366,7 @@ verbatim for audit/history; the live file keeps only a pointer.
 
 /** Matches an archived entry's provenance header line, used to detect a duplicate archival on re-run. */
 function archiveHasKey(archive: string, key: string): boolean {
+  if (!isMemId(key)) return false;
   const re = new RegExp(`^>\\s*Archived\\s.*\\[${key}\\]`, "m");
   return re.test(archive);
 }
