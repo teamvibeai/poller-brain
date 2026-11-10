@@ -29,6 +29,7 @@ const eq = (n, got, want) => ok(n, got === want, `expected [${want}], got [${got
 const has = (n, hay, needle) => ok(n, String(hay).includes(needle), `[${needle}] not in: ${String(hay).slice(0, 200)}`)
 
 const WORK = mkdtempSync(join(tmpdir(), 'bgtask-'))
+process.once('exit', () => rmSync(WORK, { recursive: true, force: true }))
 const ROOT = join(WORK, 'tasks')
 // Task dirs are namespaced per channel under the root (shared poller storage).
 const ROOT_NS = join(ROOT, '01TESTCHANNEL')
@@ -36,6 +37,7 @@ const ROOT_NS = join(ROOT, '01TESTCHANNEL')
 const THREAD_ID = 'B0BOT:C0TEST:100.001'
 const ENV = {
   ...process.env,
+  POLLER_BRAIN_PATH: '',
   BG_TASK_ROOT: ROOT,
   BG_TASK_DRY: '1',
   TEAMVIBE_CHANNEL_ID: '01TESTCHANNEL',
@@ -359,7 +361,7 @@ console.log('buildCheckpointPrompt — interim, not terminal')
 
 console.log('noteOf')
 {
-  const dir = mkdtempSync(join(tmpdir(), 'bgt-note-'))
+  const dir = mkdtempSync(join(WORK, 'bgt-note-'))
   eq('missing note file is empty, not an error', noteOf(dir), '')
   writeFileSync(join(dir, 'note'), 'why it ran\n')
   eq('note is read and trimmed', noteOf(dir), 'why it ran')
@@ -396,21 +398,20 @@ console.log('countRunningSiblings')
 
 console.log('parseRunnerArgs')
 {
-  const r = parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', 'auth-url', '1', '45', '1', '--', 'echo', '--weird'])
-  eq('command after -- survives, including its own flags', JSON.stringify(r.cmd), JSON.stringify(['echo', '--weird']))
-  eq('threadId carried through', r.threadId, THREAD_ID)
-  eq('notifyOn carried through', r.notifyOn, 'auth-url')
-  eq('quietCheckpoints carried through', r.quietCheckpoints, '1')
-  eq('checkpointInterval carried through', r.checkpointInterval, '45')
-  eq('eagerCheckpoints carried through', r.eagerCheckpoints, '1')
-  eq('empty notifyOn stays empty', parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '0', '', '0', '--', 'true']).notifyOn, '')
-  eq('empty quietCheckpoints stays empty',
-    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '', '--', 'true']).quietCheckpoints, '')
-  eq('empty checkpointInterval stays empty',
-    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '', '--', 'true']).checkpointInterval, '')
-  eq('empty eagerCheckpoints stays empty',
-    parseRunnerArgs(['/d', '60', 'n', THREAD_ID, '0', '', '', '', '', '--', 'true']).eagerCheckpoints, '')
-  eq('ttl coerced', r.ttl, 60)
+  const specPath = join(WORK, 'unit-spec.json')
+  const spec = {
+    dir: '/d', ttl: 60, name: 'n', threadId: THREAD_ID, dryRun: false,
+    notifyOn: 'auth-url', quietCheckpoints: true, checkpointInterval: 45,
+    eagerCheckpoints: false, cmd: ['echo', '--weird'], cwd: WORK,
+    envNames: ['TEST_TOKEN'], stdinFile: '', note: 'intent',
+  }
+  writeFileSync(specPath, JSON.stringify(spec), { mode: 0o600 })
+  const r = parseRunnerArgs([specPath])
+  eq('private spec preserves all task fields', JSON.stringify(r), JSON.stringify(spec))
+  eq('command flags survive', JSON.stringify(r.cmd), JSON.stringify(['echo', '--weird']))
+  let refused = false
+  try { parseRunnerArgs([specPath, '--', 'echo']) } catch { refused = true }
+  ok('runner refuses extra argv', refused)
 }
 
 console.log('deltaOf — new-since-last-checkpoint, not the whole tail')
@@ -462,7 +463,7 @@ console.log('tailOf')
 
 console.log('writeInboxMessage — dry-run diverts, live writes the real inbox envelope')
 {
-  const dir = mkdtempSync(join(tmpdir(), 'bgt-inbox-'))
+  const dir = mkdtempSync(join(WORK, 'bgt-inbox-'))
   const dryResult = writeInboxMessage(THREAD_ID, 'hello dry', dir, '1')
   eq('dry-run reports ok + dryRun', JSON.stringify(dryResult), JSON.stringify({ ok: true, dryRun: true }))
   ok('nothing written to a real .inbox dir under dry-run', !existsSync(join(dir, '.inbox')))
@@ -471,8 +472,10 @@ console.log('writeInboxMessage — dry-run diverts, live writes the real inbox e
   eq('the envelope shape matches a real inbound message', dropped.type, 'message')
   eq('source is slack, same as a real message', dropped.source, 'slack')
 
-  const liveCwd = mkdtempSync(join(tmpdir(), 'bgt-cwd-'))
+  const liveCwd = mkdtempSync(join(WORK, 'bgt-cwd-'))
   const origCwd = process.cwd()
+  const origBrainPath = process.env.POLLER_BRAIN_PATH
+  delete process.env.POLLER_BRAIN_PATH
   process.chdir(liveCwd)
   try {
     const liveResult = writeInboxMessage(THREAD_ID, 'hello live', dir, '0')
@@ -484,6 +487,7 @@ console.log('writeInboxMessage — dry-run diverts, live writes the real inbox e
     eq('the live drop carries the text', live.text, 'hello live')
   } finally {
     process.chdir(origCwd)
+    if (origBrainPath !== undefined) process.env.POLLER_BRAIN_PATH = origBrainPath
   }
   rmSync(dir, { recursive: true, force: true })
   rmSync(liveCwd, { recursive: true, force: true })
@@ -491,9 +495,9 @@ console.log('writeInboxMessage — dry-run diverts, live writes the real inbox e
 
 console.log('writeInboxMessage — POLLER_BRAIN_PATH overrides cwd for the live write (teamvibe.ai#265)')
 {
-  const dir = mkdtempSync(join(tmpdir(), 'bgt-inbox-'))
-  const brainDir = mkdtempSync(join(tmpdir(), 'bgt-brainpath-'))
-  const worktreeCwd = mkdtempSync(join(tmpdir(), 'bgt-worktree-'))
+  const dir = mkdtempSync(join(WORK, 'bgt-inbox-'))
+  const brainDir = mkdtempSync(join(WORK, 'bgt-brainpath-'))
+  const worktreeCwd = mkdtempSync(join(WORK, 'bgt-worktree-'))
   const origCwd = process.cwd()
   const origBrainPath = process.env.POLLER_BRAIN_PATH
   process.chdir(worktreeCwd)
@@ -570,11 +574,13 @@ console.log('finish path')
 
     // The load-bearing property: the runner is in its own session, which is why the
     // spawner killing the session's process group at teardown cannot reach it.
-    const runnerSid = /^sid=(\d+)$/m.exec(status)?.[1]
-    const mySid = readFileSync('/proc/self/stat', 'utf8')
-    const myFields = mySid.slice(mySid.lastIndexOf(')') + 2).split(' ')
-    ok('runner runs in its own session', !!runnerSid && runnerSid !== myFields[3],
-      `runner sid=${runnerSid} launcher sid=${myFields[3]}`)
+    if (process.platform === 'linux') {
+      const runnerSid = /^sid=(\d+)$/m.exec(status)?.[1]
+      const mySid = readFileSync('/proc/self/stat', 'utf8')
+      const myFields = mySid.slice(mySid.lastIndexOf(')') + 2).split(' ')
+      ok('runner runs in its own session', !!runnerSid && runnerSid !== myFields[3],
+        `runner sid=${runnerSid} launcher sid=${myFields[3]}`)
+    }
 
     const drops = dropTexts(dir)
     eq('exactly one drop for a short, quiet command (terminal only)', drops.length, 1)
@@ -737,14 +743,13 @@ export function spawnBackgroundTask(command, args, options = {}) {
     eq(`${label}: token policy applies before runner preloads`, runners[0]?.tokenPresent, !adapter)
     eq(`${label}: credential environment preserved`, JSON.stringify(runners[0]?.credentialEnv), JSON.stringify(credentials))
     eq(`${label}: identical runner args`, JSON.stringify(spawned[0]?.args), JSON.stringify([
-      process.execPath, ...flags, join(HERE, 'bg-task-runner.mjs'), dir, '60', 'adapter-probe', THREAD_ID,
-      '1', 'ADAPTER-ONE', '0', '', '1', '--', ...cmd,
+      process.execPath, ...flags, join(HERE, 'bg-task-runner.mjs'), join(dir, 'spec.json'),
     ]))
     eq(`${label}: detached spawn`, spawned[0]?.detached, true)
     eq(`${label}: identical stdio`, JSON.stringify(spawned[0]?.stdio), JSON.stringify(['ignore', 'fd', 'fd']))
     eq(`${label}: stdout and stderr share the runner output file`, spawned[0]?.sameOutputFd, true)
     const kv = parseStatus(status || '')
-    eq(`${label}: runner owns its session`, kv.sid, kv.pid)
+    if (process.platform === 'linux') eq(`${label}: runner owns its session`, kv.sid, kv.pid)
     eq(`${label}: command record preserved`, readFileSync(join(dir, 'cmd'), 'utf8'), cmd.join('\n') + '\n')
     eq(`${label}: note preserved`, readFileSync(join(dir, 'note'), 'utf8'), 'adapter fallback\n')
     eq(`${label}: exactly one final wake`, drops.filter(t => t.includes('has finished with exit code 0')).length, 1)
@@ -796,7 +801,7 @@ console.log('--note survives the detach and reaches every drop')
 
 console.log('live (non-dry) terminal drop lands in the real .inbox/')
 {
-  const liveCwd = mkdtempSync(join(tmpdir(), 'bgt-live-'))
+  const liveCwd = mkdtempSync(join(WORK, 'bgt-live-'))
   const r = launch(['--name', 'unit-live', '--ttl', '60', '--', 'echo', 'LIVE-CANARY'], { BG_TASK_DRY: '0' }, liveCwd)
   eq('launch exits 0', r.code, 0)
   const dir = latestDir()

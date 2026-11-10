@@ -2,7 +2,7 @@
 // bg-task-runner.mjs — the detached half of bg-task. Never invoke directly; bg-task.mjs
 // spawns it with `detached: true` so it outlives the agent session.
 //
-//   bg-task-runner.mjs <dir> <ttl> <name> <threadId> <dry> <notifyOn> <quietCheckpoints> <checkpointInterval> <eagerCheckpoints> -- <command...>
+//   bg-task-runner.mjs <private-spec-path>
 //
 // Contract: run the command with a TTL, coalescing its output into interim checkpoints
 // dropped into the launching thread's .inbox/, then drop exactly one terminal message when
@@ -11,11 +11,12 @@
 // for hours waiting on something external (an approval, an auth confirmation, a remote job).
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 // One definition of "is this task still alive", shared with --list. Two would drift, and
 // they answer the same question for the same files.
-import { lifecycleOf, parseStatus } from './bg-task.mjs'
+import { lifecycleOf, parseStatus, secretArgEnvName } from './bg-task.mjs'
+export { secretArgEnvName }
 
 const TAIL_BYTES = 1500
 const NOTE_CHARS = 1000 // see noteOf: the note is the only agent-authored field in the payload
@@ -59,20 +60,13 @@ export function flushIntervalSec(ttl) {
 // Everything argv- and filesystem-related lives inside main() so this file can be
 // imported by the tests without side effects.
 export function parseRunnerArgs(argv) {
-  const [dir, ttlArg, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, eagerCheckpoints] =
-    argv.slice(0, 9)
-  const sep = argv.indexOf('--', 9)
-  return {
-    dir,
-    ttl: Number(ttlArg),
-    name,
-    threadId: threadId || '',
-    dry,
-    notifyOn: notifyOn || '',
-    quietCheckpoints: quietCheckpoints || '',
-    checkpointInterval: checkpointInterval || '',
-    eagerCheckpoints: eagerCheckpoints || '',
-    cmd: sep === -1 ? [] : argv.slice(sep + 1),
+  if (argv.length !== 1) throw new Error('expected only a task specification path')
+  try {
+    return JSON.parse(readFileSync(argv[0], 'utf8'))
+  } finally {
+    // Clean up even if reading or parsing fails, before any workload can start.
+    try { unlinkSync(argv[0]) }
+    catch (e) { if (e.code !== 'ENOENT') throw e }
   }
 }
 
@@ -308,14 +302,15 @@ export function writeInboxMessage(threadId, text, dir, dry) {
 }
 
 async function main() {
-  const { dir, ttl, name, threadId, dry, notifyOn, quietCheckpoints, checkpointInterval, eagerCheckpoints, cmd } =
+  const { dir, ttl, name, threadId, dryRun, notifyOn, quietCheckpoints, checkpointInterval, eagerCheckpoints, cmd, cwd, stdinFile, note: taskNote } =
     parseRunnerArgs(process.argv.slice(2))
+  const dry = dryRun ? '1' : '0'
   const statusPath = join(dir, 'status')
   const logPath = join(dir, 'output.log')
   const note = (lines) => appendFileSync(statusPath, lines.map((l) => `${l}\n`).join(''))
   const notifyRe = notifyOn ? new RegExp(notifyOn) : null
-  const quietCheckpointsOn = quietCheckpoints === '1'
-  const eagerCheckpointsOn = eagerCheckpoints === '1'
+  const quietCheckpointsOn = quietCheckpoints
+  const eagerCheckpointsOn = eagerCheckpoints
   // --checkpoint-interval (poller-brain#403, round 2): 0/'' means "not set". Validated as
   // positive and <= ttl already in bg-task.mjs's arg parsing — nothing left to reject here.
   const checkpointIntervalSec = Number(checkpointInterval) || 0
@@ -328,10 +323,72 @@ async function main() {
   if (checkpointIntervalMs > 0) note([`checkpoint_interval=${checkpointIntervalSec}s`])
   if (eagerCheckpointsOn) note(['eager_checkpoints=1'])
 
+  const finish = ({ rc, timedOut = false, killedBy, signalSent, childRc, command = cmd }) => {
+    const state = timedOut ? 'timed-out' : 'finished'
+    note([
+      `state=${state}`,
+      ...(rc === null || rc === undefined ? [] : [`rc=${rc}`]),
+      ...(signalSent ? [`signal_sent=${signalSent}`] : []),
+      ...(killedBy ? [`killed_by=${killedBy}`] : []),
+      ...(childRc === null || childRc === undefined ? [] : [`child_rc=${childRc}`]),
+      `ended=${stamp()}`,
+    ])
+    const finalPrompt = buildPrompt({
+      name, state, rc, ttl, dir, tail: tailOf(logPath), cmd: command,
+      elapsedSec: Math.round((Date.now() - startedAt) / 1000),
+      siblings: countRunningSiblings(dirname(dir), dir), note: noteOf(dir),
+      fence: `bg-task-output-${randomBytes(4).toString('hex')}`,
+      killedBy, signalSent, childRc,
+    })
+    const result = writeInboxMessage(threadId, finalPrompt, dir, dry)
+    note([
+      `terminal_drop=${result.ok ? (result.dryRun ? 'diverted' : 'ok') : `FAILED:${result.error}`}`,
+      `dropped_at=${stamp()}`,
+    ])
+  }
+
+  const secretName = secretArgEnvName(cmd)
+  if (secretName) {
+    const message = `bg-task: refusing command argv containing secret environment variable ${secretName}; use env or --stdin-file\n`
+    appendFileSync(logPath, message)
+    process.stderr.write(message)
+    // The normal terminal prompt includes the command. Never echo rejected argv.
+    writeFileSync(join(dir, 'cmd'), '(refused: secret in argv)\n', { mode: 0o600 })
+    finish({ rc: 2, command: ['(refused: secret in argv)'] })
+    process.exitCode = 2
+    return
+  }
+  writeFileSync(join(dir, 'cmd'), cmd.join('\n') + '\n', { mode: 0o600 })
+  if (taskNote) writeFileSync(join(dir, 'note'), taskNote.endsWith('\n') ? taskNote : taskNote + '\n', { mode: 0o600 })
+
+  let input
+  if (stdinFile) {
+    try { input = readFileSync(stdinFile) }
+    catch {
+      appendFileSync(logPath, 'bg-task: cannot read --stdin-file\n')
+      finish({ rc: 2 })
+      process.exitCode = 2
+      return
+    }
+    try { unlinkSync(stdinFile) }
+    catch {
+      appendFileSync(logPath, 'bg-task: cannot delete --stdin-file\n')
+      finish({ rc: 2 })
+      process.exitCode = 2
+      return
+    }
+  }
   const out = openSync(logPath, 'a')
   // detached so the command gets its own process group: on TTL we can then kill the
   // whole tree, not just the direct child (GNU timeout kills only the child).
-  const child = spawn(cmd[0], cmd.slice(1), { stdio: ['ignore', out, out], detached: true })
+  const child = spawn(cmd[0], cmd.slice(1), { cwd, stdio: [stdinFile ? 'pipe' : 'ignore', out, out], detached: true })
+  closeSync(out)
+  if (stdinFile) {
+    // The buffer survives removal and session teardown. EPIPE is normal if the
+    // consumer exits without reading all input; its exit status remains authoritative.
+    child.stdin.on('error', () => {})
+    child.stdin.end(input)
+  }
 
   // --- interim checkpoints: a real debounce (flush after QUIET_MS of silence) with a
   // ceiling for output that never goes quiet (flush at least every flushIntervalSec(ttl)),
@@ -457,43 +514,7 @@ async function main() {
   clearTimeout(killTimer)
   clearInterval(checkTimer)
 
-  const state = timedOut ? 'timed-out' : 'finished'
-  note([
-    `state=${state}`,
-    ...(rc === null || rc === undefined ? [] : [`rc=${rc}`]),
-    ...(signalSent ? [`signal_sent=${signalSent}`] : []),
-    ...(killedBy ? [`killed_by=${killedBy}`] : []),
-    ...(childRc === null || childRc === undefined ? [] : [`child_rc=${childRc}`]),
-    `ended=${stamp()}`,
-  ])
-
-  // Terminal drop uses the SAME mechanism as a checkpoint (teamvibe.ai#250 made this true):
-  // just the last one, carrying the verdict instead of an interim chunk. No separate
-  // scheduled-message path, no artificial wake delay — a drop either lands in the session
-  // that is still running (picked up for free by its own inbox check) or wakes exactly one
-  // new idle session via the poller's inbox watcher.
-  const finalPrompt = buildPrompt({
-    name,
-    state,
-    rc,
-    ttl,
-    dir,
-    tail: tailOf(logPath),
-    cmd,
-    elapsedSec: Math.round((Date.now() - startedAt) / 1000),
-    siblings: countRunningSiblings(dirname(dir), dir),
-    note: noteOf(dir),
-    fence: `bg-task-output-${randomBytes(4).toString('hex')}`,
-    killedBy,
-    signalSent,
-    childRc,
-  })
-
-  const result = writeInboxMessage(threadId, finalPrompt, dir, dry)
-  note([
-    `terminal_drop=${result.ok ? (result.dryRun ? 'diverted' : 'ok') : `FAILED:${result.error}`}`,
-    `dropped_at=${stamp()}`,
-  ])
+  finish({ rc, timedOut, killedBy, signalSent, childRc })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -501,7 +522,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // A crash here means the command may have run but no one will be told. Record it
     // where the next reader looks, then fail loudly.
     try {
-      const { dir } = parseRunnerArgs(process.argv.slice(2))
+      const dir = dirname(process.argv[2])
       appendFileSync(join(dir, 'status'), `runner_crashed=${stamp()}\nerror=${e.message}\n`)
     } catch { /* nothing left to do */ }
     console.error(`bg-task-runner crashed: ${e.stack || e.message}`)

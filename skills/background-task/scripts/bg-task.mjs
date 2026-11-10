@@ -11,8 +11,8 @@
 // Reliability bar: BEST-EFFORT (see SKILL.md). Survives the launching session. Does NOT
 // survive a poller restart. Never present it to a user as a durability guarantee.
 import { ChildProcess, spawn } from 'node:child_process'
-import { mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { closeSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -23,7 +23,7 @@ const TTL_MAX = 21600
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--note TEXT] [--notify-on REGEX] ' +
-  '[--quiet-checkpoints | --checkpoint-interval SECONDS | --eager-checkpoints] [--dry-run] -- <command...>\n' +
+  '[--quiet-checkpoints | --checkpoint-interval SECONDS | --eager-checkpoints] [--stdin-file PATH] [--dry-run] -- <command...>\n' +
   '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
@@ -46,6 +46,7 @@ export function parseArgs(argv, env = {}) {
     dryRun: env.BG_TASK_DRY === '1',
     notifyOn: '',
     note: '',
+    stdinFile: '',
     // Suppresses the quiet-period and ceiling checkpoint triggers (see bg-task-runner.mjs)
     // — opt-in, because losing interim visibility is a real cost, right for a known
     // high-frequency-output task where only completion (or a --notify-on match) matters.
@@ -80,12 +81,15 @@ export function parseArgs(argv, env = {}) {
     const a = argv[i]
     if (a === '--') { i++; break }
     if (a === '--list') return { list: true }
-    const needsValue = ['--name', '--ttl', '--note', '--notify-on', '--checkpoint-interval'].includes(a)
+    const needsValue = ['--name', '--ttl', '--note', '--notify-on', '--checkpoint-interval', '--stdin-file'].includes(a)
     if (needsValue && i + 1 >= argv.length) return { error: `${a} needs a value` }
     switch (a) {
       case '--name': opts.name = argv[++i]; break
       case '--ttl': opts.ttl = argv[++i]; break
       case '--note': opts.note = argv[++i]; break
+      case '--stdin-file':
+        if (!argv[i + 1]) return { error: '--stdin-file needs a nonempty path' }
+        opts.stdinFile = resolve(argv[++i]); break
       case '--notify-on': opts.notifyOn = argv[++i]; break
       case '--quiet-checkpoints': opts.quietCheckpoints = true; break
       case '--checkpoint-interval': opts.checkpointInterval = argv[++i]; opts.checkpointIntervalGiven = true; break
@@ -151,6 +155,13 @@ export function parseArgs(argv, env = {}) {
     }
   }
   return { opts }
+}
+
+// Match the poller wrappers' admission rule. Report only the env name, never its value.
+export function secretArgEnvName(argv, env = process.env) {
+  return Object.entries(env).find(([name, value]) =>
+    /TOKEN|SECRET|_KEY|PASSWORD/i.test(name) && value?.length >= 12 &&
+    argv.some(arg => arg.includes(value)))?.[0]
 }
 
 // Namespaced per channel: a poller can host several brains and they share
@@ -328,6 +339,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   if (parsed.error) die(parsed.error)
   const { opts } = parsed
+  // Check the original environment before an adapter can strip any credentials.
+  const secretName = secretArgEnvName(opts.cmd, process.env)
+  if (secretName) {
+    die(`refusing command argv containing secret environment variable ${secretName}; use env or --stdin-file`)
+  }
 
   if (!process.env.TEAMVIBE_CHANNEL_ID) {
     die('missing environment variable TEAMVIBE_CHANNEL_ID — cannot namespace task storage', 2)
@@ -337,65 +353,86 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const id = taskId(opts.name, process.pid, new Date())
   const dir = join(root, id)
   try {
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(root, { recursive: true, mode: 0o700 })
+    mkdirSync(dir, { mode: 0o700 })
+    const stat = lstatSync(dir)
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('task path must be a real directory')
   } catch (e) {
     die(`cannot create task directory ${dir}: ${e.message}`, 1)
   }
 
-  // One argument per line — the reviewable record of what was actually launched.
-  writeFileSync(join(dir, 'cmd'), opts.cmd.join('\n') + '\n')
+  // The runner inherits env values; only their names belong in the private handoff.
+  // Prompts, workload argv and notes must never become the detached runner's argv.
+  const specPath = join(dir, 'spec.json')
+  let out, child
+  let ownsSpec = true
+  let launchFailed = false
+  try {
+    writeFileSync(specPath, JSON.stringify({ ...opts, dir, cwd: process.cwd(), envNames: Object.keys(process.env) }),
+      { mode: 0o600, flag: 'wx' })
 
-  // The wake payload can only ever report WHAT happened (state, rc, output). WHY the task
-  // was launched, and what to do with the answer, is known only here — by the session that
-  // is still alive. Without it the woken session can report the result but cannot continue
-  // the work (canary finding, pb#231). Written as a file rather than threaded through
-  // argv: it is free text, and the runner reads the task dir anyway.
-  if (opts.note) writeFileSync(join(dir, 'note'), opts.note.endsWith('\n') ? opts.note : opts.note + '\n')
-
-  const out = openSync(join(dir, 'runner.stdout'), 'a')
-  // detached: true puts the runner in its own session and process group, so the
-  // spawner killing the session's process group at teardown cannot reach it. This is
-  // the whole trick — verified empirically in pb#231 (survived a full teardown).
-  // Pollers with on-demand Git credentials (teamvibe.ai#633) export a launcher that
-  // registers the task so the session's credential files outlive the session, and strips
-  // the poller token from the runner env. Older pollers don't set it; a broken adapter
-  // must never stop a background task from starting, so fall back to plain spawn.
-  const runnerArgs = [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
-    opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
-    opts.eagerCheckpoints ? '1' : '0',
-    '--', ...opts.cmd]
-  const runnerOptions = { detached: true, stdio: ['ignore', out, out] }
-  let child
-  if (process.env.TV_GIT_BG_TASK_LAUNCHER) {
-    // Apply the adapter's token policy before either path starts the interpreter.
-    // With no launcher configured, preserve the older poller's inherited environment.
-    runnerOptions.env = { ...process.env }
-    delete runnerOptions.env.TEAMVIBE_POLLER_TOKEN
-    try {
-      const adapter = await import(process.env.TV_GIT_BG_TASK_LAUNCHER)
-      const originalSpawn = ChildProcess.prototype.spawn
-      let started
-      // A child spawned during the synchronous hook with this task's runner and task
-      // dir in its argv is the runner (interpreter flags allowed). Adopt it regardless
-      // of the hook's return value or a later exception; other helpers don't count.
+    out = openSync(join(dir, 'runner.stdout'), 'a')
+    // detached: true puts the runner in its own session and process group, so the
+    // spawner killing the session's process group at teardown cannot reach it. This is
+    // the whole trick — verified empirically in pb#231 (survived a full teardown).
+    // Pollers with on-demand Git credentials (teamvibe.ai#633) export a launcher that
+    // registers the task so the session's credential files outlive the session, and strips
+    // the poller token from the runner env. Older pollers don't set it; a broken adapter
+    // must never stop a background task from starting, so fall back to plain spawn.
+    const runnerArgs = [RUNNER, specPath]
+    const runnerOptions = { detached: true, stdio: ['ignore', out, out] }
+    if (process.env.TV_GIT_BG_TASK_LAUNCHER) {
+      // Apply the adapter's token policy before either path starts the interpreter.
+      // With no launcher configured, preserve the older poller's inherited environment.
+      runnerOptions.env = { ...process.env }
+      delete runnerOptions.env.TEAMVIBE_POLLER_TOKEN
       try {
-        ChildProcess.prototype.spawn = function (options) {
-          const result = originalSpawn.call(this, options)
-          if (options?.args?.includes(RUNNER) && options.args.includes(dir)) started ??= this
-          return result
+        const adapter = await import(process.env.TV_GIT_BG_TASK_LAUNCHER)
+        const originalSpawn = ChildProcess.prototype.spawn
+        let started
+        // Older adapters register args[1] as a directory to retain Git credentials.
+        // Keep that interface, then substitute the private spec path at the actual spawn.
+        // Adopt this runner (interpreter flags allowed) regardless
+        // of the hook's return value or a later exception; other helpers don't count.
+        try {
+          ChildProcess.prototype.spawn = function (options) {
+            if (options?.args?.includes(RUNNER) && options.args.includes(dir)) {
+              options = { ...options, args: options.args.map(arg => arg === dir ? specPath : arg) }
+            }
+            const result = originalSpawn.call(this, options)
+            if (options?.args?.includes(RUNNER) && options.args.includes(specPath)) started ??= this
+            return result
+          }
+          adapter.spawnBackgroundTask(process.execPath, [RUNNER, dir], runnerOptions)
+        } finally {
+          ChildProcess.prototype.spawn = originalSpawn
+          child = started
         }
-        adapter.spawnBackgroundTask(process.execPath, runnerArgs, runnerOptions)
-      } finally {
-        ChildProcess.prototype.spawn = originalSpawn
-        child = started
+      } catch {
+        // Exception messages can contain credentials, paths or embedded newlines.
+        process.stderr.write('bg-task: git credential launcher unavailable; continuing background task\n')
       }
-    } catch {
-      // Exception messages can contain credentials, paths or embedded newlines.
-      process.stderr.write('bg-task: git credential launcher unavailable; continuing background task\n')
+    }
+    child ??= spawn(process.execPath, runnerArgs, runnerOptions)
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve)
+      child.once('error', reject)
+    })
+    // The runner owns spec cleanup only once the OS has successfully started it.
+    ownsSpec = false
+    child.unref()
+  } catch {
+    launchFailed = true
+  } finally {
+    if (out !== undefined) closeSync(out)
+    if (ownsSpec) {
+      try { unlinkSync(specPath) }
+      catch (e) {
+        if (e.code !== 'ENOENT') process.stderr.write('bg-task: cannot delete task specification\n')
+      }
     }
   }
-  child ??= spawn(process.execPath, runnerArgs, runnerOptions)
-  child.unref()
+  if (launchFailed) die('cannot start background task', 1)
 
   console.log(`bg-task launched: name=${opts.name} id=${id} ttl=${opts.ttl}s`)
   console.log(`dir=${dir} (status, output.log, cmd)`)

@@ -29,15 +29,28 @@ just builds — a crash or silent death gets the same `crashed`/`abandoned` repo
 *Finding tasks you weren't told about* below) instead of vanishing with zero output:
 
 ```bash
+# Prepare a 0600 prompt file with your file-writing tool, without putting its
+# contents in a shell command. The runner consumes and deletes this file.
 node "$CLAUDE_CONFIG_DIR/skills/background-task/scripts/bg-task.mjs" \
-  --name subagent-1 --ttl 1800 -- claude -p "$PROMPT"
+  --name subagent-1 --ttl 1800 --stdin-file /tmp/subagent-prompt.txt -- claude -p
 ```
 
-Pass the prompt as its own argv element after `--`, never interpolated into a
-`bash -c "…"` string — `bash -c` here exists only for pipes/redirects (see the `--`
-row in *Options*), and re-introduces exactly the shell-escaping crash
-([teamvibeai/teamvibe.ai#325](https://github.com/teamvibeai/teamvibe.ai/issues/325))
-this wrapper's argv-only `spawn()` otherwise avoids.
+Deliver prompts and secrets through `--stdin-file`, or let the workload read credentials
+from env or a credential helper. Argv is visible in `ps`.
+Do not expand secrets into command arguments, including `bash -c` strings or HTTP headers.
+For authenticated commands, use a consumer that reads env internally, or stdin/file inputs
+such as `curl --config -`; never `curl -H "Authorization: Bearer $TOKEN"`.
+
+The launcher creates a new task directory exclusively, rejecting existing paths and
+symlinks, and hands the runner a 0600 task spec. The launcher deletes the spec if launch
+fails; the runner deletes it even if reading or parsing fails.
+The launcher checks workload argv against its original environment before credentials
+are stripped, refusing with exit code 2 before anything is spawned. The runner repeats
+the check before spawning the workload and records a task failure with exit code 2.
+Both checks name only the env var (names matching `TOKEN|SECRET|_KEY|PASSWORD`, case
+insensitive, value at least 12 characters). These checks cannot find
+secrets that are absent from env or expansions performed inside a workload shell script.
+Keep secrets out of `--name` and `--note` too: they are included in task reports.
 
 ## Also the fix for one slow call, not just multi-step jobs
 
@@ -115,6 +128,7 @@ describe a timeout as a success.
 | `--name NAME` | `task` | Shows up in every drop. Use something you'll recognise. |
 | `--ttl SECONDS` | `900` | 30–21600 (6 h). The task is **killed** at this limit — set it above the realistic worst case. Also sets the checkpoint cadence — see *Interim output*. |
 | `--note TEXT` | — | Why you launched it and what to do with the answer. Carried into every drop. **Write one for anything you intend to continue** — see below. |
+| `--stdin-file PATH` | — | Read and delete this file before spawning, then pipe its contents to the workload's stdin. A read or deletion failure records task failure and a terminal wake without starting the workload. Use a dedicated 0600 file for prompts/secrets. Without this flag, stdin is ignored. |
 | `--notify-on REGEX` | — | Flush a checkpoint immediately when new output matches, instead of waiting for the next periodic trigger. For output that can't wait — a device-auth URL, a confirmation prompt. |
 | `--quiet-checkpoints` | off | Suppress interim checkpoints entirely (only the terminal drop remains) — see *Interim output*. Mutually exclusive with `--checkpoint-interval` and `--eager-checkpoints`. |
 | `--checkpoint-interval SECONDS` | — | Override the default TTL-derived cadence with your own "flush no more often than every N seconds" — see *Interim output*. Must be a positive integer strictly less than `--ttl`. Mutually exclusive with `--quiet-checkpoints` and `--eager-checkpoints`. |
@@ -363,7 +377,8 @@ TTL-derived default works out to.
   one you meant risks masking a copy-paste mistake in a task nobody is watching live.
 
 ```bash
-node bg-task.mjs --name codex-run --ttl 3600 --checkpoint-interval 60 -- codex exec "…"
+node bg-task.mjs --name codex-run --ttl 3600 --checkpoint-interval 60 \
+  --stdin-file /tmp/codex-prompt.txt -- codex exec -
 ```
 
 Each checkpoint carries only what's new since the last one (capped like the terminal
