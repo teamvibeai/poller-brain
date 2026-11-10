@@ -140,6 +140,7 @@ function lock() {
   for (const [name, entry] of Object.entries(value.skills)) {
     validName(name);
     if (!object(entry) || !['source', 'path', 'ref', 'sha', 'content_hash'].every(k => typeof entry[k] === 'string') || !/^[0-9a-f]{40}$/.test(entry.sha) || !/^[0-9a-f]{64}$/.test(entry.content_hash) || !(entry.upstream_pr === null || typeof entry.upstream_pr === 'string')) fail(`Invalid provenance entry: ${name}`);
+    refuseCredentialUrl(entry.source);
     if (entry.path !== '.') safeRelative(entry.path);
   }
   return value;
@@ -197,7 +198,22 @@ function frontmatter(file) {
   if (typeof data.description !== 'string' || !data.description.trim()) fail(`Missing description: ${file}`);
   return data;
 }
+function refuseCredentialUrl(source) {
+  if (typeof source !== 'string') return;
+  // Check before splitting source#skill-path, and before allowlist/provenance errors
+  // can echo the source. Never include any part of a rejected URL in diagnostics.
+  const refuse = () => fail('Credential-bearing source URL refused; authenticate only via a credential helper or env');
+  if (/^[a-z][a-z\d+.-]*:\/\/[^/?#]*@/i.test(source)) refuse();
+  const suffix = source.search(/[?#]/);
+  if (suffix === -1) return;
+  for (const component of source.slice(suffix + 1).split(/[?#]/)) {
+    for (const [key, value] of new URLSearchParams(component)) {
+      if (value && /token|secret|key|password|credential|authorization|auth|signature|^sig$/i.test(key)) refuse();
+    }
+  }
+}
 function sourceInfo(source) {
+  refuseCredentialUrl(source);
   if (!source || source.startsWith('-') || source.includes('#') || /[\n\r\0]/.test(source)) fail('Invalid source');
   if (/^(\/|\.\.?\/|file:\/\/)/.test(source)) {
     const local = fs.realpathSync(source.startsWith('file://') ? new URL(source) : path.resolve(cwd, source));
@@ -335,6 +351,7 @@ function install(source, subpath, ref, requestedName, replacing = false) {
 }
 function parseSourceArg(value) {
   if (!value) fail('Missing source');
+  refuseCredentialUrl(value);
   const [source, subpath, extra] = value.split('#');
   if (extra !== undefined || subpath === '') fail('Use source#path and --ref ref');
   return { source, subpath };

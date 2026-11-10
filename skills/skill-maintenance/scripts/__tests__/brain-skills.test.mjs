@@ -211,6 +211,57 @@ test('non-allowlisted source refuses before invoking git or npx', () => {
   const f = fixture(); assert.match(f.cli(['add', 'other/repo#demo'], 1), /outside.*allowlist/);
   assert.equal(fs.existsSync(f.lockFile), false);
 });
+const credentialSources = [
+  'https://user:synthetic-secret-592-abcdefgh@fixture.invalid/upstream.git',
+  'https://synthetic-secret-592-abcdefgh@fixture.invalid/upstream.git',
+  'ssh://git:synthetic-secret-592-abcdefgh@fixture.invalid/upstream.git',
+  'https://fixture.invalid/upstream.git?access_token=synthetic-secret-592-abcdefgh',
+  'https://fixture.invalid/upstream.git?%61pi_key=synthetic-secret-592-abcdefgh',
+  'https://fixture.invalid/upstream.git#token=synthetic-secret-592-abcdefgh',
+  'https://fixture.invalid/upstream.git#X-Amz-Signature=synthetic-secret-592-abcdefgh',
+];
+function stubSourceCommands(f) {
+  const log = path.join(f.root, 'source-spawns.jsonl');
+  const git = process.env.PATH.split(path.delimiter).map(dir => path.join(dir, 'git')).find(file => fs.existsSync(file));
+  for (const command of ['git', 'npx']) {
+    const file = path.join(f.root, 'bin', command);
+    write(file, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (${JSON.stringify(command)} === 'git' && !['ls-remote', 'clone'].includes(args[0])) {
+  process.exit(require('node:child_process').spawnSync(${JSON.stringify(git)}, args, {stdio:'inherit'}).status ?? 92);
+}
+require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({command:${JSON.stringify(command)},args})+'\\n');
+process.exit(91);
+`);
+    fs.chmodSync(file, 0o755);
+  }
+  return () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : [];
+}
+for (const [index, source] of credentialSources.entries()) {
+  test(`credential source ${index + 1} refuses before git/npx without echoing credentials`, () => {
+    const f = fixture();
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), JSON.stringify({ sources: [source] }));
+    const calls = stubSourceCommands(f);
+    for (const args of [['add', source], ['ensure', 'demo', source]]) {
+      const error = f.cli(args, 1);
+      assert.match(error, /credential.*URL.*helper.*env/i);
+      assert.ok(!error.includes('synthetic-secret-592-abcdefgh'));
+      assert.deepEqual(calls(), [], 'neither git nor npx may receive the URL');
+    }
+  });
+  test(`stored credential source ${index + 1} refuses before git/npx`, () => {
+    const f = fixture(); f.add();
+    const provenance = f.readLock(); provenance.skills.demo.source = source;
+    write(f.lockFile, JSON.stringify(provenance));
+    const calls = stubSourceCommands(f);
+    for (const args of [['status'], ['report'], ['sync'], ['push', 'demo'], ['ensure', 'demo', `${f.source}#demo`]]) {
+      const error = f.cli(args, 1);
+      assert.match(error, /credential.*URL.*helper.*env/i);
+      assert.ok(!error.includes('synthetic-secret-592-abcdefgh'));
+      assert.deepEqual(calls(), []);
+    }
+  });
+}
 test('missing allowlist uses defaults and malformed policy fails closed', () => {
   const f = fixture(), file = path.join(f.brain, '.claude/skills/allowlist.yaml');
   fs.rmSync(file); assert.match(f.cli(['add', f.upstream], 1), /allowlist/);

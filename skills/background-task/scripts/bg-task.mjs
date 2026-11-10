@@ -12,7 +12,7 @@
 // survive a poller restart. Never present it to a user as a durability guarantee.
 import { ChildProcess, spawn } from 'node:child_process'
 import { mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -23,7 +23,7 @@ const TTL_MAX = 21600
 
 const USAGE =
   'usage: bg-task.mjs [--name NAME] [--ttl SECONDS] [--note TEXT] [--notify-on REGEX] ' +
-  '[--quiet-checkpoints | --checkpoint-interval SECONDS | --eager-checkpoints] [--dry-run] -- <command...>\n' +
+  '[--quiet-checkpoints | --checkpoint-interval SECONDS | --eager-checkpoints] [--stdin-file PATH] [--dry-run] -- <command...>\n' +
   '       bg-task.mjs --list'
 
 function die(msg, code = 2) {
@@ -46,6 +46,7 @@ export function parseArgs(argv, env = {}) {
     dryRun: env.BG_TASK_DRY === '1',
     notifyOn: '',
     note: '',
+    stdinFile: '',
     // Suppresses the quiet-period and ceiling checkpoint triggers (see bg-task-runner.mjs)
     // — opt-in, because losing interim visibility is a real cost, right for a known
     // high-frequency-output task where only completion (or a --notify-on match) matters.
@@ -80,12 +81,15 @@ export function parseArgs(argv, env = {}) {
     const a = argv[i]
     if (a === '--') { i++; break }
     if (a === '--list') return { list: true }
-    const needsValue = ['--name', '--ttl', '--note', '--notify-on', '--checkpoint-interval'].includes(a)
+    const needsValue = ['--name', '--ttl', '--note', '--notify-on', '--checkpoint-interval', '--stdin-file'].includes(a)
     if (needsValue && i + 1 >= argv.length) return { error: `${a} needs a value` }
     switch (a) {
       case '--name': opts.name = argv[++i]; break
       case '--ttl': opts.ttl = argv[++i]; break
       case '--note': opts.note = argv[++i]; break
+      case '--stdin-file':
+        if (!argv[i + 1]) return { error: '--stdin-file needs a nonempty path' }
+        opts.stdinFile = resolve(argv[++i]); break
       case '--notify-on': opts.notifyOn = argv[++i]; break
       case '--quiet-checkpoints': opts.quietCheckpoints = true; break
       case '--checkpoint-interval': opts.checkpointInterval = argv[++i]; opts.checkpointIntervalGiven = true; break
@@ -337,20 +341,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const id = taskId(opts.name, process.pid, new Date())
   const dir = join(root, id)
   try {
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
   } catch (e) {
     die(`cannot create task directory ${dir}: ${e.message}`, 1)
   }
 
-  // One argument per line — the reviewable record of what was actually launched.
-  writeFileSync(join(dir, 'cmd'), opts.cmd.join('\n') + '\n')
-
-  // The wake payload can only ever report WHAT happened (state, rc, output). WHY the task
-  // was launched, and what to do with the answer, is known only here — by the session that
-  // is still alive. Without it the woken session can report the result but cannot continue
-  // the work (canary finding, pb#231). Written as a file rather than threaded through
-  // argv: it is free text, and the runner reads the task dir anyway.
-  if (opts.note) writeFileSync(join(dir, 'note'), opts.note.endsWith('\n') ? opts.note : opts.note + '\n')
+  // The runner inherits env values; only their names belong in the private handoff.
+  // Prompts, workload argv and notes must never become the detached runner's argv.
+  const specPath = join(dir, 'spec.json')
+  writeFileSync(specPath, JSON.stringify({ ...opts, dir, cwd: process.cwd(), envNames: Object.keys(process.env) }),
+    { mode: 0o600, flag: 'wx' })
 
   const out = openSync(join(dir, 'runner.stdout'), 'a')
   // detached: true puts the runner in its own session and process group, so the
@@ -360,10 +360,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // registers the task so the session's credential files outlive the session, and strips
   // the poller token from the runner env. Older pollers don't set it; a broken adapter
   // must never stop a background task from starting, so fall back to plain spawn.
-  const runnerArgs = [RUNNER, dir, String(opts.ttl), opts.name, opts.threadId, opts.dryRun ? '1' : '0',
-    opts.notifyOn, opts.quietCheckpoints ? '1' : '0', opts.checkpointInterval ? String(opts.checkpointInterval) : '',
-    opts.eagerCheckpoints ? '1' : '0',
-    '--', ...opts.cmd]
+  const runnerArgs = [RUNNER, specPath]
   const runnerOptions = { detached: true, stdio: ['ignore', out, out] }
   let child
   if (process.env.TV_GIT_BG_TASK_LAUNCHER) {
@@ -375,16 +372,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const adapter = await import(process.env.TV_GIT_BG_TASK_LAUNCHER)
       const originalSpawn = ChildProcess.prototype.spawn
       let started
-      // A child spawned during the synchronous hook with this task's runner and task
-      // dir in its argv is the runner (interpreter flags allowed). Adopt it regardless
+      // Older adapters register args[1] as a directory to retain Git credentials.
+      // Keep that interface, then substitute the private spec path at the actual spawn.
+      // Adopt this runner (interpreter flags allowed) regardless
       // of the hook's return value or a later exception; other helpers don't count.
       try {
         ChildProcess.prototype.spawn = function (options) {
+          if (options?.args?.includes(RUNNER) && options.args.includes(dir)) {
+            options = { ...options, args: options.args.map(arg => arg === dir ? specPath : arg) }
+          }
           const result = originalSpawn.call(this, options)
-          if (options?.args?.includes(RUNNER) && options.args.includes(dir)) started ??= this
+          if (options?.args?.includes(RUNNER) && options.args.includes(specPath)) started ??= this
           return result
         }
-        adapter.spawnBackgroundTask(process.execPath, runnerArgs, runnerOptions)
+        adapter.spawnBackgroundTask(process.execPath, [RUNNER, dir], runnerOptions)
       } finally {
         ChildProcess.prototype.spawn = originalSpawn
         child = started
