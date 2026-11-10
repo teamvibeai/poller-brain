@@ -41,10 +41,14 @@ Do not expand secrets into command arguments, including `bash -c` strings or HTT
 For authenticated commands, use a consumer that reads env internally, or stdin/file inputs
 such as `curl --config -`; never `curl -H "Authorization: Bearer $TOKEN"`.
 
-The launcher hands the runner a 0600 task spec and the runner deletes it after reading.
-Before spawning the workload, the runner refuses argv containing a known secret env value
-(names matching `TOKEN|SECRET|_KEY|PASSWORD`, case insensitive, at least 12 characters).
-The task records failure with exit code 2, naming only the env var. This check cannot find
+The launcher creates a new task directory exclusively, rejecting existing paths and
+symlinks, and hands the runner a 0600 task spec. The launcher deletes the spec if launch
+fails; the runner deletes it even if reading or parsing fails.
+The launcher checks workload argv against its original environment before credentials
+are stripped, refusing with exit code 2 before anything is spawned. The runner repeats
+the check before spawning the workload and records a task failure with exit code 2.
+Both checks name only the env var (names matching `TOKEN|SECRET|_KEY|PASSWORD`, case
+insensitive, value at least 12 characters). These checks cannot find
 secrets that are absent from env or expansions performed inside a workload shell script.
 Keep secrets out of `--name` and `--note` too: they are included in task reports.
 
@@ -124,7 +128,7 @@ describe a timeout as a success.
 | `--name NAME` | `task` | Shows up in every drop. Use something you'll recognise. |
 | `--ttl SECONDS` | `900` | 30–21600 (6 h). The task is **killed** at this limit — set it above the realistic worst case. Also sets the checkpoint cadence — see *Interim output*. |
 | `--note TEXT` | — | Why you launched it and what to do with the answer. Carried into every drop. **Write one for anything you intend to continue** — see below. |
-| `--stdin-file PATH` | — | Read this file and pipe it to the workload's stdin; delete the file after spawn. Use a dedicated 0600 file for prompts/secrets. Without this flag, stdin is ignored. |
+| `--stdin-file PATH` | — | Read and delete this file before spawning, then pipe its contents to the workload's stdin. A read or deletion failure records task failure and a terminal wake without starting the workload. Use a dedicated 0600 file for prompts/secrets. Without this flag, stdin is ignored. |
 | `--notify-on REGEX` | — | Flush a checkpoint immediately when new output matches, instead of waiting for the next periodic trigger. For output that can't wait — a device-auth URL, a confirmation prompt. |
 | `--quiet-checkpoints` | off | Suppress interim checkpoints entirely (only the terminal drop remains) — see *Interim output*. Mutually exclusive with `--checkpoint-interval` and `--eager-checkpoints`. |
 | `--checkpoint-interval SECONDS` | — | Override the default TTL-derived cadence with your own "flush no more often than every N seconds" — see *Interim output*. Must be a positive integer strictly less than `--ttl`. Mutually exclusive with `--quiet-checkpoints` and `--eager-checkpoints`. |

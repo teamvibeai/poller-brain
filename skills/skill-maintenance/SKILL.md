@@ -8,6 +8,9 @@ description: Install, vendor, or update a brain skill; resolve a "skill missing"
 Operate from the channel brain repository root. The base brain supplies the tool;
 its cwd selects the brain to maintain. Use the policy wrapper, which delegates
 installation to `npx -y skills@1.7.2` with telemetry disabled.
+Authenticate through a credential helper or env. Username-only SSH sources such as
+`ssh://git@host/repo.git` and `git@host:repo.git` are accepted. Password-bearing SSH URLs
+and any HTTPS userinfo are refused, including in stored provenance.
 
 New skill or new source = PR for the brain owner, never auto-merge. The workspace
 allowlist is `.claude/skills/allowlist.yaml`; absent means only

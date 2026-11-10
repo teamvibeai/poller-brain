@@ -203,7 +203,8 @@ function refuseCredentialUrl(source) {
   // Check before splitting source#skill-path, and before allowlist/provenance errors
   // can echo the source. Never include any part of a rejected URL in diagnostics.
   const refuse = () => fail('Credential-bearing source URL refused; authenticate only via a credential helper or env');
-  if (/^[a-z][a-z\d+.-]*:\/\/[^/?#]*@/i.test(source)) refuse();
+  const userinfo = /^([a-z][a-z\d+.-]*):\/\/([^/?#]*)@/i.exec(source);
+  if (userinfo && (userinfo[1].toLowerCase() !== 'ssh' || /[:@]/.test(userinfo[2]))) refuse();
   const suffix = source.search(/[?#]/);
   if (suffix === -1) return;
   for (const component of source.slice(suffix + 1).split(/[?#]/)) {

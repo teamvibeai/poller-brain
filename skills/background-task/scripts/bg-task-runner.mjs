@@ -15,7 +15,8 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSy
 import { dirname, join } from 'node:path'
 // One definition of "is this task still alive", shared with --list. Two would drift, and
 // they answer the same question for the same files.
-import { lifecycleOf, parseStatus } from './bg-task.mjs'
+import { lifecycleOf, parseStatus, secretArgEnvName } from './bg-task.mjs'
+export { secretArgEnvName }
 
 const TAIL_BYTES = 1500
 const NOTE_CHARS = 1000 // see noteOf: the note is the only agent-authored field in the payload
@@ -60,14 +61,13 @@ export function flushIntervalSec(ttl) {
 // imported by the tests without side effects.
 export function parseRunnerArgs(argv) {
   if (argv.length !== 1) throw new Error('expected only a task specification path')
-  return JSON.parse(readFileSync(argv[0], 'utf8'))
-}
-
-// Match the poller wrappers' admission rule. Report only the env name, never its value.
-export function secretArgEnvName(argv, env = process.env) {
-  return Object.entries(env).find(([name, value]) =>
-    /TOKEN|SECRET|_KEY|PASSWORD/i.test(name) && value?.length >= 12 &&
-    argv.some(arg => arg.includes(value)))?.[0]
+  try {
+    return JSON.parse(readFileSync(argv[0], 'utf8'))
+  } finally {
+    // Clean up even if reading or parsing fails, before any workload can start.
+    try { unlinkSync(argv[0]) }
+    catch (e) { if (e.code !== 'ENOENT') throw e }
+  }
 }
 
 const stamp = () => new Date().toISOString()
@@ -304,7 +304,6 @@ export function writeInboxMessage(threadId, text, dir, dry) {
 async function main() {
   const { dir, ttl, name, threadId, dryRun, notifyOn, quietCheckpoints, checkpointInterval, eagerCheckpoints, cmd, cwd, stdinFile, note: taskNote } =
     parseRunnerArgs(process.argv.slice(2))
-  unlinkSync(process.argv[2])
   const dry = dryRun ? '1' : '0'
   const statusPath = join(dir, 'status')
   const logPath = join(dir, 'output.log')
@@ -371,6 +370,13 @@ async function main() {
       process.exitCode = 2
       return
     }
+    try { unlinkSync(stdinFile) }
+    catch {
+      appendFileSync(logPath, 'bg-task: cannot delete --stdin-file\n')
+      finish({ rc: 2 })
+      process.exitCode = 2
+      return
+    }
   }
   const out = openSync(logPath, 'a')
   // detached so the command gets its own process group: on TTL we can then kill the
@@ -382,7 +388,6 @@ async function main() {
     // consumer exits without reading all input; its exit status remains authoritative.
     child.stdin.on('error', () => {})
     child.stdin.end(input)
-    unlinkSync(stdinFile)
   }
 
   // --- interim checkpoints: a real debounce (flush after QUIET_MS of silence) with a

@@ -212,14 +212,40 @@ test('non-allowlisted source refuses before invoking git or npx', () => {
   assert.equal(fs.existsSync(f.lockFile), false);
 });
 const credentialSources = [
+  'https://@fixture.invalid/upstream.git',
+  'https://user:@fixture.invalid/upstream.git',
   'https://user:synthetic-secret-592-abcdefgh@fixture.invalid/upstream.git',
   'https://synthetic-secret-592-abcdefgh@fixture.invalid/upstream.git',
   'ssh://git:synthetic-secret-592-abcdefgh@fixture.invalid/upstream.git',
+  'ssh://git:@fixture.invalid/upstream.git',
   'https://fixture.invalid/upstream.git?access_token=synthetic-secret-592-abcdefgh',
   'https://fixture.invalid/upstream.git?%61pi_key=synthetic-secret-592-abcdefgh',
   'https://fixture.invalid/upstream.git#token=synthetic-secret-592-abcdefgh',
   'https://fixture.invalid/upstream.git#X-Amz-Signature=synthetic-secret-592-abcdefgh',
 ];
+for (const source of ['ssh://git@fixture.invalid/upstream.git', 'git@fixture.invalid:upstream.git']) {
+  test(`review1 P5: username-only SSH source installs: ${source}`, () => {
+    const f = fixture();
+    f.env.GIT_CONFIG_VALUE_0 = source;
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), JSON.stringify({ sources: [source] }));
+    const data = f.cli(['add', `${source}#demo`]);
+    assert.equal(data.source, source);
+    assert.equal(data.sha, f.sha);
+    assertLayout(f);
+    f.cli(['lint']);
+  });
+  test(`review1 P5: stored username-only SSH provenance works: ${source}`, () => {
+    const f = fixture(); f.add();
+    const provenance = f.readLock(); provenance.skills.demo.source = source;
+    write(f.lockFile, JSON.stringify(provenance));
+    f.env.GIT_CONFIG_VALUE_0 = source;
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), JSON.stringify({ sources: [source] }));
+    assert.equal(f.cli(['status']).entries.find(e => e.name === 'demo').state, 'current');
+    f.cli(['report']);
+    f.cli(['sync']);
+    assert.equal(f.cli(['ensure', 'demo', `${source}#demo`]).changed, false);
+  });
+}
 function stubSourceCommands(f) {
   const log = path.join(f.root, 'source-spawns.jsonl');
   const git = process.env.PATH.split(path.delimiter).map(dir => path.join(dir, 'git')).find(file => fs.existsSync(file));
