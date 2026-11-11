@@ -7,9 +7,14 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 const MAX_BYTES = 512 * 1024;
+const MAX_MCP_BYTES = 64 * 1024;
+// This repo has no base MCP config. These are the poller's injected base servers.
+const BASE_MCP_SERVERS = new Set(["slack", "teamvibe-api"]);
 const USAGE = "Usage: brain-write.ts <relative-path> [--from <file>] [--delete]";
 
 function parseArgs(args) {
+  // Accept --delete <path> as well as the existing <path> --delete form.
+  if (args.length === 2 && args[0] === "--delete") args = [args[1], "--delete"];
   const [target, ...options] = args;
   if (!target || target.startsWith("--")) throw new Error(USAGE);
   let from;
@@ -82,14 +87,15 @@ function validateTarget(root, relative) {
   if (parts.some((part) => /^settings.*\.json$/i.test(part))) {
     throw new Error("settings*.json files are refused anywhere; propose configuration changes via Slack approval");
   }
-  if (parts.length < 3 || parts[0] !== ".claude" ||
-      !["skills", "commands", "agents"].includes(parts[1])) {
-    throw new Error("Allowed targets only: .claude/skills/**, .claude/commands/**, .claude/agents/**; hooks and other paths are refused");
+  const isMcp = relative === ".mcp.json";
+  if (!isMcp && (parts.length < 3 || parts[0] !== ".claude" ||
+      !["skills", "commands", "agents"].includes(parts[1]))) {
+    throw new Error("Allowed targets only: .mcp.json, .claude/skills/**, .claude/commands/**, .claude/agents/**; hooks and other paths are refused");
   }
 
   // Refuse every symlink component, including dangling links and the final file.
   // Validate existing ancestors before mkdir so an escape cannot create outside dirs.
-  const allowed = path.join(root, parts[0], parts[1]);
+  const allowed = isMcp ? path.join(root, relative) : path.join(root, parts[0], parts[1]);
   let current = root;
   let targetStat = null;
   for (let i = 0; i < parts.length; i++) {
@@ -97,7 +103,7 @@ function validateTarget(root, relative) {
     const stat = lstatIfPresent(current);
     if (!stat) continue;
     if (stat.isSymbolicLink()) throw new Error(`Symlink target paths are refused: ${parts.slice(0, i + 1).join("/")}`);
-    if (i >= 1) {
+    if (isMcp || i >= 1) {
       const real = fs.realpathSync(current);
       if (real !== allowed && !real.startsWith(allowed + path.sep)) {
         throw new Error("Resolved target or existing parent escapes the allowed directory");
@@ -174,7 +180,82 @@ function regularFile(file) {
   return stat;
 }
 
-async function readContent(from) {
+const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+// Keep reference syntax in sync with poller brain-mcp.ts (teamvibe.ai PR #795).
+const envReferences = (value) => [...value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}/g)].map((match) => match[1]);
+
+function validateMcp(content) {
+  let config;
+  try {
+    config = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(content));
+  } catch {
+    // JSON parser errors can contain source text, including credentials.
+    throw new Error(".mcp.json must contain valid JSON");
+  }
+  if (!isRecord(config) || !isRecord(config.mcpServers)) {
+    throw new Error(".mcp.json must be an object with an mcpServers object");
+  }
+  if (Object.keys(config).some((key) => key !== "mcpServers")) {
+    throw new Error(".mcp.json only permits the mcpServers top-level field");
+  }
+  const servers = Object.entries(config.mcpServers);
+  if (servers.length > 32) throw new Error(".mcp.json permits at most 32 servers");
+  const references = new Set();
+  const collect = (value) => {
+    if (typeof value === "string") envReferences(value).forEach((name) => references.add(name));
+    else if (Array.isArray(value)) value.forEach(collect);
+    else if (isRecord(value)) Object.values(value).forEach(collect);
+  };
+  const stringMap = (value, field) => {
+    if (!isRecord(value) || Object.values(value).some((entry) => typeof entry !== "string")) {
+      throw new Error(`MCP ${field} must be a string map`);
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      if (Buffer.byteLength(entry) > 4 * 1024) throw new Error(`MCP ${field} values exceed the 4096-byte cap`);
+      const credentialKey = /token|secret|key|authorization|password/i.test(key);
+      const credentialValue = /\b(?:Bearer|Basic)\s+\S+/i.test(entry) ||
+        /^(?:sk[-_]|tvp_|gh[pousr]_|github_pat_|xox[baprs]-)/i.test(entry) ||
+        /^eyJ[\w-]*\.[\w-]+\.[\w-]+$/i.test(entry) ||
+        /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/i.test(entry);
+      if ((credentialKey || credentialValue) && !envReferences(entry).length) {
+        throw new Error("MCP credentials must use platform secrets: store the value via platform secrets and reference it as ${VAR}");
+      }
+    }
+  };
+  for (const [name, server] of servers) {
+    // Never echo invalid names, unknown fields, URLs, or input values in errors.
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Error("Invalid MCP server name; use 1-64 letters, digits, underscores, or hyphens");
+    if (BASE_MCP_SERVERS.has(name)) throw new Error(`MCP server ${name} is reserved by the base poller`);
+    if (!isRecord(server)) throw new Error("MCP server must be a known transport object");
+    const type = server.type === undefined ? "stdio" : server.type;
+    if (!["stdio", "http", "sse"].includes(type)) throw new Error("Unknown MCP transport type; use stdio, http, or sse");
+    const fields = type === "stdio" ? ["type", "command", "args", "env"] : ["type", "url", "headers"];
+    if (Object.keys(server).some((key) => !fields.includes(key))) throw new Error("Unexpected fields for MCP transport");
+    if (type === "stdio") {
+      if (typeof server.command !== "string" || !server.command.trim()) throw new Error("MCP stdio command must be a nonempty string");
+      if (server.args !== undefined && (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string"))) {
+        throw new Error("MCP stdio args must be an array of strings");
+      }
+      if (server.env !== undefined) stringMap(server.env, "env");
+    } else {
+      let url;
+      try {
+        if (typeof server.url !== "string" || !server.url.trim()) throw new Error();
+        url = new URL(server.url);
+      } catch {
+        throw new Error("MCP http/sse url must be a valid URL");
+      }
+      if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) {
+        throw new Error("MCP url must use https, or http only for localhost");
+      }
+      if (server.headers !== undefined) stringMap(server.headers, "headers");
+    }
+    collect(server);
+  }
+  return `MCP servers: ${servers.map(([name]) => name).sort().join(", ") || "none"}; env references: ${[...references].sort().join(", ") || "none"}`;
+}
+
+async function readContent(from, maxBytes = MAX_BYTES) {
   if (from !== undefined && !fs.statSync(from).isFile()) throw new Error("--from must name a regular file");
   if (from === undefined && process.stdin.isTTY) throw new Error("Supply content on stdin or use --from <file>");
   const input = from === undefined ? process.stdin : fs.createReadStream(from);
@@ -183,7 +264,7 @@ async function readContent(from) {
   for await (const chunk of input) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.length;
-    if (bytes > MAX_BYTES) throw new Error(`Content exceeds the ${MAX_BYTES}-byte (512 KiB) size cap`);
+    if (bytes > maxBytes) throw new Error(`Content exceeds the ${maxBytes}-byte (${maxBytes / 1024} KiB) size cap`);
     chunks.push(buffer);
   }
   return Buffer.concat(chunks, bytes);
@@ -211,7 +292,9 @@ export async function main(args = process.argv.slice(2)) {
       return;
     }
 
-    const content = await readContent(from);
+    const isMcp = target === ".mcp.json";
+    const content = await readContent(from, isMcp ? MAX_MCP_BYTES : MAX_BYTES);
+    const mcpSummary = isMcp ? validateMcp(content) : undefined;
     // Input may have waited on stdin; check again before touching the target tree.
     validateTarget(root, target);
     const parent = openParent(root, target, true);
@@ -228,6 +311,7 @@ export async function main(args = process.argv.slice(2)) {
           if (!sameFile(stat, fs.fstatSync(fd))) throw new Error("Target changed while opening");
           if (fs.readFileSync(fd).equals(content)) {
             console.log(`Unchanged ${target} (${content.length} bytes)`);
+            if (mcpSummary) console.log(mcpSummary);
             return;
           }
         } finally {
@@ -252,6 +336,7 @@ export async function main(args = process.argv.slice(2)) {
       console.log(stat
         ? `Updated ${target} (${stat.size} -> ${content.length} bytes)`
         : `Created ${target} (${content.length} bytes)`);
+      if (mcpSummary) console.log(mcpSummary);
     } finally {
       try {
         if (created) {
