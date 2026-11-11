@@ -232,6 +232,12 @@ This also covers a single slow call within one turn, not just multi-step jobs â€
 your session mid-work the same way. See the `background-task` skill for the same-turn fallback and
 a sleep-loop trap to avoid if you truly can't end your turn.
 
+In-session subagents (the `Agent` tool) are bound to your session: if the session ends or is
+restarted they stop without a completion record, and a fresh session will not see them in
+`ListAgents` (poller-brain#455). Keep them for short parallel work you wait on in the same turn.
+For anything long, launch a detached subagent through `background-task` instead, commit and push
+milestones as you go, and put the handoff in `--note` so a cold session can pick it up.
+
 ## Message Types
 
 - Standard message â€” respond normally

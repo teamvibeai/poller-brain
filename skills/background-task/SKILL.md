@@ -26,7 +26,10 @@ Do not poll, do not `sleep`, do not keep the session alive waiting.
 
 The same wrapper covers launching a nested Claude Code CLI process as a subagent, not
 just builds — a crash or silent death gets the same `crashed`/`abandoned` reporting (see
-*Finding tasks you weren't told about* below) instead of vanishing with zero output:
+*Finding tasks you weren't told about* below) instead of vanishing with zero output.
+Prefer this over an in-session `Agent` subagent for long work: the in-session kind dies with
+your session and leaves no completion record or `ListAgents` entry for the next session
+(poller-brain#455). Example:
 
 ```bash
 # Prepare a 0600 prompt file with your file-writing tool, without putting its
