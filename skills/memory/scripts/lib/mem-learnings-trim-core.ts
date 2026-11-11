@@ -43,8 +43,9 @@
  * under the new pointer.
  *
  * An "entry" here is generic across both observed conventions: any line
- * starting a NEW entry (`### ` heading, or top-level `- ` bullet) through
- * the line immediately before the next entry start (or EOF). Citation
+ * starting a NEW entry (`## ` through `###### ` heading, or top-level `- `
+ * bullet). A heading owns its nested headings and bullets through the next
+ * same-or-higher-level heading (or EOF). Citation
  * counting and the already-a-pointer check both operate on the WHOLE entry
  * span, not a single line — a multi-key entry (its key(s) split across
  * several lines) is rejected as a whole, and a rewrite always replaces the
@@ -110,7 +111,9 @@ type EntryFormat = "bullet" | "heading";
 
 /** A parsed entry span within LEARNINGS.md, 0-indexed line numbers. */
 interface Entry {
-  format: EntryFormat;
+  format: EntryFormat | "unknown";
+  headingLevel?: number;
+  skipReason?: string;
   /** First line of the entry (inclusive). */
   startLine: number;
   /**
@@ -127,24 +130,18 @@ interface Entry {
   endLine: number;
 }
 
-const HEADING_START_RE = /^###\s+/;
+const HEADING_START_RE = /^(#{2,6})\s+/;
 const BULLET_START_RE = /^-\s+/;
 
 /** Matches an already-trimmed pointer bullet entry. */
 export const POINTER_BULLET_RE = new RegExp(String.raw`^-\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
 
 /** Matches an already-trimmed pointer heading entry. */
-export const POINTER_HEADING_RE = new RegExp(String.raw`^###\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
-
-function entryFormatOf(line: string): EntryFormat | null {
-  if (HEADING_START_RE.test(line)) return "heading";
-  if (BULLET_START_RE.test(line)) return "bullet";
-  return null;
-}
+export const POINTER_HEADING_RE = new RegExp(String.raw`^#{2,6}\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
 
 /**
- * Number of parsed entries (bullet or heading format) in a LEARNINGS.md-
- * shaped file. Exposed for `mem-scaled-threshold.ts` (poller-brain#324,
+ * Number of parsed entry spans (including skipped unknown structures) in a
+ * LEARNINGS.md-shaped file. Exposed for `mem-scaled-threshold.ts` (poller-brain#324,
  * poller-brain#300) so the row-count-driven threshold check reuses the
  * exact same entry-boundary parser Step 5d already depends on, instead of
  * a second ad-hoc `- ` / `### ` regex that could silently drift out of
@@ -154,20 +151,72 @@ export function countLearningsEntries(text: string): number {
   return parseEntries(text).entries.length;
 }
 
-/** Split `text` into entry spans. Lines before the first entry start (title, blank lines) belong to no entry. */
+/** Non-overlapping spans: a heading owns ALL content until a same-or-higher heading. */
 function parseEntries(text: string): { entries: Entry[]; lines: string[] } {
   const lines = text.split("\n");
-  const starts: { idx: number; format: EntryFormat }[] = [];
-  lines.forEach((line, idx) => {
-    const format = entryFormatOf(line);
-    if (format) starts.push({ idx, format });
-  });
-  const entries: Entry[] = starts.map((s, i) => {
-    const endLine = i + 1 < starts.length ? starts[i + 1].idx : lines.length;
-    let contentEndLine = endLine;
-    while (contentEndLine > s.idx + 1 && lines[contentEndLine - 1].trim() === "") contentEndLine--;
-    return { format: s.format, startLine: s.idx, contentEndLine, endLine };
-  });
+  const entries: Entry[] = [];
+  let current: Entry | undefined;
+  let fence: { marker: string; length: number } | undefined;
+  const close = (endLine: number): void => {
+    if (!current) return;
+    current.endLine = endLine;
+    current.contentEndLine = endLine;
+    while (current.contentEndLine > current.startLine + 1 && lines[current.contentEndLine - 1].trim() === "") current.contentEndLine--;
+    current = undefined;
+  };
+  const start = (idx: number, format: Entry["format"], headingLevel?: number): void => {
+    close(idx);
+    current = { format, headingLevel, startLine: idx, contentEndLine: lines.length, endLine: lines.length };
+    entries.push(current);
+  };
+  const skip = (idx: number, reason: string): void => {
+    if (!current) start(idx, "unknown");
+    current!.skipReason ??= reason;
+  };
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx];
+    if (fence) {
+      const closing = /^ {0,3}(`+|~+)\s*$/.exec(line);
+      if (closing && closing[1][0] === fence.marker && closing[1].length >= fence.length) fence = undefined;
+      continue; // apparent headings/bullets inside code cannot define entry boundaries
+    }
+    const openingFence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (openingFence) {
+      skip(idx, "unsupported fenced code structure");
+      fence = { marker: openingFence[1][0], length: openingFence[1].length };
+      continue;
+    }
+    const heading = HEADING_START_RE.exec(line);
+    const level = heading ? heading[1].length : /^#\s+/.test(line) ? 1 : null;
+    if (level !== null) {
+      if (current?.headingLevel && level > current.headingLevel) continue;
+      close(idx);
+      if (level >= 2) start(idx, "heading", level);
+      continue;
+    }
+    if (BULLET_START_RE.test(line)) {
+      // An unsupported block may own these bullets too; resume only at a known heading boundary.
+      if (current?.format === "unknown") continue;
+      if (current?.headingLevel) {
+        if (HEADING_START_RE.test(lines[idx - 1] ?? "")) {
+          skip(idx, "bullet immediately follows a heading without a blank line; ownership is ambiguous");
+        }
+      } else {
+        start(idx, "bullet");
+        if (/^#{1,6}\s+/.test(lines[idx - 1] ?? "")) {
+          skip(idx, "bullet immediately follows a heading without a blank line; ownership is ambiguous");
+        }
+      }
+      continue;
+    }
+    // Unsupported Markdown may hide another entry. Preserve it for manual review.
+    if (/^(?:\s*#{1,}\s|[*+]\s+|\d+[.)]\s+|>\s*|\||\s*<| {4}|\t|(?:=+|-+)\s*$)/.test(line)) {
+      skip(idx, "unsupported Markdown structure");
+    } else if (!current && distinctCitedKeysInLine(line).length > 0) {
+      skip(idx, "MEM citation outside a supported heading or bullet entry");
+    }
+  }
+  close(lines.length);
   return { entries, lines };
 }
 
@@ -215,6 +264,8 @@ export interface FindLearningsCandidatesResult {
   indexRejections: import("./citation-detect.js").IndexRejection[];
   /** Keys with a genuine citation but an unreliable extracted hook — excluded from `candidates`, surfaced so coverage loss is never silent. */
   unreliableHooks: UnreliableHook[];
+  /** Ambiguous/unsupported spans are preserved for manual review, never proposed. */
+  skippedEntries: { entryStartLine: number; entryEndLine: number; reason: string }[];
 }
 
 /**
@@ -241,11 +292,18 @@ export function findLearningsTrimCandidates(
   const { entries, lines } = parseEntries(learnings);
   const candidates: LearningsTrimCandidate[] = [];
   const unreliableHooks: UnreliableHook[] = [];
+  const skippedEntries: FindLearningsCandidatesResult["skippedEntries"] = [];
   let alreadyPointer = 0;
   let multiKeyEntries = 0;
 
   for (const entry of entries) {
     const text = entryText(lines, entry);
+
+    if (entry.skipReason || entry.format === "unknown") {
+      skippedEntries.push({ entryStartLine: entry.startLine + 1, entryEndLine: entry.contentEndLine,
+        reason: entry.skipReason ?? "unknown entry structure" });
+      continue;
+    }
 
     if (isPointerEntry(text)) {
       alreadyPointer++;
@@ -296,6 +354,7 @@ export function findLearningsTrimCandidates(
     alreadyPointer,
     indexRejections,
     unreliableHooks,
+    skippedEntries,
   };
 }
 
@@ -348,6 +407,70 @@ function countDistinctEntryKeys(learnings: string): number {
   return keys.size;
 }
 
+/** Resolve every approved range to exactly one safe entry, including its end and format. */
+function checkedCandidates(entries: Entry[], lines: string[], candidates: LearningsTrimCandidate[]): Map<number, LearningsTrimCandidate> {
+  const byLine = new Map(entries.map((entry) => [entry.startLine + 1, entry]));
+  const approved = new Map<number, LearningsTrimCandidate>();
+  for (const candidate of candidates) {
+    const entry = byLine.get(candidate.entryStartLine);
+    const keys = entry ? entryCitedKeys(lines, entry) : [];
+    if (!entry || entry.skipReason || entry.format !== candidate.format ||
+        entry.contentEndLine !== candidate.entryEndLine || keys.length !== 1 || keys[0] !== candidate.key ||
+        isPointerEntry(entryText(lines, entry)) || approved.has(candidate.entryStartLine)) {
+      throw new Error(`Candidate for ${candidate.key} at line ${candidate.entryStartLine} does not match exactly one whole, unambiguous entry — stale or invalid range. Aborting, no write performed.`);
+    }
+    approved.set(candidate.entryStartLine, candidate);
+  }
+  return approved;
+}
+
+/**
+ * Independent before-write check. Re-parse the output and match entries by
+ * original start line (adjusted only for approved whole-entry replacements)
+ * and starting key/line identity. Counts alone cannot detect narrative loss.
+ * Separators, preamble, and other non-entry text are protected as well.
+ */
+export function verifyLearningsTrimStructure(before: string, after: string, candidates: LearningsTrimCandidate[]): void {
+  const original = parseEntries(before);
+  const rewritten = parseEntries(after);
+  const approved = checkedCandidates(original.entries, original.lines, candidates);
+  const refuse = (): never => {
+    throw new Error("Structural safety check failed: rewrite changed an entry boundary or non-targeted text. Aborting, no write performed.");
+  };
+  if (original.entries.length !== rewritten.entries.length) refuse();
+  let delta = 0;
+  let cursor = 0;
+  for (let i = 0; i < original.entries.length; i++) {
+    const entry = original.entries[i];
+    const next = rewritten.entries[i];
+    if (next.startLine !== entry.startLine + delta ||
+        original.lines.slice(cursor, entry.startLine).join("\n") !== rewritten.lines.slice(cursor + delta, next.startLine).join("\n")) refuse();
+    const candidate = approved.get(entry.startLine + 1);
+    if (candidate) {
+      if (next.skipReason || next.format !== entry.format || next.contentEndLine !== next.startLine + 1 ||
+          entryText(rewritten.lines, next) !== pointerFor(entryText(original.lines, entry), candidate)) refuse();
+      delta += 1 - (entry.contentEndLine - entry.startLine);
+      if (next.endLine !== entry.endLine + delta ||
+          original.lines.slice(entry.contentEndLine, entry.endLine).join("\n") !==
+          rewritten.lines.slice(next.contentEndLine, next.endLine).join("\n")) refuse();
+    } else {
+      if (next.endLine !== entry.endLine + delta || next.format !== entry.format ||
+          original.lines[entry.startLine] !== rewritten.lines[next.startLine] ||
+          original.lines.slice(entry.startLine, entry.endLine).join("\n") !==
+          rewritten.lines.slice(next.startLine, next.endLine).join("\n")) refuse();
+    }
+    cursor = entry.endLine;
+  }
+  if (original.lines.slice(cursor).join("\n") !== rewritten.lines.slice(cursor + delta).join("\n")) refuse();
+}
+
+function pointerFor(text: string, candidate: LearningsTrimCandidate): string {
+  const source = extractSource(text);
+  const marker = candidate.format === "heading" ? "###" : "-";
+  const pointer = `${marker} [${candidate.key}] → see ${candidate.file}:${candidate.line} — ${candidate.hook}`;
+  return source ? `${pointer} (Source: ${source})` : pointer;
+}
+
 /**
  * Rewrite LEARNINGS.md entries for exactly the given `candidates` — an
  * explicit, caller-approved list (typically a subset, or all, of what
@@ -375,7 +498,7 @@ export function applyLearningsTrimCandidates(
   candidates: LearningsTrimCandidate[]
 ): LearningsTrimResult {
   const { entries, lines } = parseEntries(learnings);
-  const byStartLine = new Map(candidates.map((c) => [c.entryStartLine, c]));
+  const byStartLine = checkedCandidates(entries, lines, candidates);
 
   const trimmedKeys: string[] = [];
   let alreadyPointer = 0;
@@ -406,26 +529,16 @@ export function applyLearningsTrimCandidates(
       continue; // no approved candidate for this entry — keep full narrative
     }
 
-    const keysInEntry = entryCitedKeys(lines, entry);
-    if (keysInEntry.length !== 1 || keysInEntry[0] !== candidate.key) {
-      throw new Error(
-        `Candidate for ${candidate.key} points at LEARNINGS.md entry starting at line ${startLine1}, but that ` +
-          `entry cites [${keysInEntry.join(", ") || "no key"}] — stale candidate list (content changed since ` +
-          `it was computed?). Aborting, no write performed.`
-      );
-    }
-
     trimmedKeys.push(candidate.key);
-    const source = extractSource(text);
-    const marker = candidate.format === "heading" ? "###" : "-";
-    const pointer = `${marker} [${candidate.key}] → see ${candidate.file}:${candidate.line} — ${candidate.hook}`;
-    outLines.push(source ? `${pointer} (Source: ${source})` : pointer);
+    outLines.push(pointerFor(text, candidate));
+    for (let i = entry.contentEndLine; i < entry.endLine; i++) outLines.push(lines[i]);
     cursor = entry.endLine;
   }
   // Trailing lines after the last entry.
   for (let i = cursor; i < lines.length; i++) outLines.push(lines[i]);
 
   const newLearnings = outLines.join("\n");
+  verifyLearningsTrimStructure(learnings, newLearnings, candidates);
 
   return {
     learnings: newLearnings,
