@@ -48,14 +48,23 @@ The input and canonical output are each limited to 64 KiB and 32 servers. Every 
 UTF-8 BOMs and duplicate object keys at any depth are refused. After validation the script writes
 exactly `JSON.stringify(parsed, null, 2) + "\n"`; formatting-only changes report unchanged.
 
-Every env value and every header value must be exactly one `${VAR}` or `${VAR:-}` reference
-(empty default only). The case-insensitive header allowlist `Accept`, `Content-Type`, `User-Agent`,
-and `MCP-Protocol-Version` may also contain literal values. Store the complete credential value
-via platform secrets, including any `Bearer ` prefix needed for an Authorization header.
-Literal defaults, mixed literal/reference values, and multiple references are refused.
-Credential args following `--token`, `--api-key`, `--key`, `--secret`, `--password`, or `--auth`,
-and assignments containing `token=`, `key=`, `secret=`, `password=`, or `auth=` (case-insensitive),
-must likewise use a single reference as the value.
+Credential names are split on hyphens, underscores, dots, and camelCase, then lowercased.
+A name is credential-bearing if any segment is `secret`, `token`, `password`, `passwd`, `pwd`,
+`credential`, `credentials`, `auth`, `authorization`, `bearer`, `cookie`, `apikey`, or `privatekey`,
+or a segment pair is `api`, `access`, `private`, `secret`, `client`, or `signing` followed by `key`.
+`key` alone, `sort-key`, and `primary-key` are ordinary names. This same rule applies to env keys,
+header names (including `Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, and
+`X-Auth-Token`), and arg names in `--flag=value`, `--flag value`, or anchored `NAME=value` forms.
+Credential values must be exactly `${VAR}` or `${VAR:-}` (empty default only), optionally
+preceded by exactly `Bearer `, `Basic `, or `Token `. Variable names must match `[A-Z_][A-Z0-9_]*`.
+Store credentials via platform secrets. Literal defaults, mixed literal/reference values,
+multiple references, and missing credential flag values are refused.
+
+Other env/header values may be ordinary literals, such as `NODE_ENV=production` or
+`User-Agent: my-client`. Every env, header, arg, command, and URL value is still checked for
+literal secrets: Bearer/Basic/Token values without references, known token prefixes (`sk-`,
+`ghp_`, `gho_`, `github_pat_`, `xox[abpr]-`, `AKIA`, `glpat-`), JWTs with three base64url segments,
+and PEM headers. No header name bypasses this check.
 
 The poller's 4 KiB reminder budget also applies: 128 bytes are reserved for its summary, and
 server metadata lines include separators, sorted/deduplicated reference names, and the largest

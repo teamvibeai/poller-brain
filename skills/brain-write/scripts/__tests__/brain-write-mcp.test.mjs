@@ -7,7 +7,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-const script = fileURLToPath(new URL("../brain-write.mjs", import.meta.url));
+const script = process.env.BRAIN_WRITE_TEST_SCRIPT || fileURLToPath(new URL("../brain-write.mjs", import.meta.url));
 const config = (server = { command: "node" }, name = "demo") => JSON.stringify({ mcpServers: { [name]: server } });
 const canonical = (input) => JSON.stringify(JSON.parse(input), null, 2) + "\n";
 const http = { type: "http", url: "https://example.test/mcp" };
@@ -64,50 +64,106 @@ const review1 = [
     `server${i}`, { command: "node", env: { KEY: "${" + "V".repeat(100) + "}" } },
   ])) }), /4096-byte.*reminder|reminder.*4096-byte/],
 ];
-for (const [label, input, reason] of review1) {
-  test(`review1 finding ${label}`, (t) => {
-    const result = refuse(fixture(t), input, reason);
-    assert.doesNotMatch(result.stderr, /sk-private|literal-secret|api_key=|session=/);
-  });
+// One shared positive/negative matrix exercises the CLI, not an isolated regex.
+const credentialMatrix = review1.map(([label, input, reason]) => [
+  `review1 ${label}`, input, reason,
+]);
+const positions = {
+  env: (name, value) => ({ command: "node", env: { [name]: value } }),
+  header: (name, value) => ({ ...http, headers: { [name]: value } }),
+  assigned: (name, value) => ({ command: "node", args: [`--${name}=${value}`] }),
+  separate: (name, value) => ({ command: "node", args: [`--${name}`, value] }),
+};
+const credentialNames = [
+  "secret", "token", "password", "passwd", "pwd", "credential", "credentials",
+  "auth", "Authorization", "bearer", "cookie", "apikey", "privatekey",
+  "API_KEY", "access-key", "private.key", "secretKey", "clientKey", "signing-key",
+  "client-secret", "access-token", "clientSecret", "accessToken", "proxyAuth",
+  "Proxy-Authorization", "Cookie", "X-Api-Key", "X-Auth-Token",
+];
+for (const [position, server] of Object.entries(positions)) {
+  for (const name of credentialNames) {
+    credentialMatrix.push(
+      [`${position} credential name ${name}`, config(server(name, "DO_NOT_ECHO")), /platform secrets/],
+      [`${position} credential reference ${name}`, config(server(name, "${TOKEN}"))],
+    );
+  }
+  for (const name of ["key", "sort-key", "primary-key", "monkey", "tokenizer", "author", "secretary", "NODE_ENV", "X-Session"]) {
+    credentialMatrix.push([`${position} ordinary name ${name}`, config(server(name, "production"))]);
+  }
+  for (const value of ["${TOKEN}", "${TOKEN:-}", "Bearer ${TOKEN}", "Bearer ${TOKEN:-}", "Basic ${TOKEN}", "Token ${TOKEN:-}", "${AKIA_TOKEN}", "${GHP_TOKEN:-}"]) {
+    credentialMatrix.push([`${position} exact reference ${value}`, config(server("API_KEY", value))]);
+  }
+  for (const value of [
+    "$TOKEN", "${}", "${1TOKEN}", "${TOKEN", "${TOKEN-default}", "${token}",
+    "${TOKEN}\n", "${TOKEN}\r", "${TOKEN}\u2028", "${TOKEN}\u2029", " ${TOKEN}", "${TOKEN} ",
+    "${TOKEN}${OTHER}", "prefix ${TOKEN}", "${TOKEN:-DO_NOT_ECHO}", "${TOKEN:-}${OTHER}",
+    "Bearer ${TOKEN} DO_NOT_ECHO", "Bearer  ${TOKEN}", "bearer ${TOKEN}", "plain text", "",
+  ]) {
+    credentialMatrix.push([`${position} invalid reference ${JSON.stringify(value)}`, config(server("API_KEY", value)), /platform secrets/]);
+  }
 }
-
-for (const key of ["Accept", "content-type", "USER-AGENT", "Mcp-Protocol-Version"]) {
-  test(`allows literal header from the case-insensitive allowlist: ${key}`, (t) => {
-    success(fixture(t).run(config({ ...http, headers: { [key]: "ordinary literal" } })));
-  });
+// Review2 repros: separated multi-segment flags, allowlisted headers, legitimate
+// scheme references (HTTP and SSE), ordinary env literals, and a non-secret key flag.
+credentialMatrix.push(
+  ["review2 --client-secret literal", config({ command: "node", args: ["--client-secret", "sk-private"] }), /platform secrets/],
+  ["review2 --access-token literal", config({ command: "node", args: ["--access-token", "sk-private"] }), /platform secrets/],
+  ["review2 User-Agent literal secret", config({ ...http, headers: { "User-Agent": "Bearer sk-private" } }), /platform secrets/],
+  ["review2 HTTP scheme reference", config({ ...http, headers: { Authorization: "Bearer ${TOKEN}" } })],
+  ["review2 SSE scheme reference", config({ type: "sse", url: "https://example.test/sse", headers: { Authorization: "Bearer ${TOKEN:-}" } })],
+  ["review2 ordinary env", config({ command: "node", env: { NODE_ENV: "production" } })],
+  ["review2 sort-key", config({ command: "node", args: ["server.js", "--sort-key=name"] })],
+  ["ordinary npx invocation", config({ command: "npx", args: ["-y", "@scope/server"] })],
+  ["missing credential flag value", config({ command: "node", args: ["--client-secret"] }), /platform secrets/],
+  ["credential flag followed by another flag", config({ command: "node", args: ["--access-token", "--verbose"] }), /platform secrets/],
+  ["IPv4 URL is not a three-segment JWT", config({ type: "http", url: "http://127.0.0.1:1234/mcp" })],
+);
+for (const assignment of ["TOKEN", "clientKey", "client_secret", "Password", "proxyAuth"]) {
+  credentialMatrix.push(
+    [`anchored assignment ${assignment} literal`, config({ command: "node", args: [`${assignment}=DO_NOT_ECHO`] }), /platform secrets/],
+    [`anchored assignment ${assignment} reference`, config({ command: "node", args: [assignment + "=${TOKEN}"] })],
+  );
 }
-for (const field of ["env", "headers"]) {
-  for (const key of ["MODE", "Cookie", "X-Session", "Accept "]) {
-    test(`refuses an unrecognized literal in ${field}.${key}`, (t) => {
-      const server = field === "env" ? { command: "node" } : http;
-      refuse(fixture(t), config({ ...server, [field]: { [key]: "ordinary literal" } }), /platform secrets/);
-    });
+for (const key of ["Accept", "content-type", "USER-AGENT", "Mcp-Protocol-Version", "X-Session", "Accept "]) {
+  credentialMatrix.push([`ordinary header ${key}`, config({ ...http, headers: { [key]: "ordinary literal" } })]);
+}
+const literalPositions = {
+  env: value => ({ command: "node", env: { NODE_ENV: value } }),
+  header: value => ({ ...http, headers: { "User-Agent": value } }),
+  arg: value => ({ command: "node", args: [value] }),
+  command: value => ({ command: value }),
+  url: value => ({ ...http, url: `https://example.test/${value}` }),
+};
+for (const [position, server] of Object.entries(literalPositions)) {
+  for (const value of [
+    "Bearer DO_NOT_ECHO", "bearer DO_NOT_ECHO", "Basic DO_NOT_ECHO", "Token DO_NOT_ECHO",
+    "sk-private", "ghp_private", "gho_private", "github_pat_private",
+    "xoxa-private", "xoxb-private", "xoxp-private", "xoxr-private", "AKIA_PRIVATE", "glpat-private",
+    "eyJhbGciOiJIUzI1NiJ9.payload.signature", "abc.def.ghi", "-----BEGIN PRIVATE KEY-----",
+    "prefix sk-private ${DUMMY}", "${DUMMY:-ghp_private}", "Bearer ${TOKEN:-DO_NOT_ECHO}",
+  ]) {
+    credentialMatrix.push([`${position} literal secret ${JSON.stringify(value)}`, config(server(value)), /platform secrets/]);
+  }
+  for (const value of ["${TOKEN}", "${TOKEN:-}", "Bearer ${TOKEN}", "Basic ${TOKEN:-}", "Token ${TOKEN}", "${AKIA_TOKEN}", "${GHP_TOKEN:-}", "abc.def.ghi.jkl"]) {
+    credentialMatrix.push([`${position} ordinary reference ${value}`, config(server(value))]);
   }
 }
 
-for (const flag of ["--token", "--API-KEY", "--key", "--SECRET", "--password", "--Auth"]) {
-  test(`requires an exact reference in separate and assigned credential args: ${flag}`, (t) => {
-    const f = fixture(t);
-    for (const value of ["DO_NOT_ECHO", "prefix ${TOKEN}", "${TOKEN:-DO_NOT_ECHO}", "${TOKEN}${OTHER}", "${TOKEN}\n", ""]) {
-      for (const args of [[flag, value], [`${flag}=${value}`]]) {
-        const result = refuse(f, config({ command: "node", args }), /platform secrets/);
-        assert.doesNotMatch(result.stderr, /DO_NOT_ECHO/);
+test("MCP credential positive and negative matrix (review1 + review2)", async (t) => {
+  const f = fixture(t);
+  for (const [label, input, reason] of credentialMatrix) {
+    await t.test(label, () => {
+      if (reason) {
+        const result = refuse(f, input, reason);
+        assert.doesNotMatch(result.stdout + result.stderr, /DO_NOT_ECHO|sk-private|literal-secret|api_key=|session=/);
+      } else {
+        const result = f.run(input);
+        success(result, /Created|Updated|Unchanged/);
+        assert.equal(fs.readFileSync(path.join(f.root, ".mcp.json"), "utf8"), canonical(input));
       }
-    }
-    for (const value of ["${TOKEN}", "${TOKEN:-}"]) {
-      for (const args of [[flag, value], [`${flag}=${value}`]]) {
-        success(f.run(config({ command: "node", args })), /Created|Updated|Unchanged/);
-      }
-    }
-  });
-}
-for (const assignment of ["TOKEN", "clientKey", "client_secret", "Password", "proxyAuth"]) {
-  test(`requires an exact reference in any credential assignment: ${assignment}`, (t) => {
-    const f = fixture(t);
-    refuse(f, config({ command: "node", args: [`${assignment}=DO_NOT_ECHO`] }), /platform secrets/);
-    success(f.run(config({ command: "node", args: [`${assignment}=\u0024{TOKEN}`] })), /Updated/);
-  });
-}
+    });
+  }
+});
 
 for (const url of [
   "https://example.test/mcp?", "https://example.test/mcp#", "https://example.test/mcp#DO_NOT_ECHO",
@@ -299,35 +355,6 @@ for (const [label, input, reason] of invalid) {
 }
 
 for (const field of ["env", "headers"]) {
-  for (const key of ["TOKEN", "clientSecret", "api_key", "Authorization", "Password"]) {
-    test(`refuses literal secret in ${field}.${key} with platform secrets guidance`, (t) => {
-      const server = field === "env" ? { command: "node" } : http;
-      const result = refuse(fixture(t), config({ ...server, [field]: { [key]: "DO_NOT_ECHO" } }), /platform secrets.*\$\{VAR\}/);
-      assert.doesNotMatch(result.stderr, /DO_NOT_ECHO/);
-    });
-  }
-  for (const value of ["${TOKEN}", "${TOKEN:-}"]) {
-    test(`accepts ${field} secret reference ${value} without printing its value`, (t) => {
-      const f = fixture(t);
-      const server = field === "env" ? { command: "node" } : http;
-      const result = f.run(config({ ...server, [field]: { API_KEY: value } }));
-      success(result, /env references: TOKEN/);
-      assert.doesNotMatch(result.stdout + result.stderr, /private-default|Bearer|\$\{/);
-    });
-  }
-  for (const value of ["Bearer DO_NOT_ECHO", "bearer DO_NOT_ECHO", "Basic DO_NOT_ECHO", "sk-private", "sk_test_private", "tvp_private", "ghp_private", "github_pat_private", "xoxb-private", "eyJhbGciOiJIUzI1NiJ9.payload.signature", "-----BEGIN PRIVATE KEY-----\nDO_NOT_ECHO\n-----END PRIVATE KEY-----"]) {
-    test(`refuses credential-looking ${field} value ${value} under an ordinary key`, (t) => {
-      const server = field === "env" ? { command: "node" } : http;
-      const result = refuse(fixture(t), config({ ...server, [field]: { OTHER: value } }), /platform secrets.*\$\{VAR\}/);
-      assert.doesNotMatch(result.stderr, /DO_NOT_ECHO|private|payload/);
-    });
-  }
-  test(`refuses malformed secret references in ${field}`, (t) => {
-    const server = field === "env" ? { command: "node" } : http;
-    for (const value of ["$TOKEN", "${}", "${1TOKEN}", "${TOKEN", "${TOKEN-default}", "${TOKEN}\n", " ${TOKEN}", "${TOKEN} ", "${TOKEN}${OTHER}", "Bearer ${TOKEN}", "${TOKEN:-private-default}", "${TOKEN:-}${OTHER}", "plain text", ""]) {
-      refuse(fixture(t), config({ ...server, [field]: { API_KEY: value } }), /platform secrets.*\$\{VAR\}/);
-    }
-  });
   for (const bytes of [4096, 4097]) {
     test(`${field} value ${bytes === 4096 ? "at" : "over"} 4 KiB boundary`, (t) => {
       const f = fixture(t);

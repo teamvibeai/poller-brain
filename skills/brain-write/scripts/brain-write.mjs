@@ -12,7 +12,6 @@ const MAX_MCP_STRING_BYTES = 4 * 1024;
 // teamvibe.ai main packages/poller/src/mcp-session.ts:159-163,187-189
 // (#795, ac085e9f): reserve the union of legacy and merged base transports.
 const BASE_MCP_SERVERS = new Set(["slack", "teamvibe-api", "teamvibe"]);
-const LITERAL_MCP_HEADERS = new Set(["accept", "content-type", "user-agent", "mcp-protocol-version"]);
 // teamvibe.ai main packages/poller/src/brain-mcp.ts:9-13,64-67 (#795, ac085e9f).
 const MAX_MCP_REMINDER_BYTES = 4 * 1024;
 const MCP_SUMMARY_BYTES = 128;
@@ -189,8 +188,41 @@ function regularFile(file) {
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 // Keep reference syntax in sync with poller brain-mcp.ts (teamvibe.ai PR #795).
 const envReferences = (value) => value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}/g);
-const secretReference = (value) => /^\$\{[A-Za-z_][A-Za-z0-9_]*(?::-)?\}(?![\s\S])/.test(value);
+// An explicit end assertion also refuses a trailing newline (unlike JS's $).
+const secretReference = (value) => /^(?:(?:Bearer|Basic|Token) )?\$\{[A-Z_][A-Z0-9_]*(?::-)?\}(?![\s\S])/.test(value);
+const CREDENTIAL_SEGMENTS = new Set([
+  "secret", "token", "password", "passwd", "pwd", "credential", "credentials",
+  "auth", "authorization", "bearer", "cookie", "apikey", "privatekey",
+]);
+const CREDENTIAL_KEY_PREFIXES = new Set(["api", "access", "private", "secret", "client", "signing"]);
+
+function credentialName(name) {
+  const segments = name
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase().split(/[-_.]+/);
+  return segments.some((segment, i) => CREDENTIAL_SEGMENTS.has(segment) ||
+    (CREDENTIAL_KEY_PREFIXES.has(segment) && segments[i + 1] === "key"));
+}
+
+function literalSecret(value) {
+  for (const match of value.matchAll(/\b(?:Bearer|Basic|Token)\s+(\S+)/gi)) {
+    if (!secretReference(match[1])) return true;
+  }
+  // Reference names aren't literal credentials, even when named AKIA_TOKEN.
+  const literal = value.replace(/\$\{[A-Z_][A-Z0-9_]*(?::-)?\}/g, "");
+  return /\b(?:sk-|ghp_|gho_|github_pat_|xox[abpr]-|AKIA|glpat-)[A-Za-z0-9_-]+/i.test(literal) ||
+    /(?<![A-Za-z0-9_.-])[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_.-])/.test(literal) ||
+    /-----BEGIN [A-Z0-9 ]+-----/i.test(literal);
+}
+
 const credentialError = () => new Error("MCP credentials must use platform secrets: store the value via platform secrets and reference it as ${VAR} or ${VAR:-} (empty default only)");
+
+function validateMcpString(value, name = "") {
+  if ((credentialName(name) && !secretReference(value)) || literalSecret(value)) {
+    throw credentialError();
+  }
+}
 
 function parseMcp(content) {
   let text;
@@ -259,8 +291,7 @@ function validateMcp(content) {
       throw new Error(`MCP ${field} must be a string map`);
     }
     for (const [key, entry] of Object.entries(value)) {
-      if (field === "headers" && LITERAL_MCP_HEADERS.has(key.toLowerCase())) continue;
-      if (!secretReference(entry)) throw credentialError();
+      validateMcpString(entry, key);
     }
   };
   for (const [name, server] of servers) {
@@ -274,15 +305,20 @@ function validateMcp(content) {
     if (Object.keys(server).some((key) => !fields.includes(key))) throw new Error("Unexpected fields for MCP transport");
     if (type === "stdio") {
       if (typeof server.command !== "string" || !server.command.trim()) throw new Error("MCP stdio command must be a nonempty string");
+      validateMcpString(server.command);
       if (server.args !== undefined && (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string"))) {
         throw new Error("MCP stdio args must be an array of strings");
       }
       const args = server.args ?? [];
       for (let i = 0; i < args.length; i++) {
-        const assignment = args[i].match(/(?:token|key|secret|password|auth)=([\s\S]*)/i);
-        if (assignment && !secretReference(assignment[1])) throw credentialError();
-        if (/^--(?:token|api-key|key|secret|password|auth)$/i.test(args[i]) &&
-            i + 1 < args.length && !secretReference(args[i + 1])) throw credentialError();
+        validateMcpString(args[i]);
+        // Anchor names: --sort-key=name must not be mistaken for key=name.
+        const assignment = args[i].match(/^(?:--?)?([A-Za-z_][A-Za-z0-9_.-]*)=([\s\S]*)$/);
+        if (assignment) validateMcpString(assignment[2], assignment[1]);
+        else {
+          const flag = args[i].match(/^--?([A-Za-z_][A-Za-z0-9_.-]*)$/);
+          if (flag && credentialName(flag[1])) validateMcpString(args[i + 1] ?? "", flag[1]);
+        }
       }
       if (server.env !== undefined) stringMap(server.env, "env");
     } else {
@@ -300,6 +336,7 @@ function validateMcp(content) {
       if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) {
         throw new Error("MCP url must use https, or http only for localhost");
       }
+      validateMcpString(server.url);
       if (server.headers !== undefined) stringMap(server.headers, "headers");
     }
     // Mirror teamvibe.ai main packages/poller/src/brain-mcp.ts:125-140 (#795,
