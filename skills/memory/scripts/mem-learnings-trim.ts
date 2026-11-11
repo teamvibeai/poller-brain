@@ -21,10 +21,9 @@
  * There is no "--apply --all" / blind-trust-everything mode on purpose.
  *
  * SPAN SELECTORS (poller-brain#334): a key can have MORE THAN ONE candidate
- * — e.g. its own real entry, and an unrelated entry that merely mentions the
- * key once in passing (a cross-reference bullet inside a DIFFERENT key's
- * entry, which the parser reads as its own single-key "entry" — a known,
- * documented false-positive shape). A bare `--only MEM-25` is only accepted
+ * — e.g. two separate top-level bullets cite the same key. Heading blocks
+ * own their inner bullets; those are never separate candidates.
+ * A bare `--only MEM-25` is only accepted
  * when MEM-25 has exactly ONE candidate; with 2+, it's rejected as
  * ambiguous and you must disambiguate with `MEM-25@<entryStartLine>` (the
  * line number `mem-learnings-trim.ts` (no `--apply`) prints next to each
@@ -34,7 +33,7 @@
  * one just because they share a key.
  *
  * Idempotent: re-running --apply with a key that's already a pointer is a
- * no-op for that key. Count-verified: aborts (exit 1) on any invariant
+ * no-op for that key. Structurally and count-verified: aborts (exit 1) on any invariant
  * break — no silent drop.
  *
  * Usage:
@@ -51,6 +50,7 @@ import {
   findLearningsTrimCandidates,
   applyLearningsTrimCandidates,
   verifyLearningsTrimStats,
+  verifyLearningsTrimStructure,
   parseOnlySelectors,
   groupCandidatesByKey,
   unambiguousHeadlineKeys,
@@ -242,10 +242,18 @@ function main(): void {
     return;
   }
 
-  const learningsBefore = fs.readFileSync(LEARNINGS_PATH, "utf-8");
+  const learningsBytes = fs.readFileSync(LEARNINGS_PATH);
+  const learningsBefore = learningsBytes.toString("utf8");
+  if (!Buffer.from(learningsBefore).equals(learningsBytes)) {
+    throw new Error("Cannot preserve source bytes: LEARNINGS.md is not valid UTF-8. Aborting, no write performed.");
+  }
   const destinations = collectDestinations();
-  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, unreliableHooks } =
+  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, unreliableHooks, skippedEntries } =
     findLearningsTrimCandidates(learningsBefore, destinations);
+
+  for (const entry of skippedEntries) {
+    console.log(`skipped LEARNINGS.md:${entry.entryStartLine}-${entry.entryEndLine}: ${entry.reason}`);
+  }
 
   if (!apply) {
     printParseSummary({ totalEntries, multiKeyEntries, alreadyPointer, candidates });
@@ -268,7 +276,7 @@ function main(): void {
       console.warn(
         `⚠️  0 entries parsed from a ${Buffer.byteLength(learningsBefore)}B LEARNINGS.md that is over the ` +
           `${LEARNINGS_CAP_BYTES}B cap and contains MEM- keys. This looks like an entry-format mismatch ` +
-          `(only "### " and top-level "- " entry starts are recognized), NOT a confirmed-clean 0-candidates ` +
+          `(only "## " through "###### " headings and top-level "- " entry starts are recognized), NOT a confirmed-clean 0-candidates ` +
           `result — this brain's LEARNINGS.md convention may not be supported yet. Skipping.`
       );
       return;
@@ -327,7 +335,8 @@ function main(): void {
 
   const { learnings, stats } = applyLearningsTrimCandidates(learningsBefore, toApply);
 
-  // Machine count-verify BEFORE writing — throws (→ exit 1) on any violation.
+  // Re-parse and compare protected entries BEFORE writing; counts cannot detect narrative loss.
+  verifyLearningsTrimStructure(learningsBefore, learnings, toApply);
   const checks = verifyLearningsTrimStats(stats);
 
   fs.writeFileSync(LEARNINGS_PATH, learnings);
