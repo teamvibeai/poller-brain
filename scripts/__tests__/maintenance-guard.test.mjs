@@ -193,3 +193,165 @@ test('activity detection failure falls through to the time policy', (t) => {
   assert.equal(result.status, 0, result.stdout)
   assert.match(result.stdout, /idle streak ignored: cannot read TODAY\.md activity/)
 })
+
+// Real git history exercises both the read-side citation guard and scheduling.
+function history(t, options) {
+  const dir = brain(t, options)
+  const git = (...args) => {
+    const result = spawnSync('git', args, {
+      cwd: dir, encoding: 'utf8',
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com' },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout.trim()
+  }
+  git('init', '-q')
+  git('add', '-A')
+  git('commit', '-qm', 'base')
+  const commit = subject => git('commit', '-q', '--allow-empty', '-m', subject)
+  const checkpoint = (date = dateAgo(0)) => commit(`chore: consolidate memory checkpoint (${date}) — step 7`)
+  const pair = (date = dateAgo(0)) => {
+    writeFileSync(join(dir, 'reports', `${date}-memory-consolidation.md`), zeroPromotion)
+    writeFileSync(join(dir, 'reports', `${date}-memory-consolidation.json`), '{"operationType":"consolidation"}\n')
+  }
+  return { dir, git, commit, checkpoint, pair }
+}
+
+function state(dir) {
+  const result = spawnSync('bash', ['scripts/consolidation-state.sh', dir], {
+    cwd: repoRoot, encoding: 'utf8',
+  })
+  assert.ifError(result.error)
+  assert.equal(result.stderr, '')
+  return result
+}
+
+for (const daysAgo of [0, 1, 3]) {
+  test(`checkpoint without report requires resume even ${daysAgo} days later and outside window`, t => {
+    const { dir, checkpoint } = history(t)
+    checkpoint(dateAgo(daysAgo))
+    const result = guard(dir, { CONSOLIDATION_WINDOW_START: '24', CONSOLIDATION_WINDOW_END: '25' })
+    assert.equal(result.status, 0, result.stdout)
+    assert.match(result.stdout, /consolidation_resume: true/)
+    assert.doesNotMatch(result.stdout, /consolidation_needed/)
+    assert.equal(state(dir).status, 1)
+  })
+}
+
+test('report files on disk, staged or checkpointed, do not prove final completion', t => {
+  const { dir, git, checkpoint, pair, commit } = history(t)
+  checkpoint()
+  pair()
+  for (const stage of ['unstaged', 'staged', 'checkpointed']) {
+    if (stage === 'staged') git('add', '-A')
+    if (stage === 'checkpointed') commit(`chore: consolidate memory checkpoint (${dateAgo(0)}) — steps 10-12`)
+    const result = guard(dir)
+    assert.equal(result.status, 0, result.stdout)
+    assert.match(result.stdout, /consolidation_resume: true/)
+  }
+})
+
+test('completed final pair permits recent-run skip, including consumed JSON', t => {
+  const { dir, git, checkpoint, pair, commit } = history(t)
+  checkpoint()
+  pair()
+  git('add', '-A')
+  commit(`chore: consolidate memory checkpoint (${dateAgo(0)}) — steps 10-12`)
+  commit(`chore: consolidate memory (${dateAgo(0)})`)
+  for (const phase of ['present', 'consumed', 'deletion committed']) {
+    if (phase === 'consumed') rmSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.json`))
+    if (phase === 'deletion committed') { git('add', '-A'); commit('remove processed reports') }
+    assert.equal(state(dir).status, 0, state(dir).stdout)
+    assert.match(state(dir).stdout, /consolidation_state: complete/)
+    const result = guard(dir)
+    assert.equal(result.status, 1, result.stdout)
+    assert.match(result.stdout, /consolidation_needed: false/)
+  }
+  // Ordinary post-completion session activity must not restart the old cycle.
+  mkdirSync(join(dir, 'memory'))
+  writeFileSync(join(dir, 'memory', 'TODAY.md'), memLines(1))
+  assert.equal(guard(dir).status, 1)
+})
+
+for (const missing of ['md', 'json']) {
+  test(`a final subject without committed ${missing} report still requires recovery`, t => {
+    const { dir, git, checkpoint, pair, commit } = history(t)
+    checkpoint()
+    pair()
+    rmSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.${missing}`))
+    git('add', '-A')
+    commit(`chore: consolidate memory (${dateAgo(0)})`)
+    assert.equal(state(dir).status, 1)
+    assert.match(guard(dir).stdout, /consolidation_resume: true/)
+  })
+}
+
+test('a completed earlier attempt on the same date does not hide a new checkpoint', t => {
+  const { dir, git, checkpoint, pair, commit } = history(t)
+  checkpoint()
+  pair()
+  git('add', '-A')
+  commit(`chore: consolidate memory (${dateAgo(0)})`)
+  assert.equal(state(dir).status, 0)
+  checkpoint()
+  assert.equal(state(dir).status, 1)
+})
+
+test('wrong-date and lookalike final subjects do not satisfy the citation guard', t => {
+  const { dir, git, checkpoint, pair, commit } = history(t)
+  checkpoint()
+  pair()
+  git('add', '-A')
+  commit(`chore: consolidate memory (${dateAgo(1)})`)
+  commit(`chore: consolidate memory (${dateAgo(0)}) extra`)
+  assert.equal(state(dir).status, 1)
+  commit(`chore: consolidate memory (${dateAgo(0)})`)
+  commit(`chore: consolidate memory (${dateAgo(0)}) extra`)
+  assert.equal(state(dir).status, 0)
+})
+
+test('edited completed report requires inspection; missing history is explicitly unknown', t => {
+  const { dir, git, checkpoint, pair, commit } = history(t)
+  checkpoint()
+  pair()
+  git('add', '-A')
+  commit(`chore: consolidate memory (${dateAgo(0)})`)
+  writeFileSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.md`), 'unfinished rewrite')
+  assert.equal(state(dir).status, 1)
+  rmSync(join(dir, '.git'), { recursive: true })
+  assert.equal(state(dir).status, 2)
+  assert.match(state(dir).stdout, /unknown/)
+})
+
+test('no checkpoints keeps cadence policy; shallow history cannot certify old citations', t => {
+  const { dir, git } = history(t, { newestDaysAgo: 0 })
+  assert.match(state(dir).stdout, /consolidation_state: none/)
+  assert.equal(guard(dir).status, 1)
+  writeFileSync(join(dir, '.git', 'shallow'), `${git('rev-parse', 'HEAD')}\n`)
+  assert.equal(state(dir).status, 2)
+  assert.match(state(dir).stdout, /shallow history/)
+})
+
+test('commit-body examples cannot impersonate checkpoint or final subjects', t => {
+  const { dir, git, checkpoint, pair, commit } = history(t)
+  checkpoint()
+  pair()
+  git('add', '-A')
+  commit(`documentation\n\nchore: consolidate memory (${dateAgo(0)})`)
+  assert.equal(state(dir).status, 1)
+  commit(`chore: consolidate memory (${dateAgo(0)})`)
+  commit(`documentation\n\nchore: consolidate memory checkpoint (${dateAgo(0)}) — step 0`)
+  assert.equal(state(dir).status, 0)
+})
+
+test('a final report removed from disk requires recovery even when committed', t => {
+  const { dir, git, checkpoint, pair, commit } = history(t)
+  checkpoint()
+  pair()
+  git('add', '-A')
+  commit(`chore: consolidate memory (${dateAgo(0)})`)
+  rmSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.md`))
+  assert.equal(state(dir).status, 1)
+})

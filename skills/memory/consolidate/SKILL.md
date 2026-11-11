@@ -22,6 +22,28 @@ If it's 1+ days old or missing, run consolidation.
 
 **All steps below are mandatory on every consolidation run.** There is no "lightweight" or "partial" mode. Even when daily logs are empty or steps 2–4 produce zero promotions, Step 6 (Regenerate SUMMARY.md) MUST still execute. Never skip or abbreviate steps because a run "has nothing to process."
 
+### Pre-Step-0. Verify Prior-Cycle Completion (mechanical citation guard)
+
+Before resetting TODAY.md or writing any consolidation citation, record the session-start HEAD with `git rev-parse HEAD` (for Step 10), then run from the brain root:
+
+```bash
+bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .
+```
+
+This read-only check finds the newest checkpoint, extracts its cycle date, and requires a later exact `chore: consolidate memory (YYYY-MM-DD)` final commit plus the matching markdown/JSON report pair in that commit's tree. The markdown must also exist on disk without uncommitted report edits. The JSON may have been consumed by the platform, so its committed copy is the evidence. A report on disk alone never proves completion.
+
+- **Exit 1 / `consolidation_resume: true`:** treat the prior cycle as incomplete. Inspect `git status --short`, checkpoint history, and any report drafts; reconcile existing work and resume after the last verified completed step. Do NOT repeat Step 0's archive/reset or retention deletions blindly. Checkpoint subjects identify a boundary, not proof that later steps ran. Record the interrupted date, checkpoint SHA, missing evidence, and recovery in the current markdown report's `## Prior-Cycle Recovery` section and JSON `processImprovements`. Audit SUMMARY.md and episodic history citations to that cycle; remove or label unsupported claims as incomplete.
+- **Exit 2 / history unavailable:** inspect available history and reports manually, record the uncertainty, and do not assert completion from unverified citations. A shallow clone with no visible checkpoint is also uncertain.
+- **Exit 0:** no incomplete checkpoint was found in available history. Still inspect `git status --short` and today's report together before starting: a clean tree with no report or an uncommitted report can both represent an interruption before any checkpoint. Reconcile rather than discard existing work.
+
+**No forward completion citations:** Until the final commit and report pair are verified, SUMMARY.md/episodic history may describe this run only as "in progress" with existing checkpoint SHAs. Do not write "Commit: see chore: consolidate memory (YYYY-MM-DD)" or a completed-history report link before that evidence exists. Defer completion citations until after the final commit; commit any subsequent citation edits separately.
+
+### Checkpoint Rules (apply to every checkpoint and the final commit)
+
+**Never commit over an unresolved integrity alarm.** If Step 9d or any other step (including recovery of a prior cycle) raises an integrity alarm, stop and investigate under that step's guidance; do not commit a partial state or advance to the next step until resolved. This preserves Step 9g's exception at every new checkpoint as well as 6a and the final commit. Do not clear an alarm merely to make a checkpoint.
+
+Before staging, inspect and reconcile unexpected local changes under the base-brain git-safety protocol. If there are no changes, skip the intermediate commit silently (`git diff --cached --quiet` after staging); other commit failures must be investigated, never silently ignored. Use the cycle's original date in every checkpoint/final subject, including a resume across midnight. Keep a cumulative `filesChanged` list across checkpoints; a clean tree does not erase earlier work from the report.
+
 ### 0. Archive TODAY.md
 
 Before processing, archive `memory/TODAY.md` to the daily/ directory:
@@ -50,6 +72,17 @@ If `memory/TODAY.md` doesn't exist, do NOT skip this step. Instead: create `memo
 - [ ] `memory/daily/YYYY-MM-DD.md` (today's date) is in `filesChanged` (unless TODAY.md did not exist prior to this run)
 
 If either entry is missing, add it now. Do NOT advance to Step 1 with these entries missing — the `today-md-archived` eval criterion checks `filesChanged` and will fail if TODAY.md is absent, even when the archival was performed correctly.
+
+### 0a. Checkpoint Commit (crash-safety)
+
+**Commit immediately after Step 0, before any Step 1–6 work.** Protect the TODAY.md reset and verbatim daily archives (#474). Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the staged tree is empty.
+
+```bash
+git add -A
+if ! git diff --cached --quiet; then
+  git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — step 0"
+fi
+```
 
 ### 1. Scan Daily Logs
 
@@ -154,6 +187,17 @@ Route new/updated facts to appropriate locations:
 | Preferences | `memory/core/PREFERENCES.md` |
 | Lessons | `memory/core/LEARNINGS.md` |
 | Mistakes | `memory/core/MISTAKES.md` |
+
+### 4a. Checkpoint Commit (crash-safety)
+
+**Commit immediately after Step 4, before Step 5.** Protect the verified MEM promotions, tier writes, and registry/lifecycle changes from Steps 1–4 (#458); the Step 0a archive checkpoint does not cover those later writes. Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the staged tree is empty.
+
+```bash
+git add -A
+if ! git diff --cached --quiet; then
+  git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — steps 1-4"
+fi
+```
 
 ### 5. Promote Mistakes
 
@@ -343,14 +387,14 @@ The 9000 B cap is a soft bound that keeps the always-in-context SUMMARY.md from 
 
 ### 6a. Checkpoint Commit (crash-safety)
 
-**Commit now, before continuing to Step 7.** `teamvibeai/poller-brain#436`: this skill previously committed exactly once, at the very end (Step 12). A session that dies anywhere in Steps 0-11 — idle-watchdog kill, session-lock force-steal, or any other mid-run termination — left the entire cycle's writes sitting uncommitted with no report, recoverable only by luck if a later wake happened to notice the dirty working tree before anything else touched it. Intermediate checkpoints bound the blast radius of a mid-run death to "since the last checkpoint" instead of "the whole cycle." SUMMARY.md is the highest-value tier write to protect first, since it's always in context.
+**Commit now, before Step 7.** Protect SUMMARY.md regeneration and Steps 5–6 lifecycle work. Intermediate checkpoints bound a crash to work since the last checkpoint (#436). Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the staged tree is empty.
 
-```
+```bash
 git add -A
-git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — steps 0-6"
+if ! git diff --cached --quiet; then
+  git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — steps 5-6"
+fi
 ```
-
-If the working tree is empty at this point (a zero-promotion cycle with no file changes yet), skip silently — there is nothing to checkpoint. If the commit fails because the working tree already carries unexpected local changes from a prior interrupted run, do not discard them — inspect and reconcile first, per the base-brain git-safety protocol, before proceeding.
 
 ### 7. Archive Old Daily Logs
 
@@ -363,6 +407,17 @@ For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older 
 - After deletion, verify no files dated more than 30 days ago remain in `memory/daily/`.
 
 **Recent-log retention (non-negotiable):** NEVER delete `memory/daily/<today>.md` or `memory/daily/<yesterday>.md`, regardless of whether their contents have been promoted. Same-day and next-day sessions rely on these files to recover context. Promotion is not a reason to delete; deletion is only for files dated 30+ days ago.
+
+### 7a. Checkpoint Commit (crash-safety)
+
+**Commit retention deletions immediately after Step 7, before Step 8 or any Step 9 work (#472).** Keep 9g as an additional checkpoint for the later sweep/audit/trim work. Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the staged tree is empty.
+
+```bash
+git add -A
+if ! git diff --cached --quiet; then
+  git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — step 7"
+fi
+```
 
 ### 8. Heartbeat Sweep & Self-Report
 
@@ -567,7 +622,7 @@ An entry the script cannot find cited anywhere (or only ever cited ambiguously, 
 
 ### 9g. Checkpoint Commit (crash-safety)
 
-**Commit again now, before continuing to Step 10 — unless an unresolved integrity alarm fired in Steps 7-9.** Second of the two intermediate checkpoints added by `teamvibeai/poller-brain#436` (see Step 6a for the full rationale) — protects the heartbeat sweep, MEM audit, and size-reduction work from Steps 7-9 the same way Step 6a protected Steps 0-6.
+**Commit again now, before continuing to Step 10 — unless an unresolved integrity alarm fired in Steps 7-9.** Apply **Checkpoint Rules**. This checkpoint protects the heartbeat sweep, MEM audit, and size-reduction work from Steps 8–9; Step 7a already protected retention deletions.
 
 **Exception — do not run this checkpoint if Step 9d's integrity-alarm condition fired and is still unresolved.** Step 9d already instructs: "On non-zero exit, treat it as an integrity alarm: do NOT commit a partial state, and record the failure in the report. Investigate before retrying." That instruction takes precedence over this checkpoint — committing here would silently override it. If Step 9d (or any other Step 7-9 sub-step) raised an unresolved alarm, stop and investigate per that step's own guidance instead of running the commit below; do not proceed to Step 10 with an unresolved alarm either.
 
@@ -575,10 +630,12 @@ If no unresolved alarm is pending:
 
 ```
 git add -A
-git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — steps 7-9"
+if ! git diff --cached --quiet; then
+  git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — steps 8-9"
+fi
 ```
 
-Skip silently if the working tree is empty (nothing changed since the Step 6a checkpoint).
+Skip silently if the working tree is empty (nothing changed since the Step 7a checkpoint).
 
 ### 10. Assess Daily Log Compliance
 
@@ -586,7 +643,7 @@ Before self-critique, run observable checks on the daily log scratchpad and reco
 
 Checks (all over the last 7 days unless specified):
 
-1. **Today's log exists.** First, determine if user sessions ran today *before* this consolidation by running `git log --oneline --since='midnight'`. This lists commits from today that predate the current run (since the consolidation commit hasn't been made yet).
+1. **Today's log exists.** First, determine if user sessions ran today *before* this consolidation by running `git log <session-start-HEAD> --oneline --since='midnight'`. Use the pre-Step-0 HEAD recorded at session start (or the original HEAD from a resumed run's ledger) to exclude this run's checkpoint commits; they are maintenance work, not evidence of earlier user sessions.
    - **No pre-consolidation commits today:** write `Today's log: no user sessions before this consolidation — not applicable` in the compliance section; set `daily-log-exists-today` to `true` in selfAssessment (criterion is excluded from scoring for this report).
    - **Pre-consolidation commits exist today:** verify `memory/daily/YYYY-MM-DD.md` (the file that Step 0 archived from TODAY.md) exists and contains content from those sessions (more than just a consolidation stub line). If it does, write `Today's log: present, N entries ✅`; set `daily-log-exists-today` to `true`. If it is missing or contains only a consolidation stub, write `Today's log: missing or stub-only despite N commits today ❌`; set `daily-log-exists-today` to `false`.
    - **Important:** Do NOT use `memory/TODAY.md` for this check — Step 0 resets it to a bare consolidation stub regardless of whether sessions ran. Only `memory/daily/YYYY-MM-DD.md` contains actual pre-consolidation session content.
@@ -619,6 +676,19 @@ If any check fails, do one of two things before finishing:
 Example low-coverage self-critique: `"[self-critique] Coverage 3/7 (43%): sessions on 2026-05-17, 2026-05-18, 2026-05-20 had no daily log — 2026-05-17 and 2026-05-18 were chore-commit-only days (no log-write.ts call), 2026-05-20 had no write because TODAY.md was archived into a single cross-day file. Will add log-write.ts call to chore commits going forward."`
 
 Do not silently pass a failing check.
+
+### 10a. Persist Compliance Ledger and Checkpoint
+
+Before self-critique, write the Step 10 compliance results, cumulative `filesChanged`, completed-step boundary, session-start HEAD, and any prior-cycle recovery/occurrence counts to `memory/episodic/consolidation-progress-YYYY-MM-DD.md`. Include the working JSON fields (`filesChanged`, `selfAssessment`, `processImprovements`) in a fenced JSON block. Mark this ledger explicitly as **in progress**, not completed evidence. Keep drafts outside `reports/` so the platform cannot ingest an unfinished report. This ledger preserves bookkeeping if the session dies before reporting (#462).
+
+**Commit that ledger and daily-log backfills before Step 11.** Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the staged tree is empty.
+
+```bash
+git add -A
+if ! git diff --cached --quiet; then
+  git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — step 10"
+fi
+```
 
 ### 11. Process Self-Critique
 
@@ -656,7 +726,7 @@ Example entries:
 - `memory/daily/YYYY-MM-DD.md` — the archived daily log (Step 0); add it now if missing (omit only when TODAY.md did not exist prior to this run)
 - `memory/MEM_REGISTRY.md` — if any `[MEM-NNN]` entries were processed or lifecycle changes made in steps 1b/1c; add it now if missing
 
-Create both a markdown and JSON report:
+Create both reports, carrying forward Step 10a's ledger fields without dropping compliance, recovery, or cumulative file tracking. Once both reports are verified, remove the in-progress ledger (its content is now in the reports) before Step 12a:
 
 - **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, and `## Memory Metrics` from Step 9b)
 - **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` and `mem-integrity-check` keys in `selfAssessment`, and the `[self-critique]` entry from Step 11 in `processImprovements`)
@@ -664,6 +734,17 @@ Create both a markdown and JSON report:
 **Post-write existence check (required, added per pb#257):** After writing the JSON report, run `ls reports/YYYY-MM-DD-memory-consolidation.json` and confirm it exists on disk. This step is easy to drop silently on unusually busy sessions (many interleaved threads) — and when it's dropped, the poller's guard-file hook (`teamvibe.ai#128`) has nothing to POST, so `.last_consolidation` never updates even though real consolidation content landed. The next `maintenance-guard.sh` run then reports a false-overdue signal despite consolidation having actually happened. Do not end the session (final commit made, TODAY.md archived) without this file present — if the check fails, stop and produce the report now rather than closing the session first.
 
 For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log was actively processed this run — either (a) Step 7 deleted one or more log files, OR (b) Steps 2–4 extracted content from at least one log and produced at least one ADD or UPDATE action. Set to `false` if no logs were processed (e.g., no logs in range, all NOOP). **Always include daily log files whose content was extracted in `filesChanged`**, even if they were not deleted — listing source logs gives the evaluator the evidence of log file activity it needs to verify this criterion.
+
+### 12a. Checkpoint Commit (crash-safety)
+
+**Commit the completed markdown/JSON reports and all Steps 10–12 changes immediately after Step 12, before the user-facing final report (#462).** Verify both report files exist and the required fields/checks from Step 12 pass first. This complements 10a, which protects compliance/bookkeeping before report completion. Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the staged tree is empty.
+
+```bash
+git add -A
+if ! git diff --cached --quiet; then
+  git commit -m "chore: consolidate memory checkpoint (YYYY-MM-DD) — steps 10-12"
+fi
+```
 
 ## Scoring Guidance
 
@@ -677,9 +758,12 @@ When deciding what to promote, weigh:
 
 Before committing, confirm both `reports/YYYY-MM-DD-memory-consolidation.md` and `.json` exist on disk (`ls reports/YYYY-MM-DD-memory-consolidation.*`) — see Step 12's post-write existence check.
 
-After consolidation, commit all remaining changes (including reports). This is the final checkpoint — it covers Steps 10-12 on top of the two intermediate checkpoints already committed at Step 6a and Step 9g (`teamvibeai/poller-brain#436`):
-```
-chore: consolidate memory (YYYY-MM-DD)
+After Step 12a, apply **Checkpoint Rules** again and create the final completion marker. Unlike an intermediate checkpoint, this final commit must exist even if 12a left a clean tree: the mechanical guard requires an exact final subject after the newest checkpoint. The reports must be present in this commit's tree, so a checkpoint with report files is still distinguishable from a finished cycle.
+
+```bash
+git add -A
+git commit --allow-empty -m "chore: consolidate memory (YYYY-MM-DD)"
+bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .
 ```
 
-If Steps 6a/9g already committed everything and nothing changed since the last checkpoint, this final commit only needs to add the reports produced in Step 12.
+Confirm the guard reports `consolidation_state: complete` before claiming completion to the user or adding completion citations. If it reports resume/unknown, investigate and finish the missing evidence first. The intermediate boundaries are Step 0a (archive), 4a (promotions), 6a (SUMMARY/lifecycle), 7a (retention), 9g (sweep/audit/trims), 10a (compliance ledger), and 12a (completed reports).

@@ -1,6 +1,8 @@
 #!/bin/bash
 # Checks if maintenance consolidation should run.
-# Exit 0 = consolidation needed, exit 1 = skip (not time yet, or idle brain).
+# Exit 0 = consolidation needed OR resume required; exit 1 = skip.
+# consolidation_resume: true means reconcile/continue the interrupted cycle,
+# never restart at Step 0. Completion requires a final commit and report pair.
 # Usage: bash "$CLAUDE_CONFIG_DIR/scripts/maintenance-guard.sh" [brain_dir]
 #
 # brain_dir defaults to current working directory.
@@ -54,6 +56,15 @@ WINDOW_START="${CONSOLIDATION_WINDOW_START:-0}"   # hour UTC (inclusive)
 WINDOW_END="${CONSOLIDATION_WINDOW_END:-6}"       # hour UTC (exclusive)
 ACTIVITY_MEM_MIN="${CONSOLIDATION_ACTIVITY_MEM_MIN:-1}"
 ACTIVITY_BYTES_MIN="${CONSOLIDATION_ACTIVITY_BYTES_MIN:-32768}"
+
+# Resume precedes cadence, idle-skip, and a report merely on disk.
+# Check across UTC midnight too: an interrupted run still needs recovery.
+STATE_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-state.sh" "$BRAIN_DIR")
+STATE_STATUS=$?
+if [ "$STATE_STATUS" -eq 1 ]; then
+  echo "$STATE_OUTPUT"
+  exit 0
+fi
 
 # Get current UTC hour
 CURRENT_HOUR=$(date -u +%H | sed 's/^0//')
@@ -185,17 +196,15 @@ is_idle_since_last_run() {
 # how faithfully the poller hook itself worked. It's also gitignored (local to
 # the container), so a re-clone always starts from "no marker" even when the
 # committed reports/ history goes back further. Reading the report filename
-# directly removes that dependency: if no new report exists, there was no new
-# consolidation, full stop. Mirrors the same find-and-parse pattern already
-# used by is_idle_since_last_run() above.
+# directly removes that dependency for completed runs. Checkpoint detection
+# above handles interrupted runs that have not produced a report yet. This
+# mirrors the find-and-parse pattern used by is_idle_since_last_run() above.
 #
 # The filename date is when the *report* was written, which is normally the
 # same day the run happened — except mid-run, while a backfill/recovery
 # session is still processing an older gap and hasn't written today's report
-# yet: this reads the stale older date, which makes ELAPSED_HOURS LARGER, so
-# the guard looks MORE overdue, not less. That can only trigger one extra
-# run (which itself writes today's report and closes the gap) — it can never
-# cause a missed run.
+# yet: checkpoint detection above selects resume before this cadence check,
+# avoiding a duplicate archive/reset from Step 0.
 #
 # `[0-9]*` (not the bare `*` used above in is_idle_since_last_run) excludes
 # non-date-prefixed report names (e.g. a `recovery-memory-consolidation.md`
