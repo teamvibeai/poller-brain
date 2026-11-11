@@ -40,6 +40,17 @@ const AGENT_BOT_IDS = new Set(
     .filter(Boolean),
 )
 
+// Normalize only for comparison; never strip a sentinel out of real content.
+// One matching pair of backticks or quotes is tolerated, but not nested pairs.
+export function shouldSuppressSentinel({ text, blocks, modals, files }) {
+  if (typeof text !== 'string' || blocks?.length || modals?.length || files?.length) return false
+  let candidate = text.trim()
+  if (['`', '"', "'"].includes(candidate[0]) && candidate.at(-1) === candidate[0]) {
+    candidate = candidate.slice(1, -1).trim()
+  }
+  return candidate === 'NO_FURTHER_RESPONSE_NEEDED'
+}
+
 // --- Slack API helper ---
 
 // Slack hides the `text` field of chat.postMessage when `blocks` are present
@@ -958,6 +969,9 @@ const TOOLS = [
 async function handleTool(name, args) {
   switch (name) {
     case 'send_message': {
+      if (shouldSuppressSentinel(args)) {
+        return { ok: true, suppressed: 'sentinel', detail: 'Nothing was posted to Slack.' }
+      }
       const channel = args.channel || DEFAULT_CHANNEL
       // Allow explicit opt-out of thread context: thread_ts=null → top-level message
       const thread_ts = args.thread_ts === undefined ? DEFAULT_THREAD_TS : args.thread_ts
@@ -1395,7 +1409,9 @@ async function handleTool(name, args) {
         channel_id: channel,
         thread_ts,
       }
-      if (args.initial_comment) completeBody.initial_comment = args.initial_comment
+      if (args.initial_comment && !shouldSuppressSentinel({ text: args.initial_comment })) {
+        completeBody.initial_comment = args.initial_comment
+      }
       await slackApi('files.completeUploadExternal', completeBody)
       return { ok: true, filename }
     }
@@ -1415,6 +1431,9 @@ async function handleTool(name, args) {
     }
 
     case 'set_status': {
+      if (shouldSuppressSentinel(args)) {
+        return { ok: true, suppressed: 'sentinel', detail: 'Nothing was posted to Slack.' }
+      }
       const channel = args.channel || DEFAULT_CHANNEL
       const thread_ts = args.thread_ts || DEFAULT_THREAD_TS
       if (!channel) throw new Error('channel required')
