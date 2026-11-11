@@ -8,8 +8,14 @@ import { pathToFileURL } from "node:url";
 
 const MAX_BYTES = 512 * 1024;
 const MAX_MCP_BYTES = 64 * 1024;
-// This repo has no base MCP config. These are the poller's injected base servers.
-const BASE_MCP_SERVERS = new Set(["slack", "teamvibe-api"]);
+const MAX_MCP_STRING_BYTES = 4 * 1024;
+// teamvibe.ai main packages/poller/src/mcp-session.ts:159-163,187-189
+// (#795, ac085e9f): reserve the union of legacy and merged base transports.
+const BASE_MCP_SERVERS = new Set(["slack", "teamvibe-api", "teamvibe"]);
+const LITERAL_MCP_HEADERS = new Set(["accept", "content-type", "user-agent", "mcp-protocol-version"]);
+// teamvibe.ai main packages/poller/src/brain-mcp.ts:9-13,64-67 (#795, ac085e9f).
+const MAX_MCP_REMINDER_BYTES = 4 * 1024;
+const MCP_SUMMARY_BYTES = 128;
 const USAGE = "Usage: brain-write.ts <relative-path> [--from <file>] [--delete]";
 
 function parseArgs(args) {
@@ -182,15 +188,61 @@ function regularFile(file) {
 
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 // Keep reference syntax in sync with poller brain-mcp.ts (teamvibe.ai PR #795).
-const envReferences = (value) => [...value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}/g)].map((match) => match[1]);
+const envReferences = (value) => value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}/g);
+const secretReference = (value) => /^\$\{[A-Za-z_][A-Za-z0-9_]*(?::-)?\}(?![\s\S])/.test(value);
+const credentialError = () => new Error("MCP credentials must use platform secrets: store the value via platform secrets and reference it as ${VAR} or ${VAR:-} (empty default only)");
 
-function validateMcp(content) {
+function parseMcp(content) {
+  let text;
+  try {
+    // Preserve the BOM so it can be refused explicitly, rather than stripped.
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
+  } catch {
+    throw new Error(".mcp.json must contain valid JSON encoded as UTF-8");
+  }
+  if (text.startsWith("\uFEFF")) throw new Error(".mcp.json must not contain a UTF-8 BOM");
+
   let config;
   try {
-    config = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(content));
+    config = JSON.parse(text);
   } catch {
     // JSON parser errors can contain source text, including credentials.
     throw new Error(".mcp.json must contain valid JSON");
+  }
+  // JSON.parse checks syntax; this raw-token pass makes the parse duplicate-aware.
+  // Track keys at every object depth, decoding escapes before comparing names.
+  // Arrays use null frames so their commas cannot reset a containing object's key state.
+  const stack = [];
+  for (const [token] of text.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\],]/g)) {
+    if (token === "{") stack.push({ keys: new Set(), expectKey: true });
+    else if (token === "[") stack.push(null);
+    else if (token === "}" || token === "]") stack.pop();
+    else if (token === ",") {
+      if (stack.at(-1)) stack.at(-1).expectKey = true;
+    } else if (stack.at(-1)?.expectKey) {
+      const frame = stack.at(-1);
+      const key = JSON.parse(token);
+      if (frame.keys.has(key)) throw new Error(".mcp.json must not contain duplicate object keys");
+      frame.keys.add(key);
+      frame.expectKey = false;
+    }
+  }
+  return config;
+}
+
+function validateMcp(content) {
+  const config = parseMcp(content);
+  // Bound every string, including names and map keys, before field validation.
+  const pending = [config];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === "string" && Buffer.byteLength(value) > MAX_MCP_STRING_BYTES) {
+      throw new Error("MCP strings exceed the 4096-byte cap");
+    }
+    if (Array.isArray(value)) pending.push(...value);
+    else if (isRecord(value)) {
+      for (const [key, entry] of Object.entries(value)) pending.push(key, entry);
+    }
   }
   if (!isRecord(config) || !isRecord(config.mcpServers)) {
     throw new Error(".mcp.json must be an object with an mcpServers object");
@@ -201,25 +253,14 @@ function validateMcp(content) {
   const servers = Object.entries(config.mcpServers);
   if (servers.length > 32) throw new Error(".mcp.json permits at most 32 servers");
   const references = new Set();
-  const collect = (value) => {
-    if (typeof value === "string") envReferences(value).forEach((name) => references.add(name));
-    else if (Array.isArray(value)) value.forEach(collect);
-    else if (isRecord(value)) Object.values(value).forEach(collect);
-  };
+  let reminderBytes = 0;
   const stringMap = (value, field) => {
     if (!isRecord(value) || Object.values(value).some((entry) => typeof entry !== "string")) {
       throw new Error(`MCP ${field} must be a string map`);
     }
     for (const [key, entry] of Object.entries(value)) {
-      if (Buffer.byteLength(entry) > 4 * 1024) throw new Error(`MCP ${field} values exceed the 4096-byte cap`);
-      const credentialKey = /token|secret|key|authorization|password/i.test(key);
-      const credentialValue = /\b(?:Bearer|Basic)\s+\S+/i.test(entry) ||
-        /^(?:sk[-_]|tvp_|gh[pousr]_|github_pat_|xox[baprs]-)/i.test(entry) ||
-        /^eyJ[\w-]*\.[\w-]+\.[\w-]+$/i.test(entry) ||
-        /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/i.test(entry);
-      if ((credentialKey || credentialValue) && !envReferences(entry).length) {
-        throw new Error("MCP credentials must use platform secrets: store the value via platform secrets and reference it as ${VAR}");
-      }
+      if (field === "headers" && LITERAL_MCP_HEADERS.has(key.toLowerCase())) continue;
+      if (!secretReference(entry)) throw credentialError();
     }
   };
   for (const [name, server] of servers) {
@@ -236,6 +277,13 @@ function validateMcp(content) {
       if (server.args !== undefined && (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string"))) {
         throw new Error("MCP stdio args must be an array of strings");
       }
+      const args = server.args ?? [];
+      for (let i = 0; i < args.length; i++) {
+        const assignment = args[i].match(/(?:token|key|secret|password|auth)=([\s\S]*)/i);
+        if (assignment && !secretReference(assignment[1])) throw credentialError();
+        if (/^--(?:token|api-key|key|secret|password|auth)$/i.test(args[i]) &&
+            i + 1 < args.length && !secretReference(args[i + 1])) throw credentialError();
+      }
       if (server.env !== undefined) stringMap(server.env, "env");
     } else {
       let url;
@@ -245,14 +293,44 @@ function validateMcp(content) {
       } catch {
         throw new Error("MCP http/sse url must be a valid URL");
       }
+      if (url.username || url.password || /^[^:]+:\/\/[^/?#]*@/.test(server.url) ||
+          server.url.includes("?") || server.url.includes("#")) {
+        throw new Error("MCP url must not contain userinfo, a query string, or a fragment");
+      }
       if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) {
         throw new Error("MCP url must use https, or http only for localhost");
       }
       if (server.headers !== undefined) stringMap(server.headers, "headers");
     }
-    collect(server);
+    // Mirror teamvibe.ai main packages/poller/src/brain-mcp.ts:125-140 (#795,
+    // ac085e9f), using the largest missing-variable list for any spawn environment.
+    const serverReferences = new Set();
+    const required = new Set();
+    const collect = (value) => {
+      if (typeof value === "string") {
+        for (const match of envReferences(value)) {
+          serverReferences.add(match[1]);
+          references.add(match[1]);
+          if (match[2] === undefined) required.add(match[1]);
+        }
+      } else if (Array.isArray(value)) value.forEach(collect);
+      else if (isRecord(value)) Object.values(value).forEach(collect);
+    };
+    for (const field of ["command", "args", "env", "url", "headers"]) collect(server[field]);
+    const names = [...serverReferences].sort();
+    const missing = names.filter((key) => required.has(key)).join(", ");
+    // For short names, the poller's "none" label can be longer than all missing.
+    const missingLabel = missing.length > 4 ? missing : "none";
+    const line = `- Brain MCP ${name}: env references: ${names.join(", ") || "none"}; missing in spawn env: ${missingLabel}.`;
+    reminderBytes += Buffer.byteLength(line) + (reminderBytes ? 1 : 0);
+    if (reminderBytes > MAX_MCP_REMINDER_BYTES - MCP_SUMMARY_BYTES) {
+      throw new Error("MCP metadata exceeds the poller's 4096-byte reminder budget (including missing-variable names and 128 reserved summary bytes); reduce servers or reference names");
+    }
   }
-  return `MCP servers: ${servers.map(([name]) => name).sort().join(", ") || "none"}; env references: ${[...references].sort().join(", ") || "none"}`;
+  const canonical = Buffer.from(JSON.stringify(config, null, 2) + "\n");
+  if (canonical.length > MAX_MCP_BYTES) throw new Error("Canonical .mcp.json exceeds the 65536-byte (64 KiB) size cap");
+  const summary = `MCP servers: ${servers.map(([name]) => name).sort().join(", ") || "none"}; env references: ${[...references].sort().join(", ") || "none"}`;
+  return { content: canonical, summary };
 }
 
 async function readContent(from, maxBytes = MAX_BYTES) {
@@ -293,8 +371,10 @@ export async function main(args = process.argv.slice(2)) {
     }
 
     const isMcp = target === ".mcp.json";
-    const content = await readContent(from, isMcp ? MAX_MCP_BYTES : MAX_BYTES);
-    const mcpSummary = isMcp ? validateMcp(content) : undefined;
+    const input = await readContent(from, isMcp ? MAX_MCP_BYTES : MAX_BYTES);
+    const validated = isMcp ? validateMcp(input) : undefined;
+    const content = validated?.content ?? input;
+    const mcpSummary = validated?.summary;
     // Input may have waited on stdin; check again before touching the target tree.
     validateTarget(root, target);
     const parent = openParent(root, target, true);
