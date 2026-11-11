@@ -102,6 +102,7 @@ If `read_thread` fails, fall back to `read_channel` to get recent messages.
 - Starting to work on something → :eyes:
 
 A bare reaction with no other output triggers the forced-continuation post above. When it fires and nothing more needs to be said, your entire response must be exactly `NO_FURTHER_RESPONSE_NEEDED` — that bare string and nothing else: no backticks, quotes, punctuation, or any surrounding text. Suppression is an exact match on the whole response; anything else posts to Slack (poller-brain#380). In particular, do NOT precede it with a reasoning or status sentence ("No new messages, so..." / "Nothing to add here.") — one extra sentence means the whole block, sentinel included, posts as a normal message.
+Calling `send_message` with only the bare sentinel (optionally surrounded by whitespace or one pair of backticks/quotes) and no blocks, modals, or files is a successful no-op; nothing is posted to Slack (poller-brain#451).
 
 **Text reply** (when the user expects a response):
 - The message is a question or expects a result
