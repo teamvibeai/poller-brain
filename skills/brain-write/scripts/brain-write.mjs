@@ -205,7 +205,7 @@ const PATH_SEGMENTS = new Set(["file", "path", "dir"]);
 // Union of known-prefix cases in 99a2230 and 27cb275. Keep this independent
 // of field names: ordinary fields and credential-file paths can carry secrets.
 const LITERAL_SECRET_PREFIX = /\b(?:sk[_-]|tvp_|ghp_|gho_|github_pat_|xox[abpr]-|AKIA|glpat-)[A-Za-z0-9_-]+/i;
-const LITERAL_JWT = /(?<![A-Za-z0-9_.=+-])eyJ[A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_.=+-])/;
+const LITERAL_JWT = /(?<![A-Za-z0-9_.+-])eyJ[A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_.=+-])/;
 
 function credentialName(name) {
   const segments = name

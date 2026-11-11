@@ -226,6 +226,11 @@ for (const [position, server] of Object.entries(literalPositions)) {
     "eyJ1234567.abcdefghij.0123456789", // minimum segment lengths
     "eyJhbGciOiJIUzI1NiJ9.payload1234.signature12",
     "prefix eyJ1234567.abcdefghij.0123456789 suffix",
+    // verify4 P1: JWT after an assignment boundary.
+    "--other=eyJ1234567.abcdefghij.0123456789",
+    "--token-file=eyJ1234567.abcdefghij.0123456789",
+    "session=eyJhbGciOiJIUzI1NiJ9.payload1234.signature12",
+    "/v1/session=eyJ1234567.abcdefghij.0123456789/x",
   ].entries()) {
     credentialMatrix.push([`verify3 P2 JWT ${i} in ${position}`, config(server(value)), /platform secrets/]);
   }
