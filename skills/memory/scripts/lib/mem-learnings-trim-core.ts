@@ -130,8 +130,17 @@ interface Entry {
   endLine: number;
 }
 
-const HEADING_START_RE = /^(#{2,6})\s+/;
 const BULLET_START_RE = /^-\s+/;
+
+/** Boundary grammar is deliberately broader than the writable-entry grammar. */
+function atxHeading(line: string, index: number): { level: number; supported: boolean } | null {
+  const hasBom = index === 0 && line.startsWith("\ufeff");
+  const match = /^( {0,3})(#{1,6})(?:[ \t]+(.*)|$)/.exec((hasBom ? line.slice(1) : line).replace(/\r$/, ""));
+  if (!match) return null;
+  // Closing hashes alone do not supply heading text (e.g. `## ###`).
+  const title = (match[3] ?? "").replace(/(?:^|[ \t]+)#+[ \t]*$/, "").trim();
+  return { level: match[2].length, supported: !hasBom && match[1] === "" && title.length > 0 };
+}
 
 /** Matches an already-trimmed pointer bullet entry. */
 export const POINTER_BULLET_RE = new RegExp(String.raw`^-\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
@@ -153,10 +162,14 @@ export function countLearningsEntries(text: string): number {
 
 /** Non-overlapping spans: a heading owns ALL content until a same-or-higher heading. */
 function parseEntries(text: string): { entries: Entry[]; lines: string[] } {
+  if (/\r(?!\n)/.test(text)) {
+    throw new Error("Cannot determine span ownership with standalone CR line endings. Aborting, no write performed.");
+  }
   const lines = text.split("\n");
   const entries: Entry[] = [];
   let current: Entry | undefined;
   let fence: { marker: string; length: number } | undefined;
+  let comment = false;
   const close = (endLine: number): void => {
     if (!current) return;
     current.endLine = endLine;
@@ -173,12 +186,31 @@ function parseEntries(text: string): { entries: Entry[]; lines: string[] } {
     if (!current) start(idx, "unknown");
     current!.skipReason ??= reason;
   };
+  const protectHeading = (heading: ReturnType<typeof atxHeading>): void => {
+    // A heading hidden in a comment/fence cannot end a span. Its descendants
+    // remain protected even after the closing delimiter, until a real boundary.
+    if (heading && current) current.headingLevel = Math.min(current.headingLevel ?? 6, heading.level);
+  };
   for (let idx = 0; idx < lines.length; idx++) {
     const line = lines[idx];
+    const heading = atxHeading(line, idx);
     if (fence) {
+      protectHeading(heading);
       const closing = /^ {0,3}(`+|~+)\s*$/.exec(line);
       if (closing && closing[1][0] === fence.marker && closing[1].length >= fence.length) fence = undefined;
       continue; // apparent headings/bullets inside code cannot define entry boundaries
+    }
+    if (comment || line.includes("<!--")) {
+      skip(idx, "unsupported HTML comment structure");
+      protectHeading(heading);
+      let cursor = 0;
+      while (cursor < line.length) {
+        const delimiter = line.indexOf(comment ? "-->" : "<!--", cursor);
+        if (delimiter === -1) break;
+        cursor = delimiter + (comment ? 3 : 4);
+        comment = !comment;
+      }
+      continue;
     }
     const openingFence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (openingFence) {
@@ -186,24 +218,29 @@ function parseEntries(text: string): { entries: Entry[]; lines: string[] } {
       fence = { marker: openingFence[1][0], length: openingFence[1].length };
       continue;
     }
-    const heading = HEADING_START_RE.exec(line);
-    const level = heading ? heading[1].length : /^#\s+/.test(line) ? 1 : null;
-    if (level !== null) {
-      if (current?.headingLevel && level > current.headingLevel) continue;
+    if (heading) {
+      const { level, supported } = heading;
+      if (current?.headingLevel && level > current.headingLevel) {
+        if (!supported) skip(idx, "unsupported nested ATX heading");
+        continue;
+      }
       close(idx);
-      if (level >= 2) start(idx, "heading", level);
+      if (!supported) {
+        start(idx, "unknown", level);
+        skip(idx, "unsupported ATX heading (indentation, BOM, or empty title)");
+      } else if (level >= 2) start(idx, "heading", level);
       continue;
     }
     if (BULLET_START_RE.test(line)) {
       // An unsupported block may own these bullets too; resume only at a known heading boundary.
       if (current?.format === "unknown") continue;
       if (current?.headingLevel) {
-        if (HEADING_START_RE.test(lines[idx - 1] ?? "")) {
+        if (atxHeading(lines[idx - 1] ?? "", idx - 1)) {
           skip(idx, "bullet immediately follows a heading without a blank line; ownership is ambiguous");
         }
       } else {
         start(idx, "bullet");
-        if (/^#{1,6}\s+/.test(lines[idx - 1] ?? "")) {
+        if (atxHeading(lines[idx - 1] ?? "", idx - 1)) {
           skip(idx, "bullet immediately follows a heading without a blank line; ownership is ambiguous");
         }
       }
@@ -215,6 +252,9 @@ function parseEntries(text: string): { entries: Entry[]; lines: string[] } {
     } else if (!current && distinctCitedKeysInLine(line).length > 0) {
       skip(idx, "MEM citation outside a supported heading or bullet entry");
     }
+  }
+  if (comment || fence) {
+    throw new Error(`Cannot determine span ownership: unclosed ${comment ? "HTML comment" : "fenced code block"}. Aborting, no write performed.`);
   }
   close(lines.length);
   return { entries, lines };
@@ -425,12 +465,96 @@ function checkedCandidates(entries: Entry[], lines: string[], candidates: Learni
 }
 
 /**
- * Independent before-write check. Re-parse the output and match entries by
+ * Byte-range diff independent of parseEntries: only the exact approved line
+ * ranges may change, and each must become precisely its proposed pointer.
+ * Compute offsets from raw UTF-8 bytes so CRLF, separators and Unicode outside
+ * those ranges are preserved. A separate raw ATX scan rejects swallowed
+ * boundaries even if the candidate parser accidentally widens an entry again.
+ */
+export function verifyLearningsTrimByteRanges(before: string, after: string, candidates: LearningsTrimCandidate[]): void {
+  const source = Buffer.from(before);
+  const result = Buffer.from(after);
+  const starts = [0];
+  for (let pos = source.indexOf(10); pos !== -1; pos = source.indexOf(10, pos + 1)) starts.push(pos + 1);
+  const refuse = (): never => {
+    throw new Error("Structural safety check failed: byte-range diff changed protected bytes or crossed an entry boundary. Aborting, no write performed.");
+  };
+  // The line-range API supports LF/CRLF only. Refuse rather than merge CR-only
+  // CommonMark lines into a larger, falsely approved range.
+  for (let pos = source.indexOf(13); pos !== -1; pos = source.indexOf(13, pos + 1)) {
+    if (source[pos + 1] !== 10) refuse();
+  }
+  // Independently audit ownership at each approved start. Keep a raw heading
+  // ancestry stack rather than rebuilding candidate entries. Hidden headings
+  // never pop ancestors; they remain unsafe until a real enclosing boundary.
+  const selectedStarts = new Set(candidates.map((candidate) => candidate.entryStartLine));
+  const ancestors: { level: number; unsafe: boolean }[] = [];
+  let inComment = false;
+  let code: string | undefined;
+  for (const [index, line] of before.split("\n").entries()) {
+    const raw = /^(\ufeff)?( {0,3})(#{1,6})(?:[ \t]+([^\r]*)|\r?$)/.exec(line);
+    const hidden = inComment || code !== undefined;
+    if (raw && !hidden) {
+      while (ancestors.length && ancestors[ancestors.length - 1].level >= raw[3].length) ancestors.pop();
+    }
+    const emptyTitle = !!raw && (!(raw[4] ?? "").trim() || /^#+[ \t]*$/.test(raw[4] ?? ""));
+    const unsafe = !!raw && (hidden || !!raw[1] || !!raw[2] || emptyTitle);
+    if (selectedStarts.has(index + 1) && (hidden || unsafe || ancestors.some((ancestor) => ancestor.unsafe || ancestor.level >= 2))) refuse();
+    if (raw) ancestors.push({ level: raw[3].length, unsafe });
+    if (code) {
+      const closing = /^ {0,3}(`+|~+)[ \t\r]*$/.exec(line);
+      if (closing && closing[1][0] === code[0] && closing[1].length >= code.length) code = undefined;
+    } else if (inComment || line.includes("<!--")) {
+      if (!inComment) ancestors.push({ level: 7, unsafe: true });
+      for (const delimiter of line.matchAll(/<!--|-->/g)) {
+        if (delimiter[0] === (inComment ? "-->" : "<!--")) inComment = !inComment;
+      }
+    } else {
+      const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (opening) {
+        ancestors.push({ level: 7, unsafe: true });
+        code = opening[1];
+      }
+    }
+  }
+  if (inComment || code) refuse();
+  let sourceCursor = 0;
+  let resultCursor = 0;
+  for (const candidate of [...candidates].sort((a, b) => a.entryStartLine - b.entryStartLine)) {
+    const { entryStartLine: first, entryEndLine: last } = candidate;
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < 1 || last < first || last > starts.length) refuse();
+    const start = starts[first - 1];
+    const end = last < starts.length ? starts[last] - 1 : source.length;
+    if (start < sourceCursor || end < start) refuse();
+    const text = source.subarray(start, end).toString("utf8");
+    const rawLines = text.split("\n");
+    // Intentionally use a separate, broader grammar, not the candidate parser.
+    const opening = /^(#{1,6})(?=[ \t\r]|$)/.exec(rawLines[0]);
+    if (candidate.format === "heading" && !opening) refuse();
+    for (const [index, line] of rawLines.entries()) {
+      const boundary = /^(?:\ufeff)? {0,3}(#{1,6})(?=[ \t\r]|$)/.exec(line);
+      if (index > 0 && boundary && (!opening || boundary[1].length <= opening[1].length)) refuse();
+      if (line.includes("<!--") || /^ {0,3}(?:`{3,}|~{3,})/.test(line)) refuse();
+    }
+    const untouched = source.subarray(sourceCursor, start);
+    if (!untouched.equals(result.subarray(resultCursor, resultCursor + untouched.length))) refuse();
+    resultCursor += untouched.length;
+    const replacement = Buffer.from(pointerFor(text, candidate));
+    if (!replacement.equals(result.subarray(resultCursor, resultCursor + replacement.length))) refuse();
+    resultCursor += replacement.length;
+    sourceCursor = end;
+  }
+  if (!source.subarray(sourceCursor).equals(result.subarray(resultCursor))) refuse();
+}
+
+/**
+ * Before-write check. Re-parse the output and match entries by
  * original start line (adjusted only for approved whole-entry replacements)
  * and starting key/line identity. Counts alone cannot detect narrative loss.
  * Separators, preamble, and other non-entry text are protected as well.
  */
 export function verifyLearningsTrimStructure(before: string, after: string, candidates: LearningsTrimCandidate[]): void {
+  verifyLearningsTrimByteRanges(before, after, candidates);
   const original = parseEntries(before);
   const rewritten = parseEntries(after);
   const approved = checkedCandidates(original.entries, original.lines, candidates);

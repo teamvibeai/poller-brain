@@ -242,7 +242,11 @@ function main(): void {
     return;
   }
 
-  const learningsBefore = fs.readFileSync(LEARNINGS_PATH, "utf-8");
+  const learningsBytes = fs.readFileSync(LEARNINGS_PATH);
+  const learningsBefore = learningsBytes.toString("utf8");
+  if (!Buffer.from(learningsBefore).equals(learningsBytes)) {
+    throw new Error("Cannot preserve source bytes: LEARNINGS.md is not valid UTF-8. Aborting, no write performed.");
+  }
   const destinations = collectDestinations();
   const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, unreliableHooks, skippedEntries } =
     findLearningsTrimCandidates(learningsBefore, destinations);

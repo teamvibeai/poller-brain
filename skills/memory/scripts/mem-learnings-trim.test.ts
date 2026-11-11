@@ -68,6 +68,7 @@ import {
   trimPromotedLearnings,
   verifyLearningsTrimStats,
   verifyLearningsTrimStructure,
+  verifyLearningsTrimByteRanges,
   parseOnlySelectors,
   unambiguousHeadlineKeys,
   type DestinationFile,
@@ -940,6 +941,113 @@ try { applyLearningsTrimCandidates(absorption, absorptionFound.candidates); } ca
   absorptionRefused = (err as Error).message.includes("Structural safety check failed");
 }
 assert(absorptionRefused, "structure: ### stub cannot silently merge into a preceding higher-level heading");
+
+// PB #600 review1: both destructive repros exercise the real write CLI.
+const reviewBody = "Long original narrative. ".repeat(30);
+const reviewTarget = `## [MEM-99] Target\n\n${reviewBody}`;
+const reviewNested = `### [MEM-99] Nested detail\n\n${reviewBody}\n`;
+const reviewFixtures: { label: string; before: string; suffix?: string; invalidUtf8?: boolean }[] = [
+  // Exact fixtures from both P1 findings (including the original EOF parent).
+  ...["##", "#"].map((marker) => ({
+    label: `bare ${marker} boundary`,
+    before: `${reviewTarget}\n\n${marker}\n\nUNRELATED SECTION MUST SURVIVE\n`,
+    suffix: `\n\n${marker}\n\nUNRELATED SECTION MUST SURVIVE\n`,
+  })),
+  { label: "indented parent exact repro", before: ` ## [MEM-200] Untargeted parent\n\nParent narrative.\n\n${reviewNested}` },
+  { label: "BOM parent", before: `\ufeff## [MEM-200] Untargeted parent\n\nParent narrative.\n\n${reviewNested}` },
+  ...[1, 2, 3].map((spaces) => ({ label: `${spaces} spaces parent with closing hashes`,
+    before: `${" ".repeat(spaces)}## [MEM-200] Untargeted parent ###\n\nParent narrative.\n\n${reviewNested}\n## [MEM-300] Other root\n\nOther narrative.\n` })),
+  ...[1, 2, 3, 4, 5, 6].map((level) => ({ label: `bare h${level} parent`,
+    before: `${"#".repeat(level)}\n\n- [MEM-99] ${reviewBody}\n` })),
+  { label: "BOM title protects descendants", before: `\ufeff# Learnings\n\n${reviewNested}` },
+  { label: "empty closing hashes parent", before: `## ###\n\n${reviewNested}` },
+  { label: "HTML-comment heading", before: `<!--\n## [MEM-99] Example only\n\n${reviewBody}\n\n## Another example\n\nUNRELATED COMMENT CONTENT\n-->\n` },
+  { label: "comment parent owns later nested heading", before: `<!--\n## Untargeted parent\n-->\n\n${reviewNested}` },
+  { label: "fenced-code heading", before: `\x60\x60\x60md\n## [MEM-200] Example parent\n\n${reviewNested}\x60\x60\x60\n` },
+  { label: "fenced parent owns later nested heading", before: `~~~md\n## Untargeted parent\n~~~\n\n${reviewNested}` },
+  // An earlier valid candidate must not be written when later ownership is unknown.
+  { label: "unclosed comment refuses whole file", before: `${reviewTarget}\n\n# Other\n\n<!--\n## Unknown ownership\n` },
+  { label: "unclosed fence refuses whole file", before: `${reviewTarget}\n\n# Other\n\n~~~md\n## Unknown ownership\n` },
+  { label: "unclosed comment without heading", before: `${reviewTarget}\n\n# Other\n\n<!-- unknown\n` },
+  { label: "unclosed fence without heading", before: `${reviewTarget}\n\n# Other\n\n\x60\x60\x60md\nunknown\n` },
+  { label: "indented boundary ends selected entry", before: `${reviewTarget}\n\n   ## Unrelated ###\n\nUNCHANGED é\t\n`, suffix: "\n\n   ## Unrelated ###\n\nUNCHANGED é\t\n" },
+  { label: "closing hashes boundary ends selected entry", before: `${reviewTarget}\n\n## Unrelated ###\n\nUNCHANGED\n`, suffix: "\n\n## Unrelated ###\n\nUNCHANGED\n" },
+  { label: "invalid UTF-8 refuses instead of changing unrelated bytes", before: `${reviewTarget}\n\n# Unrelated\n\nKEEP\n`, invalidUtf8: true },
+  { label: "CR-only boundaries refuse instead of swallowing unrelated section", before: `${reviewTarget}\n\n##\n\nUNRELATED\n`.replace(/\n/g, "\r") },
+];
+for (const { label, before, suffix, invalidUtf8 } of reviewFixtures) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pb600-review1-"));
+  try {
+    fs.mkdirSync(path.join(root, "memory/core"), { recursive: true });
+    fs.mkdirSync(path.join(root, "memory/semantic"));
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "fixture");
+    const source = path.join(root, "memory/core/LEARNINGS.md");
+    const originalBytes = invalidUtf8 ? Buffer.concat([Buffer.from(before), Buffer.from([0xff])]) : Buffer.from(before);
+    fs.writeFileSync(source, originalBytes);
+    fs.writeFileSync(path.join(root, "memory/semantic/topic.md"), "### Complete promoted incident lesson\nEvidence [MEM-99]\n");
+    const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts"), "--apply", "--only", "MEM-99"],
+      { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: root } });
+    const after = fs.readFileSync(source);
+    if (suffix) {
+      assert(cli.status === 0, `review1 ${label}: safe selection applies: ${cli.stderr}`);
+      const expected = `### [MEM-99] → see semantic/topic.md:2 — Complete promoted incident lesson${suffix}`;
+      assert(after.equals(Buffer.from(expected)), `review1 ${label}: all unrelated bytes survive exactly`);
+    } else {
+      assert(cli.status === 1 && cli.stderr.includes("no write performed"), `review1 ${label}: explicit fail-closed refusal: ${cli.stderr}`);
+      assert(after.equals(originalBytes), `review1 ${label}: refused file stays byte-identical`);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Protected spans release ownership only at a real same-or-higher boundary.
+for (const protectedPrefix of [
+  " ### Unsupported parent\n\n#### Nested example\n\nProtected prose.\n",
+  "\ufeff### Unsupported parent\n\n#### Nested example\n\nProtected prose.\n",
+  "<!--\n### Example parent\n-->\n\n#### Nested example\n\nProtected prose.\n",
+  "~~~md\n### Example parent\n~~~\n\n#### Nested example\n\nProtected prose.\n",
+]) {
+  const safe = `${protectedPrefix}\n### [MEM-99] Independent sibling\n\n${reviewBody}\n`;
+  const found = findLearningsTrimCandidates(safe, H2_DESTINATIONS);
+  assert(found.candidates.length === 1 && found.candidates[0].entryStartLine === protectedPrefix.split("\n").length + 1,
+    "review1: only the real sibling after a protected span is eligible");
+  const applied = applyLearningsTrimCandidates(safe, found.candidates);
+  assert(applied.learnings.startsWith(protectedPrefix + "\n"), "review1: protected parent and descendants survive a sibling rewrite byte-for-byte");
+}
+
+// Call the byte verifier directly: it must work without the candidate parser.
+const byteSource = `# Learnings\r\n\r\n- [MEM-99] ${reviewBody}\r\n\r\n# Unrelated é\r\n\tKEEP\r\n`;
+const byteCandidate = findLearningsTrimCandidates(byteSource, H2_DESTINATIONS).candidates[0];
+const byteResult = applyLearningsTrimCandidates(byteSource, [byteCandidate]);
+verifyLearningsTrimByteRanges(byteSource, byteResult.learnings, [byteCandidate]);
+assert(byteResult.learnings.endsWith("\r\n# Unrelated é\r\n\tKEEP\r\n"), "byte ranges: UTF-8, CRLF, tabs and separators survive");
+for (const corrupted of [
+  byteResult.learnings.replace("# Learnings", "# Changed"),
+  byteResult.learnings.replace("é", "e"),
+  byteResult.learnings.replace("\tKEEP", "KEEP"),
+  byteResult.learnings.slice(0, -1),
+]) {
+  let refused = false;
+  try { verifyLearningsTrimByteRanges(byteSource, corrupted, [byteCandidate]); } catch { refused = true; }
+  assert(refused, "byte ranges: independent verifier refuses changed bytes outside the exact range");
+}
+for (const [before, candidate] of [
+  [`${reviewTarget}\n\n##\n\nUNRELATED\n`, { ...byteCandidate, format: "heading", entryStartLine: 1, entryEndLine: 7 }],
+  [` ## Parent\n\n${reviewNested}`, { ...byteCandidate, format: "heading", entryStartLine: 3, entryEndLine: 5 }],
+  [`\ufeff## Parent\n\n${reviewNested}`, { ...byteCandidate, format: "heading", entryStartLine: 3, entryEndLine: 5 }],
+  [`<!--\n## Parent\n-->\n\n${reviewNested}`, { ...byteCandidate, format: "heading", entryStartLine: 5, entryEndLine: 7 }],
+  [`~~~\n## Parent\n~~~\n\n${reviewNested}`, { ...byteCandidate, format: "heading", entryStartLine: 5, entryEndLine: 7 }],
+] as [string, LearningsTrimCandidate][]) {
+  // Simulate exactly the replacement a regressed candidate parser would approve.
+  const lines = before.split("\n");
+  const after = [...lines.slice(0, candidate.entryStartLine - 1),
+    `### [MEM-99] → see ${candidate.file}:${candidate.line} — ${candidate.hook}`,
+    ...lines.slice(candidate.entryEndLine)].join("\n");
+  let refused = false;
+  try { verifyLearningsTrimByteRanges(before, after, [candidate]); } catch { refused = true; }
+  assert(refused, "byte ranges: independently refuses swallowed boundaries and protected descendants with forged parser ranges");
+}
 
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
