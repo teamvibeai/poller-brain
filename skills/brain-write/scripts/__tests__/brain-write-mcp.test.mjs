@@ -91,11 +91,11 @@ for (const [position, server] of Object.entries(positions)) {
   for (const name of ["key", "sort-key", "primary-key", "monkey", "tokenizer", "author", "secretary", "NODE_ENV", "X-Session"]) {
     credentialMatrix.push([`${position} ordinary name ${name}`, config(server(name, "production"))]);
   }
-  for (const value of ["${TOKEN}", "${TOKEN:-}", "Bearer ${TOKEN}", "Bearer ${TOKEN:-}", "Basic ${TOKEN}", "Token ${TOKEN:-}", "${AKIA_TOKEN}", "${GHP_TOKEN:-}"]) {
+  for (const value of ["${TOKEN}", "${TOKEN:-}", "${token}", "${api_key}", "${api_key:-}", "Bearer ${api_key}", "Bearer ${TOKEN}", "Bearer ${TOKEN:-}", "Basic ${TOKEN}", "Token ${TOKEN:-}", "${AKIA_TOKEN}", "${GHP_TOKEN:-}"]) {
     credentialMatrix.push([`${position} exact reference ${value}`, config(server("API_KEY", value))]);
   }
   for (const value of [
-    "$TOKEN", "${}", "${1TOKEN}", "${TOKEN", "${TOKEN-default}", "${token}",
+    "$TOKEN", "${}", "${1TOKEN}", "${TOKEN", "${TOKEN-default}",
     "${TOKEN}\n", "${TOKEN}\r", "${TOKEN}\u2028", "${TOKEN}\u2029", " ${TOKEN}", "${TOKEN} ",
     "${TOKEN}${OTHER}", "prefix ${TOKEN}", "${TOKEN:-DO_NOT_ECHO}", "${TOKEN:-}${OTHER}",
     "Bearer ${TOKEN} DO_NOT_ECHO", "Bearer  ${TOKEN}", "bearer ${TOKEN}", "plain text", "",
@@ -137,29 +137,140 @@ const literalPositions = {
 for (const [position, server] of Object.entries(literalPositions)) {
   for (const value of [
     "Bearer DO_NOT_ECHO", "bearer DO_NOT_ECHO", "Basic DO_NOT_ECHO", "Token DO_NOT_ECHO",
-    "sk-private", "ghp_private", "gho_private", "github_pat_private",
+    "sk-private", "sk_test_private", "tvp_private", "ghp_private", "gho_private", "github_pat_private",
     "xoxa-private", "xoxb-private", "xoxp-private", "xoxr-private", "AKIA_PRIVATE", "glpat-private",
-    "eyJhbGciOiJIUzI1NiJ9.payload.signature", "abc.def.ghi", "-----BEGIN PRIVATE KEY-----",
+    "eyJhbGciOiJIUzI1NiJ9.payload1234.signature12", "-----BEGIN PRIVATE KEY-----",
+    "-----BEGIN PRIVATE KEY-----\nDO_NOT_ECHO\n-----END PRIVATE KEY-----",
     "prefix sk-private ${DUMMY}", "${DUMMY:-ghp_private}", "Bearer ${TOKEN:-DO_NOT_ECHO}",
   ]) {
     credentialMatrix.push([`${position} literal secret ${JSON.stringify(value)}`, config(server(value)), /platform secrets/]);
   }
-  for (const value of ["${TOKEN}", "${TOKEN:-}", "Bearer ${TOKEN}", "Basic ${TOKEN:-}", "Token ${TOKEN}", "${AKIA_TOKEN}", "${GHP_TOKEN:-}", "abc.def.ghi.jkl"]) {
+  // Retain the former negative dotted inputs with corrected JWT expectations.
+  for (const value of ["${TOKEN}", "${TOKEN:-}", "Bearer ${TOKEN}", "Basic ${TOKEN:-}", "Token ${TOKEN}", "${AKIA_TOKEN}", "${GHP_TOKEN:-}", "abc.def.ghi.jkl", "abc.def.ghi", "eyJhbGciOiJIUzI1NiJ9.payload.signature"]) {
     credentialMatrix.push([`${position} ordinary reference ${value}`, config(server(value))]);
   }
 }
 
-test("MCP credential positive and negative matrix (review1 + review2)", async (t) => {
+// Historical cases from 99a2230 retain their exact input positions. Corrected
+// expectations: ordinary names/--key and Bearer references are allowed, and a
+// short dotted string is not a JWT. No historical negative input is dropped.
+for (const [position, server] of Object.entries({ env: positions.env, headers: positions.header })) {
+  for (const key of ["MODE", "Cookie", "X-Session", "Accept "]) {
+    credentialMatrix.push([`99a2230 ${position} literal ${key}`, config(server(key, "ordinary literal")),
+      key === "Cookie" ? /platform secrets/ : undefined]);
+  }
+  for (const key of ["TOKEN", "clientSecret", "api_key", "Authorization", "Password"]) {
+    credentialMatrix.push([`99a2230 ${position} credential ${key}`, config(server(key, "DO_NOT_ECHO")), /platform secrets/]);
+  }
+  for (const value of ["${TOKEN}", "${TOKEN:-}"]) {
+    credentialMatrix.push([`99a2230 ${position} reference ${value}`, config(server("API_KEY", value))]);
+  }
+  for (const value of [
+    "Bearer DO_NOT_ECHO", "bearer DO_NOT_ECHO", "Basic DO_NOT_ECHO", "sk-private", "sk_test_private", "tvp_private",
+    "ghp_private", "github_pat_private", "xoxb-private", "eyJhbGciOiJIUzI1NiJ9.payload.signature",
+    "-----BEGIN PRIVATE KEY-----\nDO_NOT_ECHO\n-----END PRIVATE KEY-----",
+  ]) {
+    credentialMatrix.push([`99a2230 ${position} ordinary-key literal ${JSON.stringify(value)}`, config(server("OTHER", value)),
+      value === "eyJhbGciOiJIUzI1NiJ9.payload.signature" ? undefined : /platform secrets/]);
+  }
+  for (const value of [
+    "$TOKEN", "${}", "${1TOKEN}", "${TOKEN", "${TOKEN-default}", "${TOKEN}\n", " ${TOKEN}", "${TOKEN} ",
+    "${TOKEN}${OTHER}", "Bearer ${TOKEN}", "${TOKEN:-private-default}", "${TOKEN:-}${OTHER}", "plain text", "",
+  ]) {
+    credentialMatrix.push([`99a2230 ${position} malformed reference ${JSON.stringify(value)}`, config(server("API_KEY", value)),
+      value === "Bearer ${TOKEN}" ? undefined : /platform secrets/]);
+  }
+}
+for (const flag of ["token", "API-KEY", "key", "SECRET", "password", "Auth"]) {
+  for (const position of ["assigned", "separate"]) {
+    for (const value of ["DO_NOT_ECHO", "prefix ${TOKEN}", "${TOKEN:-DO_NOT_ECHO}", "${TOKEN}${OTHER}", "${TOKEN}\n", "", "${TOKEN}", "${TOKEN:-}"]) {
+      credentialMatrix.push([`99a2230 ${position} --${flag} ${JSON.stringify(value)}`, config(positions[position](flag, value)),
+        flag === "key" || value === "${TOKEN}" || value === "${TOKEN:-}" ? undefined : /platform secrets/]);
+    }
+  }
+}
+
+// Verify3 regressions, expanded across positions so a field cannot silently
+// lose either the literal detector or the shared reference grammar again.
+const everyStringPosition = {
+  ...literalPositions,
+  ordinaryHeader: value => positions.header("OTHER", value),
+  ordinaryEnv: value => positions.env("OTHER", value),
+  assigned: value => positions.assigned("other", value),
+  separate: value => positions.separate("other", value),
+  fileAssigned: value => positions.assigned("token-file", value),
+  fileSeparate: value => positions.separate("token-file", value),
+  envKey: value => positions.env(value, "production"),
+  headerKey: value => positions.header(value, "production"),
+};
+const prefixSamples = [
+  "sk_test_DO_NOT_ECHO", "sk-DO_NOT_ECHO", "tvp_DO_NOT_ECHO", "ghp_DO_NOT_ECHO", "gho_DO_NOT_ECHO",
+  "github_pat_DO_NOT_ECHO", "xoxa-DO_NOT_ECHO", "xoxb-DO_NOT_ECHO", "xoxp-DO_NOT_ECHO", "xoxr-DO_NOT_ECHO",
+  "AKIADO_NOT_ECHO", "glpat-DO_NOT_ECHO",
+];
+for (const [position, server] of Object.entries(everyStringPosition)) {
+  for (const [i, value] of prefixSamples.entries()) {
+    credentialMatrix.push([`verify3 P1 prefix ${i} in ${position}`, config(server(value)), /platform secrets/]);
+  }
+}
+for (const [i, name] of prefixSamples.entries()) {
+  credentialMatrix.push([`verify3 P1 prefix ${i} in server name`, config({ command: "node" }, name), /platform secrets/]);
+}
+credentialMatrix.push(
+  ["verify3 P2 JWT https URL", config({ ...http, url: "https://mcp.example.com/mcp" })],
+  ["verify3 P2 JWT dotted command", config({ command: "server.mcp.js" })],
+  ["verify3 P2 JWT dotted argument", config({ command: "node", args: ["server.mcp.js", "--version=1.2.3"] })],
+);
+for (const [position, server] of Object.entries(literalPositions)) {
+  for (const [i, value] of [
+    "eyJ1234567.abcdefghij.0123456789", // minimum segment lengths
+    "eyJhbGciOiJIUzI1NiJ9.payload1234.signature12",
+    "prefix eyJ1234567.abcdefghij.0123456789 suffix",
+  ].entries()) {
+    credentialMatrix.push([`verify3 P2 JWT ${i} in ${position}`, config(server(value)), /platform secrets/]);
+  }
+  for (const [i, value] of [
+    "eyJ123456.abcdefghij.0123456789", "eyJ1234567.abcdefghi.0123456789", "eyJ1234567.abcdefghij.012345678",
+    "abc1234567.abcdefghij.0123456789", "eyj1234567.abcdefghij.0123456789",
+    "eyJ1234567.abcdefghij.0123456789.more", "more.eyJ1234567.abcdefghij.0123456789",
+    "eyJ1234567.abcdefgh+j.0123456789", "eyJ1234567.abcdefghij.012345678=",
+    "server.mcp.js", "--version=1.2.3",
+  ].entries()) {
+    credentialMatrix.push([`verify3 P2 non-JWT ${i} in ${position}`, config(server(value))]);
+  }
+}
+for (const name of ["token-file", "api-key-file", "token-path", "secret-dir", "tokenFile", "API_KEY_PATH", "credentials.dir"]) {
+  for (const position of ["assigned", "separate"]) {
+    credentialMatrix.push([`verify3 P2 path ${position} ${name}`, config(positions[position](name, "./x"))]);
+  }
+}
+for (const position of ["env", "header", "assigned", "separate"]) {
+  for (const variable of ["api_key", "token", "aBc_123", "_secret", "sk_token", "tvp_token", "ghp_token"]) {
+    for (const value of ["${" + variable + "}", "${" + variable + ":-}", "Bearer ${" + variable + "}"]) {
+      credentialMatrix.push([`verify3 P2 lowercase ${position} ${value}`, config(positions[position]("API_KEY", value)), undefined, variable]);
+    }
+    for (const value of ["${" + variable + ":-DO_NOT_ECHO}", "${" + variable + "}\n", "${" + variable + "}${OTHER}"]) {
+      credentialMatrix.push([`verify3 P2 malformed lowercase ${position} ${JSON.stringify(value)}`, config(positions[position]("API_KEY", value)), /platform secrets/]);
+    }
+  }
+}
+
+test("MCP credential positive and negative matrix (99a2230 + 27cb275 + review2 + verify3)", async (t) => {
   const f = fixture(t);
-  for (const [label, input, reason] of credentialMatrix) {
+  for (const [label, input, reason, reference] of credentialMatrix) {
     await t.test(label, () => {
       if (reason) {
         const result = refuse(f, input, reason);
         assert.doesNotMatch(result.stdout + result.stderr, /DO_NOT_ECHO|sk-private|literal-secret|api_key=|session=/);
+        if (reason.source.includes("platform secrets")) {
+          assert.equal(result.stderr, "brain-write: MCP credentials must use platform secrets: store the value via platform secrets and reference it as ${VAR} or ${VAR:-} (empty default only)\n");
+        }
       } else {
         const result = f.run(input);
         success(result, /Created|Updated|Unchanged/);
         assert.equal(fs.readFileSync(path.join(f.root, ".mcp.json"), "utf8"), canonical(input));
+        assert.doesNotMatch(result.stdout + result.stderr, /DO_NOT_ECHO|private-default|Bearer|\$\{|https:/);
+        if (reference) assert.match(result.stdout, new RegExp(`env references: ${reference}\n$`));
       }
     });
   }

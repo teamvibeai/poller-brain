@@ -187,20 +187,32 @@ function regularFile(file) {
 
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 // Keep reference syntax in sync with poller brain-mcp.ts (teamvibe.ai PR #795).
-const envReferences = (value) => value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}/g);
-// An explicit end assertion also refuses a trailing newline (unlike JS's $).
-const secretReference = (value) => /^(?:(?:Bearer|Basic|Token) )?\$\{[A-Z_][A-Z0-9_]*(?::-)?\}(?![\s\S])/.test(value);
+const ENV_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}/g;
+const envReferences = (value) => value.matchAll(ENV_REFERENCE);
+const emptyDefault = (match) => match[2] === undefined || match[2] === ":-";
+function secretReference(value) {
+  const reference = value.replace(/^(?:Bearer|Basic|Token) /, "");
+  const [match] = envReferences(reference);
+  // Exact span comparison also refuses trailing newlines (unlike JS's $).
+  return match !== undefined && match.index === 0 && match[0].length === reference.length && emptyDefault(match);
+}
 const CREDENTIAL_SEGMENTS = new Set([
   "secret", "token", "password", "passwd", "pwd", "credential", "credentials",
   "auth", "authorization", "bearer", "cookie", "apikey", "privatekey",
 ]);
 const CREDENTIAL_KEY_PREFIXES = new Set(["api", "access", "private", "secret", "client", "signing"]);
+const PATH_SEGMENTS = new Set(["file", "path", "dir"]);
+// Union of known-prefix cases in 99a2230 and 27cb275. Keep this independent
+// of field names: ordinary fields and credential-file paths can carry secrets.
+const LITERAL_SECRET_PREFIX = /\b(?:sk[_-]|tvp_|ghp_|gho_|github_pat_|xox[abpr]-|AKIA|glpat-)[A-Za-z0-9_-]+/i;
+const LITERAL_JWT = /(?<![A-Za-z0-9_.=+-])eyJ[A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_.=+-])/;
 
 function credentialName(name) {
   const segments = name
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
     .toLowerCase().split(/[-_.]+/);
+  if (PATH_SEGMENTS.has(segments.at(-1))) return false;
   return segments.some((segment, i) => CREDENTIAL_SEGMENTS.has(segment) ||
     (CREDENTIAL_KEY_PREFIXES.has(segment) && segments[i + 1] === "key"));
 }
@@ -210,16 +222,22 @@ function literalSecret(value) {
     if (!secretReference(match[1])) return true;
   }
   // Reference names aren't literal credentials, even when named AKIA_TOKEN.
-  const literal = value.replace(/\$\{[A-Z_][A-Z0-9_]*(?::-)?\}/g, "");
-  return /\b(?:sk-|ghp_|gho_|github_pat_|xox[abpr]-|AKIA|glpat-)[A-Za-z0-9_-]+/i.test(literal) ||
-    /(?<![A-Za-z0-9_.-])[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_.-])/.test(literal) ||
+  // Mask only references with no literal fallback, using the collector's grammar.
+  let literal = "";
+  let end = 0;
+  for (const match of envReferences(value)) {
+    literal += value.slice(end, match.index) + (emptyDefault(match) ? "" : match[0]);
+    end = match.index + match[0].length;
+  }
+  literal += value.slice(end);
+  return LITERAL_SECRET_PREFIX.test(literal) || LITERAL_JWT.test(literal) ||
     /-----BEGIN [A-Z0-9 ]+-----/i.test(literal);
 }
 
 const credentialError = () => new Error("MCP credentials must use platform secrets: store the value via platform secrets and reference it as ${VAR} or ${VAR:-} (empty default only)");
 
-function validateMcpString(value, name = "") {
-  if ((credentialName(name) && !secretReference(value)) || literalSecret(value)) {
+function validateCredentialPosition(value, name) {
+  if (credentialName(name) && !secretReference(value)) {
     throw credentialError();
   }
 }
@@ -266,11 +284,13 @@ function validateMcp(content) {
   const config = parseMcp(content);
   // Bound every string, including names and map keys, before field validation.
   const pending = [config];
+  const strings = [];
   while (pending.length) {
     const value = pending.pop();
     if (typeof value === "string" && Buffer.byteLength(value) > MAX_MCP_STRING_BYTES) {
       throw new Error("MCP strings exceed the 4096-byte cap");
     }
+    if (typeof value === "string") strings.push(value);
     if (Array.isArray(value)) pending.push(...value);
     else if (isRecord(value)) {
       for (const [key, entry] of Object.entries(value)) pending.push(key, entry);
@@ -291,7 +311,7 @@ function validateMcp(content) {
       throw new Error(`MCP ${field} must be a string map`);
     }
     for (const [key, entry] of Object.entries(value)) {
-      validateMcpString(entry, key);
+      validateCredentialPosition(entry, key);
     }
   };
   for (const [name, server] of servers) {
@@ -305,19 +325,17 @@ function validateMcp(content) {
     if (Object.keys(server).some((key) => !fields.includes(key))) throw new Error("Unexpected fields for MCP transport");
     if (type === "stdio") {
       if (typeof server.command !== "string" || !server.command.trim()) throw new Error("MCP stdio command must be a nonempty string");
-      validateMcpString(server.command);
       if (server.args !== undefined && (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string"))) {
         throw new Error("MCP stdio args must be an array of strings");
       }
       const args = server.args ?? [];
       for (let i = 0; i < args.length; i++) {
-        validateMcpString(args[i]);
         // Anchor names: --sort-key=name must not be mistaken for key=name.
         const assignment = args[i].match(/^(?:--?)?([A-Za-z_][A-Za-z0-9_.-]*)=([\s\S]*)$/);
-        if (assignment) validateMcpString(assignment[2], assignment[1]);
+        if (assignment) validateCredentialPosition(assignment[2], assignment[1]);
         else {
           const flag = args[i].match(/^--?([A-Za-z_][A-Za-z0-9_.-]*)$/);
-          if (flag && credentialName(flag[1])) validateMcpString(args[i + 1] ?? "", flag[1]);
+          if (flag) validateCredentialPosition(args[i + 1] ?? "", flag[1]);
         }
       }
       if (server.env !== undefined) stringMap(server.env, "env");
@@ -336,7 +354,6 @@ function validateMcp(content) {
       if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) {
         throw new Error("MCP url must use https, or http only for localhost");
       }
-      validateMcpString(server.url);
       if (server.headers !== undefined) stringMap(server.headers, "headers");
     }
     // Mirror teamvibe.ai main packages/poller/src/brain-mcp.ts:125-140 (#795,
@@ -364,6 +381,9 @@ function validateMcp(content) {
       throw new Error("MCP metadata exceeds the poller's 4096-byte reminder budget (including missing-variable names and 128 reserved summary bytes); reduce servers or reference names");
     }
   }
+  // One traversal supplies every string, including names and map keys. Field
+  // allowlists and path-position exceptions can never bypass literal detection.
+  if (strings.some(literalSecret)) throw credentialError();
   const canonical = Buffer.from(JSON.stringify(config, null, 2) + "\n");
   if (canonical.length > MAX_MCP_BYTES) throw new Error("Canonical .mcp.json exceeds the 65536-byte (64 KiB) size cap");
   const summary = `MCP servers: ${servers.map(([name]) => name).sort().join(", ") || "none"}; env references: ${[...references].sort().join(", ") || "none"}`;
