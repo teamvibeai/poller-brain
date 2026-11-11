@@ -30,7 +30,20 @@ function fixture(t) {
       process.on('exit', code => record({ exit: code }))
     }
     if (process.argv[1] === process.env.WORKLOAD) process.on('exit', code => record({ workloadExit: code }))
-    const originalRead = fs.readFileSync, originalUnlink = fs.unlinkSync, originalMkdir = fs.mkdirSync
+    const originalRead = fs.readFileSync, originalUnlink = fs.unlinkSync, originalMkdir = fs.mkdirSync, originalWrite = fs.writeFileSync
+    let inboxFailures = Number(process.env.INBOX_FAILURE_COUNT || 0)
+    const failInbox = stage => {
+      if (process.env.INBOX_FAILURE_STAGE !== stage || inboxFailures <= 0) return
+      inboxFailures--
+      if (stage === 'write' && process.env.INBOX_FAILURE_CODE === 'ENOENT') {
+        // Match the watcher's bottom-up pruning of empty directories.
+        fs.rmdirSync(process.env.TEST_INBOX_DIR)
+        fs.rmdirSync(dirname(process.env.TEST_INBOX_DIR))
+        fs.rmdirSync(dirname(dirname(process.env.TEST_INBOX_DIR)))
+        return // Let the real write fail because its parent disappeared.
+      }
+      throw Object.assign(new Error('synthetic inbox ' + stage + ' failure'), { code: process.env.INBOX_FAILURE_CODE })
+    }
     fs.readFileSync = function(file, ...args) {
       if (isRunner && process.env.FAIL_SPEC_READ && file === process.argv[2]) throw new Error('synthetic read failure')
       return originalRead.call(this, file, ...args)
@@ -40,6 +53,10 @@ function fixture(t) {
       return originalUnlink.call(this, file)
     }
     fs.mkdirSync = function(file, options) {
+      if (isRunner && file === process.env.TEST_INBOX_DIR) {
+        record({ inboxMkdir: file })
+        failInbox('mkdir')
+      }
       if (!isRunner && process.env.TASK_COLLISION && dirname(file) === join(process.env.BG_TASK_ROOT, 'TEST')) {
         const kind = process.env.TASK_COLLISION, target = join(process.env.BG_TASK_ROOT, 'redirected')
         originalMkdir(dirname(file), { recursive: true })
@@ -55,6 +72,16 @@ function fixture(t) {
         }
       }
       return originalMkdir(file, options)
+    }
+    fs.writeFileSync = function(file, ...args) {
+      if (isRunner && dirname(file) === process.env.TEST_INBOX_DIR) {
+        record({ inboxWrite: file })
+        failInbox('write')
+        const result = originalWrite.call(this, file, ...args)
+        record({ inboxWritten: file })
+        return result
+      }
+      return originalWrite.call(this, file, ...args)
     }
     syncBuiltinESMExports()
     const original = ChildProcess.prototype.spawn
@@ -107,6 +134,46 @@ function fixture(t) {
     assert.fail('runner did not finish')
   }
   return { root, audit, workload, result, env, launch, direct, settleWorkload, done }
+}
+
+for (const stage of ['write', 'mkdir']) {
+  for (const [code, failures, delivered, attempts] of [
+    ['ENOENT', 1, true, 2],
+    ['ENOENT', 10, false, 5],
+    ['EACCES', 1, false, 1],
+  ]) {
+    test(`inbox drop: ${stage} ${code} (${failures} failures) ${delivered ? 'recovers exactly once' : 'surfaces failure'}`, t => {
+      const f = fixture(t), inboxDir = join(f.root, '.inbox', f.env.INBOX_THREAD_ID, 'new')
+      Object.assign(f.env, {
+        POLLER_BRAIN_PATH: f.root, TEST_INBOX_DIR: inboxDir,
+        INBOX_FAILURE_STAGE: stage, INBOX_FAILURE_CODE: code, INBOX_FAILURE_COUNT: String(failures),
+      })
+      const result = f.direct([process.execPath, '-e', ''], { dryRun: false })
+      assert.equal(result.status, 0, result.stderr)
+      const events = lines(f.audit), status = read(join(result.dir, 'status'))
+      if (delivered) assert.match(status, /^terminal_drop=ok$/m)
+      else assert.match(status, /^terminal_drop=FAILED:/m)
+      assert.equal(events.filter(e => e.inboxMkdir).length, attempts)
+      const writes = events.filter(e => e.inboxWrite).map(e => e.inboxWrite)
+      assert.equal(writes.length, stage === 'mkdir' ? (delivered ? 1 : 0) : attempts)
+      assert.equal(new Set(writes).size, writes.length ? 1 : 0, 'retries keep the same filename')
+      assert.equal(events.filter(e => e.inboxWritten).length, delivered ? 1 : 0)
+      assert.equal(existsSync(join(result.dir, 'inbox-drops.jsonl')), false, 'real drops are not diverted')
+      const files = existsSync(inboxDir) ? readdirSync(inboxDir) : []
+      assert.equal(files.length, delivered ? 1 : 0)
+      if (delivered) {
+        assert.match(files[0], /^\d+\.txt$/)
+        const payload = JSON.parse(read(join(inboxDir, files[0])))
+        assert.match(payload.text, /finished with exit code 0/)
+        assert.deepEqual({ ...payload, text: '' }, {
+          text: '', sender: { id: 'system', name: 'Background Task' },
+          type: 'message', source: 'slack', attachments: [],
+        })
+      } else {
+        assert.match(status, new RegExp(stage === 'write' && code === 'ENOENT' ? 'ENOENT' : `synthetic inbox ${stage} failure`))
+      }
+    })
+  }
 }
 
 test('runner gets only a private spec path; existing launch and --list still work', async t => {

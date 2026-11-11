@@ -22,6 +22,7 @@ const TAIL_BYTES = 1500
 const NOTE_CHARS = 1000 // see noteOf: the note is the only agent-authored field in the payload
 const KILL_GRACE_MS = 5000
 const TIMEOUT_RC = 124 // same code GNU `timeout` uses, so docs and habits carry over
+const INBOX_DROP_ATTEMPTS = 5
 
 // clamp(ttl/8, floor, ceiling): a 2-minute task gets no checkpoint at all (only the
 // terminal drop); an hour-long task gets ~8 regardless of how long it actually runs.
@@ -290,8 +291,19 @@ export function writeInboxMessage(threadId, text, dir, dry) {
     // gets removed right after the session ends — see teamvibe.ai#265.
     const brainPath = process.env.POLLER_BRAIN_PATH || process.cwd()
     const inboxDir = join(brainPath, '.inbox', threadId, 'new')
-    mkdirSync(inboxDir, { recursive: true })
-    writeFileSync(join(inboxDir, `${process.hrtime.bigint()}.txt`), payload, 'utf8')
+    const inboxFile = join(inboxDir, `${process.hrtime.bigint()}.txt`)
+    for (let attempt = 1; attempt <= INBOX_DROP_ATTEMPTS; attempt++) {
+      try {
+        mkdirSync(inboxDir, { recursive: true })
+        writeFileSync(inboxFile, payload, 'utf8')
+        break
+      } catch (e) {
+        // The watcher can prune empty parents between mkdir and open. ENOENT means
+        // no file was created; recreate the path and retry with the same filename.
+        if (e.code !== 'ENOENT' || attempt === INBOX_DROP_ATTEMPTS) throw e
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+      }
+    }
     return { ok: true, dryRun: false }
   } catch (e) {
     // A write that fails here is silent otherwise: the command's work is done but nobody
