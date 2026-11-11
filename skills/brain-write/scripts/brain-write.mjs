@@ -7,9 +7,19 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 const MAX_BYTES = 512 * 1024;
+const MAX_MCP_BYTES = 64 * 1024;
+const MAX_MCP_STRING_BYTES = 4 * 1024;
+// teamvibe.ai main packages/poller/src/mcp-session.ts:159-163,187-189
+// (#795, ac085e9f): reserve the union of legacy and merged base transports.
+const BASE_MCP_SERVERS = new Set(["slack", "teamvibe-api", "teamvibe"]);
+// teamvibe.ai main packages/poller/src/brain-mcp.ts:9-13,64-67 (#795, ac085e9f).
+const MAX_MCP_REMINDER_BYTES = 4 * 1024;
+const MCP_SUMMARY_BYTES = 128;
 const USAGE = "Usage: brain-write.ts <relative-path> [--from <file>] [--delete]";
 
 function parseArgs(args) {
+  // Accept --delete <path> as well as the existing <path> --delete form.
+  if (args.length === 2 && args[0] === "--delete") args = [args[1], "--delete"];
   const [target, ...options] = args;
   if (!target || target.startsWith("--")) throw new Error(USAGE);
   let from;
@@ -82,14 +92,15 @@ function validateTarget(root, relative) {
   if (parts.some((part) => /^settings.*\.json$/i.test(part))) {
     throw new Error("settings*.json files are refused anywhere; propose configuration changes via Slack approval");
   }
-  if (parts.length < 3 || parts[0] !== ".claude" ||
-      !["skills", "commands", "agents"].includes(parts[1])) {
-    throw new Error("Allowed targets only: .claude/skills/**, .claude/commands/**, .claude/agents/**; hooks and other paths are refused");
+  const isMcp = relative === ".mcp.json";
+  if (!isMcp && (parts.length < 3 || parts[0] !== ".claude" ||
+      !["skills", "commands", "agents"].includes(parts[1]))) {
+    throw new Error("Allowed targets only: .mcp.json, .claude/skills/**, .claude/commands/**, .claude/agents/**; hooks and other paths are refused");
   }
 
   // Refuse every symlink component, including dangling links and the final file.
   // Validate existing ancestors before mkdir so an escape cannot create outside dirs.
-  const allowed = path.join(root, parts[0], parts[1]);
+  const allowed = isMcp ? path.join(root, relative) : path.join(root, parts[0], parts[1]);
   let current = root;
   let targetStat = null;
   for (let i = 0; i < parts.length; i++) {
@@ -97,7 +108,7 @@ function validateTarget(root, relative) {
     const stat = lstatIfPresent(current);
     if (!stat) continue;
     if (stat.isSymbolicLink()) throw new Error(`Symlink target paths are refused: ${parts.slice(0, i + 1).join("/")}`);
-    if (i >= 1) {
+    if (isMcp || i >= 1) {
       const real = fs.realpathSync(current);
       if (real !== allowed && !real.startsWith(allowed + path.sep)) {
         throw new Error("Resolved target or existing parent escapes the allowed directory");
@@ -174,7 +185,212 @@ function regularFile(file) {
   return stat;
 }
 
-async function readContent(from) {
+const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+// Keep reference syntax in sync with poller brain-mcp.ts (teamvibe.ai PR #795).
+const ENV_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}/g;
+const envReferences = (value) => value.matchAll(ENV_REFERENCE);
+const emptyDefault = (match) => match[2] === undefined || match[2] === ":-";
+function secretReference(value) {
+  const reference = value.replace(/^(?:Bearer|Basic|Token) /, "");
+  const [match] = envReferences(reference);
+  // Exact span comparison also refuses trailing newlines (unlike JS's $).
+  return match !== undefined && match.index === 0 && match[0].length === reference.length && emptyDefault(match);
+}
+const CREDENTIAL_SEGMENTS = new Set([
+  "secret", "token", "password", "passwd", "pwd", "credential", "credentials",
+  "auth", "authorization", "bearer", "cookie", "apikey", "privatekey",
+]);
+const CREDENTIAL_KEY_PREFIXES = new Set(["api", "access", "private", "secret", "client", "signing"]);
+const PATH_SEGMENTS = new Set(["file", "path", "dir"]);
+// Union of known-prefix cases in 99a2230 and 27cb275. Keep this independent
+// of field names: ordinary fields and credential-file paths can carry secrets.
+const LITERAL_SECRET_PREFIX = /\b(?:sk[_-]|tvp_|ghp_|gho_|github_pat_|xox[abpr]-|AKIA|glpat-)[A-Za-z0-9_-]+/i;
+const LITERAL_JWT = /(?<![A-Za-z0-9_.+-])eyJ[A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_.=+-])/;
+
+function credentialName(name) {
+  const segments = name
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase().split(/[-_.]+/);
+  if (PATH_SEGMENTS.has(segments.at(-1))) return false;
+  return segments.some((segment, i) => CREDENTIAL_SEGMENTS.has(segment) ||
+    (CREDENTIAL_KEY_PREFIXES.has(segment) && segments[i + 1] === "key"));
+}
+
+function literalSecret(value) {
+  for (const match of value.matchAll(/\b(?:Bearer|Basic|Token)\s+(\S+)/gi)) {
+    if (!secretReference(match[1])) return true;
+  }
+  // Reference names aren't literal credentials, even when named AKIA_TOKEN.
+  // Mask only references with no literal fallback, using the collector's grammar.
+  let literal = "";
+  let end = 0;
+  for (const match of envReferences(value)) {
+    literal += value.slice(end, match.index) + (emptyDefault(match) ? "" : match[0]);
+    end = match.index + match[0].length;
+  }
+  literal += value.slice(end);
+  return LITERAL_SECRET_PREFIX.test(literal) || LITERAL_JWT.test(literal) ||
+    /-----BEGIN [A-Z0-9 ]+-----/i.test(literal);
+}
+
+const credentialError = () => new Error("MCP credentials must use platform secrets: store the value via platform secrets and reference it as ${VAR} or ${VAR:-} (empty default only)");
+
+function validateCredentialPosition(value, name) {
+  if (credentialName(name) && !secretReference(value)) {
+    throw credentialError();
+  }
+}
+
+function parseMcp(content) {
+  let text;
+  try {
+    // Preserve the BOM so it can be refused explicitly, rather than stripped.
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
+  } catch {
+    throw new Error(".mcp.json must contain valid JSON encoded as UTF-8");
+  }
+  if (text.startsWith("\uFEFF")) throw new Error(".mcp.json must not contain a UTF-8 BOM");
+
+  let config;
+  try {
+    config = JSON.parse(text);
+  } catch {
+    // JSON parser errors can contain source text, including credentials.
+    throw new Error(".mcp.json must contain valid JSON");
+  }
+  // JSON.parse checks syntax; this raw-token pass makes the parse duplicate-aware.
+  // Track keys at every object depth, decoding escapes before comparing names.
+  // Arrays use null frames so their commas cannot reset a containing object's key state.
+  const stack = [];
+  for (const [token] of text.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\],]/g)) {
+    if (token === "{") stack.push({ keys: new Set(), expectKey: true });
+    else if (token === "[") stack.push(null);
+    else if (token === "}" || token === "]") stack.pop();
+    else if (token === ",") {
+      if (stack.at(-1)) stack.at(-1).expectKey = true;
+    } else if (stack.at(-1)?.expectKey) {
+      const frame = stack.at(-1);
+      const key = JSON.parse(token);
+      if (frame.keys.has(key)) throw new Error(".mcp.json must not contain duplicate object keys");
+      frame.keys.add(key);
+      frame.expectKey = false;
+    }
+  }
+  return config;
+}
+
+function validateMcp(content) {
+  const config = parseMcp(content);
+  // Bound every string, including names and map keys, before field validation.
+  const pending = [config];
+  const strings = [];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === "string" && Buffer.byteLength(value) > MAX_MCP_STRING_BYTES) {
+      throw new Error("MCP strings exceed the 4096-byte cap");
+    }
+    if (typeof value === "string") strings.push(value);
+    if (Array.isArray(value)) pending.push(...value);
+    else if (isRecord(value)) {
+      for (const [key, entry] of Object.entries(value)) pending.push(key, entry);
+    }
+  }
+  if (!isRecord(config) || !isRecord(config.mcpServers)) {
+    throw new Error(".mcp.json must be an object with an mcpServers object");
+  }
+  if (Object.keys(config).some((key) => key !== "mcpServers")) {
+    throw new Error(".mcp.json only permits the mcpServers top-level field");
+  }
+  const servers = Object.entries(config.mcpServers);
+  if (servers.length > 32) throw new Error(".mcp.json permits at most 32 servers");
+  const references = new Set();
+  let reminderBytes = 0;
+  const stringMap = (value, field) => {
+    if (!isRecord(value) || Object.values(value).some((entry) => typeof entry !== "string")) {
+      throw new Error(`MCP ${field} must be a string map`);
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      validateCredentialPosition(entry, key);
+    }
+  };
+  for (const [name, server] of servers) {
+    // Never echo invalid names, unknown fields, URLs, or input values in errors.
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Error("Invalid MCP server name; use 1-64 letters, digits, underscores, or hyphens");
+    if (BASE_MCP_SERVERS.has(name)) throw new Error(`MCP server ${name} is reserved by the base poller`);
+    if (!isRecord(server)) throw new Error("MCP server must be a known transport object");
+    const type = server.type === undefined ? "stdio" : server.type;
+    if (!["stdio", "http", "sse"].includes(type)) throw new Error("Unknown MCP transport type; use stdio, http, or sse");
+    const fields = type === "stdio" ? ["type", "command", "args", "env"] : ["type", "url", "headers"];
+    if (Object.keys(server).some((key) => !fields.includes(key))) throw new Error("Unexpected fields for MCP transport");
+    if (type === "stdio") {
+      if (typeof server.command !== "string" || !server.command.trim()) throw new Error("MCP stdio command must be a nonempty string");
+      if (server.args !== undefined && (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string"))) {
+        throw new Error("MCP stdio args must be an array of strings");
+      }
+      const args = server.args ?? [];
+      for (let i = 0; i < args.length; i++) {
+        // Anchor names: --sort-key=name must not be mistaken for key=name.
+        const assignment = args[i].match(/^(?:--?)?([A-Za-z_][A-Za-z0-9_.-]*)=([\s\S]*)$/);
+        if (assignment) validateCredentialPosition(assignment[2], assignment[1]);
+        else {
+          const flag = args[i].match(/^--?([A-Za-z_][A-Za-z0-9_.-]*)$/);
+          if (flag) validateCredentialPosition(args[i + 1] ?? "", flag[1]);
+        }
+      }
+      if (server.env !== undefined) stringMap(server.env, "env");
+    } else {
+      let url;
+      try {
+        if (typeof server.url !== "string" || !server.url.trim()) throw new Error();
+        url = new URL(server.url);
+      } catch {
+        throw new Error("MCP http/sse url must be a valid URL");
+      }
+      if (url.username || url.password || /^[^:]+:\/\/[^/?#]*@/.test(server.url) ||
+          server.url.includes("?") || server.url.includes("#")) {
+        throw new Error("MCP url must not contain userinfo, a query string, or a fragment");
+      }
+      if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) {
+        throw new Error("MCP url must use https, or http only for localhost");
+      }
+      if (server.headers !== undefined) stringMap(server.headers, "headers");
+    }
+    // Mirror teamvibe.ai main packages/poller/src/brain-mcp.ts:125-140 (#795,
+    // ac085e9f), using the largest missing-variable list for any spawn environment.
+    const serverReferences = new Set();
+    const required = new Set();
+    const collect = (value) => {
+      if (typeof value === "string") {
+        for (const match of envReferences(value)) {
+          serverReferences.add(match[1]);
+          references.add(match[1]);
+          if (match[2] === undefined) required.add(match[1]);
+        }
+      } else if (Array.isArray(value)) value.forEach(collect);
+      else if (isRecord(value)) Object.values(value).forEach(collect);
+    };
+    for (const field of ["command", "args", "env", "url", "headers"]) collect(server[field]);
+    const names = [...serverReferences].sort();
+    const missing = names.filter((key) => required.has(key)).join(", ");
+    // For short names, the poller's "none" label can be longer than all missing.
+    const missingLabel = missing.length > 4 ? missing : "none";
+    const line = `- Brain MCP ${name}: env references: ${names.join(", ") || "none"}; missing in spawn env: ${missingLabel}.`;
+    reminderBytes += Buffer.byteLength(line) + (reminderBytes ? 1 : 0);
+    if (reminderBytes > MAX_MCP_REMINDER_BYTES - MCP_SUMMARY_BYTES) {
+      throw new Error("MCP metadata exceeds the poller's 4096-byte reminder budget (including missing-variable names and 128 reserved summary bytes); reduce servers or reference names");
+    }
+  }
+  // One traversal supplies every string, including names and map keys. Field
+  // allowlists and path-position exceptions can never bypass literal detection.
+  if (strings.some(literalSecret)) throw credentialError();
+  const canonical = Buffer.from(JSON.stringify(config, null, 2) + "\n");
+  if (canonical.length > MAX_MCP_BYTES) throw new Error("Canonical .mcp.json exceeds the 65536-byte (64 KiB) size cap");
+  const summary = `MCP servers: ${servers.map(([name]) => name).sort().join(", ") || "none"}; env references: ${[...references].sort().join(", ") || "none"}`;
+  return { content: canonical, summary };
+}
+
+async function readContent(from, maxBytes = MAX_BYTES) {
   if (from !== undefined && !fs.statSync(from).isFile()) throw new Error("--from must name a regular file");
   if (from === undefined && process.stdin.isTTY) throw new Error("Supply content on stdin or use --from <file>");
   const input = from === undefined ? process.stdin : fs.createReadStream(from);
@@ -183,7 +399,7 @@ async function readContent(from) {
   for await (const chunk of input) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.length;
-    if (bytes > MAX_BYTES) throw new Error(`Content exceeds the ${MAX_BYTES}-byte (512 KiB) size cap`);
+    if (bytes > maxBytes) throw new Error(`Content exceeds the ${maxBytes}-byte (${maxBytes / 1024} KiB) size cap`);
     chunks.push(buffer);
   }
   return Buffer.concat(chunks, bytes);
@@ -211,7 +427,11 @@ export async function main(args = process.argv.slice(2)) {
       return;
     }
 
-    const content = await readContent(from);
+    const isMcp = target === ".mcp.json";
+    const input = await readContent(from, isMcp ? MAX_MCP_BYTES : MAX_BYTES);
+    const validated = isMcp ? validateMcp(input) : undefined;
+    const content = validated?.content ?? input;
+    const mcpSummary = validated?.summary;
     // Input may have waited on stdin; check again before touching the target tree.
     validateTarget(root, target);
     const parent = openParent(root, target, true);
@@ -228,6 +448,7 @@ export async function main(args = process.argv.slice(2)) {
           if (!sameFile(stat, fs.fstatSync(fd))) throw new Error("Target changed while opening");
           if (fs.readFileSync(fd).equals(content)) {
             console.log(`Unchanged ${target} (${content.length} bytes)`);
+            if (mcpSummary) console.log(mcpSummary);
             return;
           }
         } finally {
@@ -252,6 +473,7 @@ export async function main(args = process.argv.slice(2)) {
       console.log(stat
         ? `Updated ${target} (${stat.size} -> ${content.length} bytes)`
         : `Created ${target} (${content.length} bytes)`);
+      if (mcpSummary) console.log(mcpSummary);
     } finally {
       try {
         if (created) {
