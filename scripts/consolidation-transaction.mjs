@@ -1,10 +1,10 @@
 // Shared strict memory transaction for consolidation-apply/commit.sh. No recovery:
 // a killed process leaves the lifecycle lock and marker for explicit inspection.
-import { readFileSync, writeFileSync, lstatSync, mkdirSync, rmdirSync, unlinkSync, renameSync, copyFileSync, mkdtempSync, rmSync, realpathSync } from 'node:fs'
+import { readFileSync, writeFileSync, openSync, closeSync, fchmodSync, lstatSync, mkdirSync, rmdirSync, unlinkSync, renameSync, copyFileSync, mkdtempSync, rmSync, realpathSync } from 'node:fs'
 import { resolve, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 const [action, brain, date, boundary, ...args] = process.argv.slice(2)
 const prefix = `consolidation_${action === 'apply' ? 'apply' : 'commit'}`
@@ -15,9 +15,11 @@ const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.te
   Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value
 const stat = path => { try { return lstatSync(path) } catch (e) { if (e.code === 'ENOENT') return null; throw e } }
 let root, env, lock, indexLock, scratch
+let preserveState = false
 function git(args, options = {}) {
   const result = spawnSync('git', ['--literal-pathspecs', ...args], { cwd: root, env, maxBuffer: 32 * 1024 * 1024, ...options })
-  if (result.error || result.status !== 0) fail(`git ${args[0]} failed: ${result.error?.message || result.stderr?.toString().trim()}`)
+  const command = args[0] === '-c' ? args[2] : args[0]
+  if (result.error || result.status !== 0) fail(`git ${command} failed: ${result.error?.message || result.stderr?.toString().trim()}`)
   return result.stdout
 }
 const gitText = args => git(args).toString().trim()
@@ -29,7 +31,23 @@ function safePath(path) {
     current = join(current, part)
     const info = stat(current)
     if (!info) continue
+    if (info.isFile() && info.nlink > 1) fail(`hardlinked memory target: ${path}`)
     if (info.isSymbolicLink() || (i < path.split('/').length - 1 ? !info.isDirectory() : !info.isFile())) fail(`unsafe memory path component: ${path}`)
+  }
+}
+// Never write through an existing inode, including when restoring a failed batch.
+function atomicWrite(path, bytes, mode) {
+  safePath(path)
+  const target = join(root, path)
+  const temp = join(dirname(target), `.consolidation-${randomUUID()}.tmp`)
+  const fd = openSync(temp, 'wx', 0o600)
+  try {
+    writeFileSync(fd, bytes)
+    fchmodSync(fd, (mode ?? 0o644) & 0o777)
+    renameSync(temp, target)
+  } finally {
+    closeSync(fd)
+    if (stat(temp)) unlinkSync(temp)
   }
 }
 function disk(path) { return stat(join(root, path)) ? readFileSync(join(root, path)) : null }
@@ -46,11 +64,18 @@ function cleanIndex(paths) {
 function checkDiff() {
   git(['diff', '--cached', '--check'])
 }
+function verifyTargets(paths, head) {
+  cleanIndex(paths)
+  for (const path of paths) {
+    safePath(path)
+    if (!same(disk(path), committed(path, head))) fail(`working bytes differ from committed blob: ${path}`)
+  }
+}
 function commitMemory(paths, head) {
   cleanIndex(paths)
   const changed = paths.filter(path => !same(disk(path), committed(path)))
-  if (!changed.length) return
-  // Hold the real index lock throughout. Git and hooks use a private index;
+  if (!changed.length) { verifyTargets(paths, head); return }
+  // Hold the real index lock throughout. Git uses a private index;
   // failure cannot stage outputs or consume unrelated partially staged work.
   const index = resolve(root, gitText(['rev-parse', '--git-path', 'index']))
   writeFileSync(`${index}.lock`, '', { flag: 'wx' })
@@ -59,8 +84,7 @@ function commitMemory(paths, head) {
   const originalEnv = env
   const privateIndex = join(scratch, 'index')
   const nextIndex = join(scratch, 'next')
-  let published
-  let commitAttempted = false
+  let transactionCommit
   try {
     cleanIndex(paths)
     copyFileSync(index, nextIndex)
@@ -80,22 +104,38 @@ function commitMemory(paths, head) {
     env = { ...env, GIT_INDEX_FILE: privateIndex }
     const subject = `chore: consolidate memory checkpoint (${date}) — ${boundary}`
     if (gitText(['rev-parse', 'HEAD']) !== head) fail('baseline HEAD conflict before commit')
-    commitAttempted = true
-    git(['commit', '-m', subject])
-    const resultHead = published = gitText(['rev-parse', 'HEAD'])
-    if (gitText(['rev-parse', 'HEAD^{tree}']) !== tree || gitText(['rev-parse', 'HEAD^']) !== head || gitText(['log', '-1', '--format=%s']) !== subject) {
-      fail('commit changed the planned tree, ancestry or subject')
-    }
+    // Construct the exact commit object before running commit. Freeze both dates
+    // so the object ID is transaction-owned even if commit fails after publishing.
+    const identDate = who => `@${gitText(['var', who]).match(/\d+ [+-]\d{4}$/)[0]}`
+    env = { ...env, GIT_AUTHOR_DATE: identDate('GIT_AUTHOR_IDENT'), GIT_COMMITTER_DATE: identDate('GIT_COMMITTER_IDENT') }
+    transactionCommit = gitText(['commit-tree', tree, '-p', head, '--no-gpg-sign', '-m', subject])
+    // core.hooksPath disables every hook, including post-commit (unlike --no-verify).
+    git(['-c', 'core.hooksPath=/dev/null', 'commit', '--no-gpg-sign', '--cleanup=verbatim', '-C', transactionCommit])
+    const resultHead = gitText(['rev-parse', 'HEAD'])
+    if (resultHead !== transactionCommit) fail('commit did not publish the transaction commit')
+    // Verify all targets, including unchanged ones, against committed bytes and
+    // the prepared real index after commit, before publishing it or success.
+    env = { ...env, GIT_INDEX_FILE: nextIndex }
+    verifyTargets(paths, transactionCommit)
+    if (gitText(['rev-parse', 'HEAD']) !== transactionCommit) fail('HEAD changed after commit verification')
     // Publishing a prepared index requires no further Git operation.
     renameSync(nextIndex, indexLock)
     renameSync(indexLock, index)
     indexLock = undefined
     process.stdout.write(`${prefix}: checkpoint ${resultHead}\n`)
   } catch (error) {
-    // A commit command can report failure after updating the ref. Inspect it
-    // while holding the index/lifecycle locks before rolling back this request.
-    if (commitAttempted && !published) published = gitText(['rev-parse', 'HEAD'])
-    if (published && published !== head) git(['update-ref', 'HEAD', head, published])
+    // Never infer ownership from an observed HEAD, ancestry, tree or subject.
+    // Only our preconstructed object may be rolled back, with a ref CAS.
+    try {
+      const current = gitText(['rev-parse', 'HEAD'])
+      if (current !== head) {
+        if (!transactionCommit || current !== transactionCommit) fail(`unexpected HEAD ${current}`)
+        git(['update-ref', 'HEAD', head, transactionCommit])
+      }
+    } catch (rollbackError) {
+      preserveState = true
+      fail(`${rollbackError.message}; unexpected HEAD or ref conflict; no rollback; operator repair required (baseline ${head}, transaction ${transactionCommit ?? 'not created'}, evidence ${scratch}); original error: ${error.message}`)
+    }
     throw error
   } finally { env = originalEnv }
 }
@@ -163,16 +203,17 @@ try {
             const missing = []
             for (let dir = dirname(join(root, c.path)); !stat(dir); dir = dirname(dir)) missing.unshift(dir)
             for (const dir of missing) { mkdirSync(dir); created.push(dir) }
-            writeFileSync(join(root, c.path), c.desired, { mode: c.mode ?? 0o644 })
+            atomicWrite(c.path, c.desired, c.mode)
           }
         }
         commitMemory([...paths], head)
       } catch (error) {
         // Synchronous failure restores only this request; interrupted processes
         // retain marker/lock evidence and require manual inspection (#606).
+        if (preserveState) throw error
         for (const c of changes) {
           if (c.before === null) { if (stat(join(root, c.path))) unlinkSync(join(root, c.path)) }
-          else writeFileSync(join(root, c.path), c.before, { mode: c.mode })
+          else atomicWrite(c.path, c.before, c.mode)
         }
         for (const dir of created.reverse()) rmdirSync(dir)
         throw error
@@ -184,7 +225,7 @@ try {
   process.stderr.write(`${prefix}: ${error.message}; stop and inspect, no automatic recovery\n`)
   process.exitCode = 2
 } finally {
-  if (scratch) rmSync(scratch, { recursive: true, force: true })
-  if (indexLock) { try { unlinkSync(indexLock) } catch {} }
-  if (lock) rmdirSync(lock)
+  if (!preserveState && scratch) rmSync(scratch, { recursive: true, force: true })
+  if (!preserveState && indexLock) { try { unlinkSync(indexLock) } catch {} }
+  if (!preserveState && lock) rmdirSync(lock)
 }

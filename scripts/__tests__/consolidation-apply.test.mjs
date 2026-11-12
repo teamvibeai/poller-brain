@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, linkSync, readdirSync, openSync, closeSync, chmodSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -70,6 +70,134 @@ test('apply commits before success, preserves unrelated staged/worktree/untracke
   assert.equal(git('rev-parse', 'HEAD'), head)
 })
 
+// Intercept the command, not an argument position: commit has per-command config.
+function wrapCommit(f, body) {
+  const actualGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim()
+  const bin = join(f.dir, 'bin')
+  mkdirSync(bin)
+  writeFileSync(join(bin, 'git'), `#!/bin/bash
+actual_git='${actualGit}'
+for arg in "$@"; do
+  if [ "$arg" = commit ]; then
+${body}
+  fi
+done
+exec "$actual_git" "$@"
+`, { mode: 0o755 })
+  f.env.PATH = `${bin}:${f.env.PATH}`
+  return join(bin, 'git')
+}
+
+test('post-commit hook cannot create an independent child commit', t => {
+  const f = fixture(t)
+  writeFileSync(join(f.dir, '.git/hooks/post-commit'), `#!/bin/sh
+parent=$(git rev-parse HEAD)
+child=$(git commit-tree 'HEAD^{tree}' -p "$parent" -m 'independent child')
+git update-ref HEAD "$child" "$parent"
+printf '%s\\n' "$child" > .git/hook-child
+`, { mode: 0o755 })
+  const r = f.apply()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(f.git('rev-parse', 'HEAD^'), f.manifest.baseline)
+  assert.throws(() => readFileSync(join(f.dir, '.git/hook-child')), /ENOENT/)
+  assert.match(r.stdout, /verified/)
+})
+
+test('post-commit hook cannot edit a target after the checkpoint', t => {
+  const f = fixture(t)
+  writeFileSync(join(f.dir, '.git/hooks/post-commit'), '#!/bin/sh\nprintf "hook edit\\n" > memory/core/LEARNINGS.md\n', { mode: 0o755 })
+  const r = f.apply()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(readFileSync(join(f.dir, 'memory/core/LEARNINGS.md'), 'utf8'), 'promoted\n')
+  assert.equal(f.git('diff', '--', 'memory/core/LEARNINGS.md'), '')
+  assert.equal(f.git('diff', '--cached', '--', 'memory/core/LEARNINGS.md'), '')
+})
+
+for (const ancestry of ['child', 'unrelated', 'lookalike']) {
+  test(`unexpected ${ancestry} HEAD is preserved with transaction evidence`, t => {
+    const f = fixture(t)
+    const index = readFileSync(join(f.dir, '.git/index'))
+    const marker = readFileSync(f.marker)
+    wrapCommit(f, `    "$actual_git" "$@" || exit $?
+    parent=$("$actual_git" rev-parse HEAD)
+    child=$(GIT_COMMITTER_DATE='@1 +0000' "$actual_git" commit-tree 'HEAD^{tree}' ${ancestry === 'child' ? '-p "$parent"' : ancestry === 'lookalike' ? `-p '${f.manifest.baseline}'` : ''} -m ${ancestry === 'lookalike' ? `"$("$actual_git" log -1 --format=%B)"` : "'independent commit'"})
+    "$actual_git" update-ref HEAD "$child" "$parent" || exit $?
+    printf '%s\\n' "$child" > .git/independent-head
+    exit ${ancestry === 'lookalike' ? '0' : '1'}`)
+    const r = f.apply()
+    const independent = readFileSync(join(f.dir, '.git/independent-head'), 'utf8').trim()
+    assert.equal(f.git('rev-parse', 'HEAD'), independent, r.stderr)
+    assert.notEqual(r.status, 0)
+    assert.match(r.stderr, /unexpected HEAD.*no rollback.*operator repair/)
+    assert.doesNotMatch(r.stdout, /verified/)
+    assert.equal(readFileSync(join(f.dir, 'memory/core/LEARNINGS.md'), 'utf8'), 'promoted\n')
+    assert.deepEqual(readFileSync(join(f.dir, '.git/index')), index)
+    assert.deepEqual(readFileSync(f.marker), marker)
+    assert.ok(statSync(`${f.marker}.lock`).isDirectory())
+    assert.ok(statSync(join(f.dir, '.git/index.lock')).isFile())
+    assert.ok(readdirSync(join(f.dir, '.git')).some(name => name.startsWith('consolidation-index-')))
+  })
+}
+
+for (const changedTarget of [true, false]) {
+  test(`post-commit bytes are verified for ${changedTarget ? 'changed' : 'unchanged'} targets`, t => {
+    const f = fixture(t)
+    const path = changedTarget ? 'memory/core/LEARNINGS.md' : 'memory/semantic/obsolete.md'
+    if (!changedTarget) f.manifest.mutations.push({ op: 'write', path, before: hash('obsolete\n'), content: 'obsolete\n' })
+    wrapCommit(f, `    "$actual_git" "$@" || exit $?
+    printf 'external edit\\n' > '${path}'
+    exit 0`)
+    const before = f.snapshot()
+    const r = f.apply()
+    assert.notEqual(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stderr, /working.*committed/)
+    assert.doesNotMatch(r.stdout, /verified/)
+    assert.deepEqual(f.snapshot(), before)
+  })
+}
+
+test('post-commit target index must be clean before publication', t => {
+  const f = fixture(t)
+  wrapCommit(f, `    "$actual_git" "$@" || exit $?
+    GIT_INDEX_FILE="$(dirname "$GIT_INDEX_FILE")/next" "$actual_git" update-index --force-remove memory/core/LEARNINGS.md
+    exit 0`)
+  const before = f.snapshot()
+  const r = f.apply()
+  assert.notEqual(r.status, 0, r.stdout + r.stderr)
+  assert.match(r.stderr, /staged memory paths/)
+  assert.doesNotMatch(r.stdout, /verified/)
+  assert.deepEqual(f.snapshot(), before)
+})
+
+test('hardlink from a memory target to user.md is rejected without changing either inode', t => {
+  const f = fixture(t)
+  rmSync(join(f.dir, 'user.md'))
+  linkSync(join(f.dir, 'memory/core/LEARNINGS.md'), join(f.dir, 'user.md'))
+  const before = f.snapshot()
+  const r = f.apply()
+  assert.notEqual(r.status, 0, r.stdout + r.stderr)
+  assert.match(r.stderr, /hardlink/)
+  assert.equal(readFileSync(join(f.dir, 'user.md'), 'utf8'), 'original\n')
+  assert.deepEqual(f.snapshot(), before)
+  assert.equal(statSync(join(f.dir, 'user.md')).nlink, 2)
+})
+
+test('writes replace the target inode atomically and preserve executable mode', t => {
+  const f = fixture(t)
+  const path = join(f.dir, 'memory/core/LEARNINGS.md')
+  chmodSync(path, 0o755)
+  f.git('add', 'memory/core/LEARNINGS.md')
+  f.git('commit', '-qm', 'executable target')
+  f.manifest.baseline = f.git('rev-parse', 'HEAD')
+  const fd = openSync(path, 'r')
+  t.after(() => closeSync(fd))
+  const r = f.apply()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(readFileSync(fd, 'utf8'), 'original\n')
+  assert.equal(readFileSync(path, 'utf8'), 'promoted\n')
+  assert.equal(statSync(path).mode & 0o777, 0o755)
+})
+
 const failures = {
   'missing marker': f => rmSync(f.marker),
   'malformed marker': f => writeFileSync(f.marker, 'bad\n'),
@@ -94,14 +222,8 @@ const failures = {
   'index lock': f => writeFileSync(join(f.dir, '.git/index.lock'), 'existing lock\n'),
   'duplicate paths': f => { f.manifest.mutations.push({ ...f.manifest.mutations[0] }) },
   'unknown operation': f => { f.manifest.mutations[0].op = 'exec' },
-  'commit hook failure': f => writeFileSync(join(f.dir, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 }),
-  'rewritten checkpoint subject': f => writeFileSync(join(f.dir, '.git/hooks/commit-msg'), '#!/bin/sh\nprintf "unrelated subject\\n" > "$1"\n', { mode: 0o755 }),
-  'commit reports failure after publishing': f => {
-    const actualGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim()
-    mkdirSync(join(f.dir, 'bin'))
-    writeFileSync(join(f.dir, 'bin/git'), `#!/bin/bash\nif [ "$2" = commit ]; then '${actualGit}' "$@"; exit 1; fi\nexec '${actualGit}' "$@"\n`, { mode: 0o755 })
-    f.env.PATH = `${join(f.dir, 'bin')}:${f.env.PATH}`
-  },
+  'commit command failure': f => wrapCommit(f, '    exit 1'),
+  'commit reports failure after publishing': f => wrapCommit(f, '    "$actual_git" "$@"; exit 1'),
 }
 for (const path of ['../outside.md', 'memory/../user.md', '/tmp/outside.md', 'user.md', 'memory//foo.md', 'memory/core/./x.md', 'memory/.git/config', 'memory/core/*.md']) {
   failures[`unsafe path ${path}`] = f => { f.manifest.mutations[0].path = path }
@@ -127,8 +249,7 @@ for (const [name, setup] of Object.entries(failures)) {
     assert.match(result.stderr, /consolidation_(apply|commit):/)
     const expected = name.includes('marker') || name === 'unavailable ancestry' || name === 'wrong cycle date' ? /marker|ancestor|merge-base/ :
       name.includes('symlink') || name.includes('unsafe path') ? /unsafe memory path/ :
-      name === 'commit hook failure' || name === 'commit reports failure after publishing' ? /git commit failed/ :
-      name === 'rewritten checkpoint subject' ? /planned.*subject/ :
+      name === 'commit command failure' || name === 'commit reports failure after publishing' ? /git .*failed/ :
       name === 'index lock' || name === 'lifecycle lock' ? /EEXIST/ :
       name === 'whitespace validation alarm' ? /git diff failed/ :
       name === 'no-op with wrong before hash' ? /baseline content conflict/ :
@@ -158,13 +279,12 @@ test('a failed batch restores writes, deletes, new files and directories, then s
     { op: 'delete', path: 'memory/semantic/obsolete.md', before: hash('obsolete\n') },
     { op: 'write', path: 'memory/episodic/archive/new.md', before: null, content: 'archive\n' },
   )
-  const hook = join(f.dir, '.git/hooks/pre-commit')
-  writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  const command = wrapCommit(f, '    exit 1')
   const before = f.snapshot()
   assert.notEqual(f.apply('step 5c').status, 0)
   assert.deepEqual(f.snapshot(), before)
   assert.throws(() => readFileSync(join(f.dir, 'memory/episodic')), /ENOENT/)
-  rmSync(hook)
+  rmSync(command)
   const r = f.apply('step 5c')
   assert.equal(r.status, 0, r.stderr)
   assert.equal(f.git('show', '--format=', '--name-only', 'HEAD').split('\n').length, 3)
@@ -213,10 +333,10 @@ for (const [op, path] of [['write', 'memory/daily/2026-09-01.md'], ['delete', 'm
 test('strict memory-only commit rejects extras and preserves the real index on commit failure', t => {
   const f = fixture(t)
   writeFileSync(join(f.dir, 'memory/core/LEARNINGS.md'), 'checkpoint\n')
-  for (const failure of ['outside path', 'hook']) {
-    if (failure === 'hook') writeFileSync(join(f.dir, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  for (const failure of ['outside path', 'command']) {
+    if (failure === 'command') wrapCommit(f, '    exit 1')
     const before = f.snapshot()
-    const r = spawnSync('bash', [join(root, 'scripts/consolidation-commit.sh'), '--memory-only', f.dir, date, 'step 5d', failure === 'hook' ? 'memory/core/LEARNINGS.md' : 'user.md'], { env: f.env, encoding: 'utf8' })
+    const r = spawnSync('bash', [join(root, 'scripts/consolidation-commit.sh'), '--memory-only', f.dir, date, 'step 5d', failure === 'command' ? 'memory/core/LEARNINGS.md' : 'user.md'], { env: f.env, encoding: 'utf8' })
     assert.notEqual(r.status, 0)
     assert.deepEqual(f.snapshot(), before)
   }
@@ -245,4 +365,13 @@ test('strict memory-only mode commits exact memory paths and preserves unrelated
   const head = f.git('rev-parse', 'HEAD')
   assert.equal(run().status, 0)
   assert.equal(f.git('rev-parse', 'HEAD'), head)
+})
+
+test('pre-commit and commit-msg hooks are disabled for the transaction commit', t => {
+  const f = fixture(t)
+  writeFileSync(join(f.dir, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  writeFileSync(join(f.dir, '.git/hooks/commit-msg'), '#!/bin/sh\nprintf "unrelated subject\\n" > "$1"\n', { mode: 0o755 })
+  const r = f.apply()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(f.git('log', '-1', '--format=%s'), `chore: consolidate memory checkpoint (${date}) — step 5d`)
 })
