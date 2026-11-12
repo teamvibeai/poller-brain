@@ -608,6 +608,87 @@ assert(inspectCoverage("Keep `curl https://example.org/Source` then `parseRecord
   "#505: URLs inside inline code remain exact, and adjacent code spans stay separate");
 const duplicates = inspectCoverage("Keep `parseRecord` and `PARSERECORD` with 123 and 123", "parseRecord 123");
 assert(JSON.stringify(duplicates.tokens) === JSON.stringify(["parseRecord", "123"]), "#505: repeated normalized tokens are deduplicated deterministically");
+
+// Review1 finding 1: explicit delimiters preserve URL characters; prose
+// punctuation and emphasis delimiters are not part of a bare URL.
+for (const suffix of [".", "!", "?", ",", ";", ":", "**", "__", "_(part)."]) {
+  const url = `https://example.org/export${suffix}`;
+  for (const source of [`[source](${url})`, `\`${url}\``, `<${url}>`, `\`curl ${url}\``]) {
+    const preserved = inspectCoverage(source, `[copy](${url})`);
+    assert(JSON.stringify(preserved.tokens) === JSON.stringify([url]) && preserved.status === "covered",
+      `#505 review1 URL: explicit boundary preserves ${source}`);
+    assert(inspectCoverage(source, "https://example.org/export").status === "rejected",
+      `#505 review1 URL: dropping literal suffix rejects ${source}`);
+    assert(inspectCoverage("https://example.org/export", source).status === "rejected",
+      `#505 review1 URL: adding literal suffix rejects ${source}`);
+  }
+}
+for (const decorated of ["https://example.org/export.", "https://example.org/export!", "https://example.org/export?",
+  "**https://example.org/export**", "__https://example.org/export__", "**https://example.org/export!**", "(https://example.org/export). "]) {
+  assert(inspectCoverage(decorated, "https://example.org/export").status === "covered",
+    `#505 review1 URL: strip surrounding prose/Markdown from source ${decorated}`);
+  assert(inspectCoverage("https://example.org/export", decorated).status === "covered",
+    `#505 review1 URL: strip surrounding prose/Markdown from destination ${decorated}`);
+}
+assert(inspectCoverage('[source](https://example.org/export. "Export title")', "`https://example.org/export.`").status === "covered",
+  "#505 review1 URL: a Markdown title does not turn a literal final dot into prose punctuation");
+const adjacentLinks = inspectCoverage("[first](https://example.org/first.)[second](https://example.org/second.)",
+  "`https://example.org/first.` `https://example.org/second.`");
+assert(adjacentLinks.status === "covered" && JSON.stringify(adjacentLinks.tokens) ===
+  JSON.stringify(["https://example.org/first.", "https://example.org/second."]),
+  "#505 review1 URL: one Markdown destination cannot swallow an adjacent link");
+
+// Review1 finding 2: punctuation inside a number cannot delimit a match.
+for (const larger of ["1234", "123,456", "123.456", "123,456,789", "123.456.789"]) {
+  const coverage = inspectCoverage("Limit je 123.", `Limit je ${larger}.`);
+  assert(coverage.status === "rejected" && coverage.missingTokens.includes("123"),
+    `#505 review1 numeric: 123 cannot match a prefix of ${larger}`);
+}
+assert(inspectCoverage("Limit je 456.", "Limit je 123,456.").status === "rejected",
+  "#505 review1 numeric: a comma-separated numeric suffix is not a standalone amount");
+assert(inspectCoverage("Limit je 123,456.", "Limit je 123,456,789.").status === "rejected",
+  "#505 review1 numeric: a decimal token cannot match a prefix of a longer grouped number");
+assert(inspectCoverage("Limit je 123.", "Limit je 123, celkem.").status === "covered",
+  "#505 review1 numeric: ordinary sentence punctuation still delimits a number");
+
+// Review1 finding 3: both composed letters and combining marks belong to
+// filename/path segments, including Windows paths and non-ASCII extensions.
+for (const filename of ["příručka.xlsx", "příručka.xlsx".normalize("NFD"), "návody/příručka.xlsx",
+  "/návody/příručka.xlsx", "C:\\návody\\příručka.xlsx", "příručka.údaje"]) {
+  const missing = inspectCoverage(`API používá ${filename}.`, "API používá dokument.");
+  assert(missing.status === "rejected" && JSON.stringify(missing.missingTokens) === JSON.stringify([filename]),
+    `#505 review1 Unicode filename: missing ${filename} rejects the row`);
+  const preserved = inspectCoverage(`API používá ${filename}.`, `API používá ${filename}.`);
+  assert(preserved.status === "covered" && JSON.stringify(preserved.tokens) === JSON.stringify(["API", filename]),
+    `#505 review1 Unicode filename: preserved ${filename} is extracted in full`);
+}
+
+// Review1 finding 4: the unit boundary after č must be Unicode-aware.
+const czechAmount = inspectCoverage("API stojí 50 Kč.", "API stojí 80 Kč.");
+assert(JSON.stringify(czechAmount.tokens) === JSON.stringify(["API", "50 Kč"]),
+  "#505 review1 currency: extract the ordinary Czech currency amount");
+assert(czechAmount.status === "rejected" && JSON.stringify(czechAmount.missingTokens) === JSON.stringify(["50 Kč"]),
+  "#505 review1 currency: changing the Czech currency amount rejects the row");
+assert(inspectCoverage("API stojí 50 Kč.", "API stojí 50kč.").status === "covered",
+  "#505 review1 currency: preserved Czech currency normalizes case and unit spacing");
+assert(!inspectCoverage("API stojí 50 Kčeských.", "API").tokens.includes("50 Kč"),
+  "#505 review1 currency: a unit prefix of a Unicode word is not extracted");
+
+const reviewRegistry = [
+  "| MEM-608 | ACTIVE | 2026-11-12 | — | API stojí 50 Kč. |",
+  "| MEM-607 | ACTIVE | 2026-11-12 | — | API používá příručka.xlsx. |",
+  "| MEM-606 | ACTIVE | 2026-11-12 | — | Limit je 123. |",
+  "| MEM-605 | ACTIVE | 2026-11-12 | — | [source](https://example.org/export.) |",
+].join("\n");
+const reviewDestinations = [
+  { file: "semantic/z.md", text: "### Preserve currency and files\nAPI stojí 80 Kč. [MEM-608]\nAPI používá příručka.xlsx. [MEM-607]" },
+  { file: "semantic/a.md", text: "### Preserve amounts and sources\nLimit je 123,456. [MEM-606]\n`https://example.org/export.` [MEM-605]" },
+];
+const reviewReport = JSON.stringify(findTrimCandidates(reviewRegistry, reviewDestinations));
+assert(reviewReport === JSON.stringify(findTrimCandidates(reviewRegistry, reviewDestinations)) &&
+  reviewReport === JSON.stringify(findTrimCandidates(reviewRegistry, [...reviewDestinations].reverse())),
+  "#505 review1: repeated scans and reversed destination order produce identical reports");
+
 assert(inspectCoverage("Preserve content \\| https://example.org/unique", "No source here").status === "rejected", "#505: content after an escaped table pipe remains guarded");
 const otherFile = findTrimCandidates(coverageRegistry, [...coverageDestinations, {
   file: "semantic/unrelated.md", text: "https://example.org/Questions2017 questions.xlsx",

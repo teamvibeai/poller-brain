@@ -81,17 +81,17 @@ export interface ContentCoverage {
   missingTokens: string[];
 }
 
-const URL_START_SRC = String.raw`\b[A-Za-z][A-Za-z0-9+.-]*:\/\/`;
+const URL_START_SRC = String.raw`(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:\/\/`;
 const URL_SRC = String.raw`${URL_START_SRC}[^\s<>"\x60|]+`;
-const UNIT_SRC = String.raw`(?:%|‰|°[CFK]|(?:ns|us|µs|ms|s|sec|min|h|hr|hrs|days?|weeks?|months?|years?|[KMGTPEkmgtpe]i?[Bb]|bytes?|[kMG]?Hz|[munck]?m|[munpk]?g|[mun]?l|[mun]?L|[kM]?W|[kM]?V|[kM]?A|USD|EUR|CZK|Kč)\b)`;
+const UNIT_SRC = String.raw`(?:%|‰|°[CFK]|(?:ns|us|µs|ms|s|sec|min|h|hr|hrs|days?|weeks?|months?|years?|[KMGTPEkmgtpe]i?[Bb]|bytes?|[kMG]?Hz|[munck]?m|[munpk]?g|[mun]?l|[mun]?L|[kM]?W|[kM]?V|[kM]?A|USD|EUR|CZK|Kč)(?![\p{L}\p{M}\p{N}_]))`;
 const NUMERIC_SRC = String.raw`[-+]?(?:\d+(?:[.,]\d+)?|[.,]\d+)`;
 const NUMBER_SRC = String.raw`(?:${NUMERIC_SRC}\s*${UNIT_SRC}|[-+]?(?:\d*[.,]\d+|\d{3,}))`;
-const SEGMENT_SRC = String.raw`[\w@%+~.-]+`;
+const SEGMENT_SRC = String.raw`[\p{L}\p{M}\p{N}_@%+~.-]+`;
 const PATH_SRC = String.raw`(?:(?:[A-Za-z]:[\/\\]|[.~]?[\/\\])${SEGMENT_SRC}(?:[\/\\]${SEGMENT_SRC})*|${SEGMENT_SRC}(?:[\/\\]${SEGMENT_SRC})+)`;
-const FILENAME_SRC = String.raw`[\w@%+~.-]*\.[A-Za-z][\w-]*`;
+const FILENAME_SRC = String.raw`[\p{L}\p{M}\p{N}_@%+~.-]*\.[\p{L}][\p{L}\p{M}\p{N}_-]*`;
 const TOKEN_RE = new RegExp(
   `${URL_SRC}|\x60([^\x60\n]+)\x60|` +
-  String.raw`(?<![\p{L}\p{N}_])(?:${PATH_SRC}|${FILENAME_SRC}|${NUMBER_SRC}|[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*)(?![\p{L}\p{N}_])`,
+  String.raw`(?<![\p{L}\p{M}\p{N}_])(?:${PATH_SRC}|${FILENAME_SRC}|${NUMBER_SRC}|[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*)(?![\p{L}\p{M}\p{N}_])`,
   "gu"
 );
 
@@ -104,21 +104,44 @@ function normalizeToken(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-/** Strip prose/Markdown delimiters, retaining balanced URL parentheses. */
-function cleanUrl(url: string): string {
-  let result = url.replace(/[.,;:]+$/, "");
-  for (const [open, close] of [["(", ")"], ["[", "]"], ["{", "}"]]) {
-    while (result.endsWith(close) && result.split(close).length > result.split(open).length) {
-      result = result.slice(0, -1).replace(/[.,;:]+$/, "");
+/** Explicit URL boundaries preserve literal punctuation; bare URLs use prose boundaries. */
+function cleanUrl(url: string, before: string, inCode: boolean): string {
+  if (inCode || before.endsWith("<")) return url;
+  if (before.endsWith("](")) {
+    // The first unmatched ')' closes the Markdown destination. Balanced
+    // parentheses inside it belong to the URL, as does a literal final dot.
+    let depth = 0;
+    for (let i = 0; i < url.length; i++) {
+      if (url[i] === "(") depth++;
+      else if (url[i] === ")") {
+        if (depth === 0) return url.slice(0, i);
+        depth--;
+      }
     }
+    // Whitespace can end the URL before an optional Markdown link title.
+    return url;
   }
+  let result = url;
+  let previous: string;
+  do {
+    previous = result;
+    result = result.replace(/[.,;:!?]+$/, "");
+    for (const marker of ["**", "__"]) {
+      if (before.endsWith(marker) && result.endsWith(marker)) result = result.slice(0, -marker.length);
+    }
+    for (const [open, close] of [["(", ")"], ["[", "]"], ["{", "}"]]) {
+      if (result.endsWith(close) && result.split(close).length > result.split(open).length) {
+        result = result.slice(0, -1);
+      }
+    }
+  } while (result !== previous);
   return result;
 }
 
 /**
  * Deterministic, left-to-right extraction from the Description cell only:
  * scheme:// URLs; nonempty inline backtick spans without URLs (spans with
- * URLs are scanned normally); slash/backslash paths;
+ * URLs retain literal punctuation); Unicode slash/backslash paths and
  * dotted filenames (including bare .xls); numbers with >=3 digits, a
  * dot/comma decimal, or a unit from UNIT_SRC; and >=2-character ASCII
  * ALL-CAPS identifiers (digits, internal hyphens/underscores allowed).
@@ -128,7 +151,7 @@ function cleanUrl(url: string): string {
  * spelling/order, folding case/whitespace except in URLs. This is a
  * conservative syntactic guard, not proof of semantic equivalence.
  */
-function distinctiveTokens(description: string): Token[] {
+function distinctiveTokens(description: string, inCode = false): Token[] {
   const tokens: Token[] = [];
   const seen = new Set<string>();
   function add(token: Token): void {
@@ -137,18 +160,24 @@ function distinctiveTokens(description: string): Token[] {
     seen.add(identity);
     tokens.push(token);
   }
-  for (const match of description.matchAll(TOKEN_RE)) {
+  const matcher = new RegExp(TOKEN_RE);
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(description)) !== null) {
     let value = (match[1] ?? match[0]).trim();
     if (match[1] !== undefined && new RegExp(URL_START_SRC).test(value)) {
       // Consume the complete backtick span, then scan its contents. This
       // also keeps the closing backtick from pairing with the next span.
-      for (const token of distinctiveTokens(value)) add(token);
+      for (const token of distinctiveTokens(value, true)) add(token);
       continue;
     }
     const kind = new RegExp(`^${URL_START_SRC}`).test(value) ? "url" :
       match[1] === undefined && new RegExp(`^${NUMBER_SRC}$`, "u").test(value) ? "number" : "text";
-    if (kind === "url") value = cleanUrl(value);
-    else if (match[1] === undefined) value = value.replace(/[.,;:]+$/, "");
+    if (kind === "url") {
+      value = cleanUrl(value, description.slice(0, match.index), inCode);
+      // Resume at the actual URL boundary so adjacent Markdown links or
+      // other details after its closing delimiter are still scanned.
+      matcher.lastIndex = match.index + value.length;
+    } else if (match[1] === undefined) value = value.replace(/[.,;:]+$/, "");
     if (!value || (match[1] === undefined && /^[A-Z]$/.test(value))) continue;
     add({ value, kind });
   }
@@ -159,7 +188,7 @@ function checkCoverage(key: string, description: string, destination: string, ci
   const tokens = distinctiveTokens(description);
   const normalized = normalizeToken(destination);
   // Exact URL tokens, rather than substring matches: /source != /source-old.
-  const urls = new Set([...destination.matchAll(new RegExp(URL_SRC, "g"))].map((m) => cleanUrl(m[0])));
+  const urls = new Set(distinctiveTokens(destination).filter((t) => t.kind === "url").map((t) => t.value));
   const missingTokens = tokens.filter(({ value, kind }) => {
     if (kind === "url") return !urls.has(value);
     const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -167,10 +196,13 @@ function checkCoverage(key: string, description: string, destination: string, ci
     if (kind === "number") {
       const parts = new RegExp(`^(${NUMERIC_SRC})(.*)$`).exec(normalizeToken(value))!;
       pattern = escape(parts[1]) + (parts[2].trim() ? "\\s*" + escape(parts[2].trim()) : "");
+      // A comma/dot followed by digits continues a decimal or grouped
+      // number; sentence punctuation alone can still delimit an amount.
+      pattern = String.raw`(?<!\d[.,])${pattern}(?![.,]\d)`;
     }
     // Do not accept identifiers, paths or numbers merely as substrings of
     // longer tokens (API in APIS, 123 in 1234, foo.md in foo.md.bak).
-    return !new RegExp(String.raw`(?<![\p{L}\p{N}_./\\-])${pattern}(?![\p{L}\p{N}_/\\-]|\.[\p{L}\p{N}_])`, "u").test(normalized);
+    return !new RegExp(String.raw`(?<![\p{L}\p{M}\p{N}_./\\-])${pattern}(?![\p{L}\p{M}\p{N}_/\\-]|\.[\p{L}\p{M}\p{N}_])`, "u").test(normalized);
   }).map((t) => t.value);
   return {
     key,
