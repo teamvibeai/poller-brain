@@ -58,7 +58,7 @@ WINDOW_END="${CONSOLIDATION_WINDOW_END:-6}"       # hour UTC (exclusive)
 ACTIVITY_MEM_MIN="${CONSOLIDATION_ACTIVITY_MEM_MIN:-1}"
 ACTIVITY_BYTES_MIN="${CONSOLIDATION_ACTIVITY_BYTES_MIN:-32768}"
 
-# Resume precedes cadence, idle-skip, and a report merely on disk.
+# Durable start markers and checkpoints precede cadence, idle-skip, and a report merely on disk.
 # Check across UTC midnight too: an interrupted run still needs recovery.
 STATE_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-state.sh" "$BRAIN_DIR")
 STATE_STATUS=$?
@@ -67,7 +67,7 @@ if [ "$STATE_STATUS" -eq 1 ]; then
   exit 0
 fi
 if [ "$STATE_STATUS" -ne 0 ]; then
-  echo "consolidation_inspect: true (state check exit $STATE_STATUS; ${STATE_OUTPUT:-unknown state check error}; inspect history/reports before applying cadence)"
+  echo "consolidation_inspect: true (state check exit $STATE_STATUS; ${STATE_OUTPUT:-unknown state check error}; inspect existing work, start marker and history/reports; do not start a fresh cycle before state is verified)"
   exit 0
 fi
 
