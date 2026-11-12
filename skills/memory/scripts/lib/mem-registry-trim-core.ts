@@ -82,16 +82,18 @@ export interface ContentCoverage {
 }
 
 const URL_START_SRC = String.raw`(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:\/\/`;
-const URL_SRC = String.raw`${URL_START_SRC}[^\s<>"\x60|]+`;
-const UNIT_SRC = String.raw`(?:%|‰|°[CFK]|(?:ns|us|µs|ms|s|sec|min|h|hr|hrs|days?|weeks?|months?|years?|[KMGTPEkmgtpe]i?[Bb]|bytes?|[kMG]?Hz|[munck]?m|[munpk]?g|[mun]?l|[mun]?L|[kM]?W|[kM]?V|[kM]?A|USD|EUR|CZK|Kč)(?![\p{L}\p{M}\p{N}_]))`;
-const NUMERIC_SRC = String.raw`[-+]?(?:\d+(?:[.,]\d+)?|[.,]\d+)`;
-const NUMBER_SRC = String.raw`(?:${NUMERIC_SRC}\s*${UNIT_SRC}|[-+]?(?:\d*[.,]\d+|\d{3,}))`;
+const UNIT_SRC = String.raw`(?:%|‰|€|\$|°[CFK]|ns|us|µs|ms|s|sec|min|h|hr|hrs|days?|weeks?|months?|years?|[KMGTPEkmgtpe]i?[Bb]|bytes?|[kMG]?Hz|[munck]?m|[munpk]?g|[mun]?l|[mun]?L|[kM]?W|[kM]?V|[kM]?A|USD|EUR|CZK|Kč)(?![\p{L}\p{M}\p{N}_])`;
+// Separators belong to a number only between digits. Never infer a locale
+// or erase comma/dot positions: 1.234,56 != 1.234 56.
+const NUMERIC_SRC = String.raw`[-+]?(?:\d+(?:[ ,.\u00a0\u202f]\d+)*|[.,]\d+)`;
 const SEGMENT_SRC = String.raw`[\p{L}\p{M}\p{N}_@%+~.-]+`;
 const PATH_SRC = String.raw`(?:(?:[A-Za-z]:[\/\\]|[.~]?[\/\\])${SEGMENT_SRC}(?:[\/\\]${SEGMENT_SRC})*|${SEGMENT_SRC}(?:[\/\\]${SEGMENT_SRC})+)`;
 const FILENAME_SRC = String.raw`[\p{L}\p{M}\p{N}_@%+~.-]*\.[\p{L}][\p{L}\p{M}\p{N}_-]*`;
-const TOKEN_RE = new RegExp(
-  `${URL_SRC}|\x60([^\x60\n]+)\x60|` +
-  String.raw`(?<![\p{L}\p{M}\p{N}_])(?:${PATH_SRC}|${FILENAME_SRC}|${NUMBER_SRC}|[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*)(?![\p{L}\p{M}\p{N}_])`,
+// Locate starts only. The readers consume each complete number/URL before
+// any boundary decision, so a failed suffix cannot backtrack to a fragment.
+const TOKEN_START_RE = new RegExp(
+  `(${URL_START_SRC})|(\x60+)|` +
+  String.raw`(?<![\p{L}\p{M}\p{N}_])(?:(${PATH_SRC}|${FILENAME_SRC})|(?<![./\\+-])([-+]?(?:\d|[.,](?=\d)))|([A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*)(?![\p{L}\p{M}\p{N}_]))`,
   "gu"
 );
 
@@ -104,82 +106,167 @@ function normalizeToken(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-/** Explicit URL boundaries preserve literal punctuation; bare URLs use prose boundaries. */
-function cleanUrl(url: string, before: string, inCode: boolean): string {
-  if (inCode || before.endsWith("<")) return url;
+function tokenIdentity({ value, kind }: Token): string {
+  if (kind === "url") return `url:${value}`;
+  if (kind === "number") {
+    const [, number, unit] = new RegExp(`^(${NUMERIC_SRC})(.*)$`, "u").exec(value)!;
+    return `number:${number.replace(/[\u00a0\u202f]/g, " ")}:${unit.trim().toLowerCase()}`;
+  }
+  return `text:${normalizeToken(value)}`;
+}
+
+/** Read once, greedily, before deciding whether the span has a unit. */
+function readNumber(text: string, start: number): Token {
+  const number = new RegExp(`^${NUMERIC_SRC}`, "u").exec(text.slice(start))![0];
+  const unit = new RegExp(`^[ \\t\\u00a0\\u202f]*${UNIT_SRC}`, "iu").exec(text.slice(start + number.length));
+  const value = number + (unit?.[0] ?? "");
+  const rest = text.slice(start + value.length);
+  // A number attached to an identifier/path is not a standalone amount.
+  // Preserve the complete spelling as text rather than emitting its digits.
+  const tail = /^(?:[\p{L}\p{M}\p{N}_/\\-]|\.[\p{L}\p{M}\p{N}_])[\p{L}\p{M}\p{N}_./\\-]*/u.exec(rest)?.[0];
+  return tail ? { value: value + tail, kind: "text" } : { value, kind: "number" };
+}
+
+function isEscaped(text: string, index: number): boolean {
+  let slashes = 0;
+  while (index > 0 && text[--index] === "\\") slashes++;
+  return slashes % 2 === 1;
+}
+
+/** Uncertain delimiters retain the raw maximal span, never a prefix. */
+function readUrl(text: string, start: number, inCode: boolean): string {
+  const raw = /^\S+/.exec(text.slice(start))![0];
+  if (inCode) return raw;
+  const before = text.slice(0, start);
+  // A code opener reaching this reader had no matching closing run.
+  if (before.endsWith("`")) return raw;
+  if (before.endsWith("<") && !isEscaped(text, start - 1)) {
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] === ">" && !isEscaped(raw, i)) return raw.slice(0, i);
+    }
+    return raw;
+  }
   if (before.endsWith("](")) {
-    // The first unmatched ')' closes the Markdown destination. Balanced
-    // parentheses inside it belong to the URL, as does a literal final dot.
+    if (isEscaped(text, start - 1) || isEscaped(text, start - 2)) return raw;
+    // A literal/escaped bracket sequence is not proof of a link boundary.
+    let labelDepth = 1;
+    for (let i = start - 3; i >= 0; i--) {
+      if (isEscaped(text, i)) continue;
+      if (text[i] === "]") labelDepth++;
+      if (text[i] === "[" && --labelDepth === 0) break;
+    }
+    if (labelDepth !== 0) return raw;
     let depth = 0;
-    for (let i = 0; i < url.length; i++) {
-      if (url[i] === "(") depth++;
-      else if (url[i] === ")") {
-        if (depth === 0) return url.slice(0, i);
+    for (let i = 0; i < raw.length; i++) {
+      if (isEscaped(raw, i)) continue;
+      if (raw[i] === "(") depth++;
+      if (raw[i] === ")") {
+        if (depth === 0) return raw.slice(0, i);
         depth--;
       }
     }
-    // Whitespace can end the URL before an optional Markdown link title.
-    return url;
+    // Whitespace may precede a Markdown title. Missing/invalid closing
+    // syntax keeps the same raw span, including any literal punctuation.
+    return raw;
   }
-  let result = url;
-  let previous: string;
-  do {
-    previous = result;
-    result = result.replace(/[.,;:!?]+$/, "");
-    for (const marker of ["**", "__"]) {
-      if (before.endsWith(marker) && result.endsWith(marker)) result = result.slice(0, -marker.length);
+
+  // Read surrounding wrappers as a stack. Remove a suffix only with its
+  // matching opener; a mismatch retains the complete original span.
+  const wrappers: string[] = [];
+  let cursor = start;
+  while (cursor > 0) {
+    const prefix = text.slice(0, cursor);
+    const marker = /(?:\*+|_+|~+|[([{])$/.exec(prefix)?.[0];
+    if (!marker || isEscaped(text, cursor - marker.length)) break;
+    if (!/^(?:\*{1,3}|_{1,3}|~~|[([{])$/.test(marker)) return raw;
+    if (/^[_*~]/.test(marker) && /[\p{L}\p{N}_]/u.test(text[cursor - marker.length - 1] ?? "")) break;
+    wrappers.push(marker);
+    cursor -= marker.length;
+  }
+  let result = raw;
+  const stripProse = () => {
+    while (/[.,;:!?]$/.test(result) && !isEscaped(result, result.length - 1)) result = result.slice(0, -1);
+  };
+  stripProse();
+  for (const open of wrappers.reverse()) {
+    const close = ({ "(": ")", "[": "]", "{": "}" } as Record<string, string>)[open] ?? open;
+    if (!result.endsWith(close) || isEscaped(result, result.length - close.length)) return raw;
+    result = result.slice(0, -close.length);
+    stripProse();
+  }
+  // Unmatched delimiters cannot safely be interpreted as prose. Escaped
+  // delimiters are URL characters, and never affect the balancing stack.
+  const stack: string[] = [];
+  for (let i = 0; i < result.length; i++) {
+    if (isEscaped(result, i)) continue;
+    const char = result[i];
+    if ("([{".includes(char)) stack.push(char);
+    if (")]}".includes(char)) {
+      const open = ({ ")": "(", "]": "[", "}": "{" } as Record<string, string>)[char];
+      if (stack.pop() !== open) return raw;
     }
-    for (const [open, close] of [["(", ")"], ["[", "]"], ["{", "}"]]) {
-      if (result.endsWith(close) && result.split(close).length > result.split(open).length) {
-        result = result.slice(0, -1);
-      }
-    }
-  } while (result !== previous);
+  }
+  if (stack.length || /[*_~`<>]$/.test(result)) return raw;
   return result;
 }
 
 /**
- * Deterministic, left-to-right extraction from the Description cell only:
- * scheme:// URLs; nonempty inline backtick spans without URLs (spans with
- * URLs retain literal punctuation); Unicode slash/backslash paths and
- * dotted filenames (including bare .xls); numbers with >=3 digits, a
- * dot/comma decimal, or a unit from UNIT_SRC; and >=2-character ASCII
- * ALL-CAPS identifiers (digits, internal hyphens/underscores allowed).
- * Earlier alternatives consume their whole span: URL digits/filenames
- * and inline code are not also emitted as smaller tokens. Plain small
- * integers and ordinary prose are ignored. Duplicates retain their first
- * spelling/order, folding case/whitespace except in URLs. This is a
- * conservative syntactic guard, not proof of semantic equivalence.
+ * Deterministic left-to-right lexing: consumed URLs, numbers, paths and
+ * code spans are never rescanned for fragments. Both texts use the same
+ * readers. URLs/numbers compare whole spans; filenames, paths and inline
+ * identifiers retain fix1's case/whitespace/boundary behavior. All numbers
+ * (including small integers) are guarded. Unknown URL syntax stays raw.
  */
 function distinctiveTokens(description: string, inCode = false): Token[] {
   const tokens: Token[] = [];
   const seen = new Set<string>();
   function add(token: Token): void {
-    const identity = `${token.kind === "url" ? "url" : "text"}:${token.kind === "url" ? token.value : normalizeToken(token.value)}`;
+    const identity = tokenIdentity(token);
     if (seen.has(identity)) return;
     seen.add(identity);
     tokens.push(token);
   }
-  const matcher = new RegExp(TOKEN_RE);
+  const matcher = new RegExp(TOKEN_START_RE);
   let match: RegExpExecArray | null;
   while ((match = matcher.exec(description)) !== null) {
-    let value = (match[1] ?? match[0]).trim();
-    if (match[1] !== undefined && new RegExp(URL_START_SRC).test(value)) {
-      // Consume the complete backtick span, then scan its contents. This
-      // also keeps the closing backtick from pairing with the next span.
-      for (const token of distinctiveTokens(value, true)) add(token);
-      continue;
+    const start = match.index;
+    if (match[1]) {
+      const value = readUrl(description, start, inCode);
+      add({ value, kind: "url" });
+      matcher.lastIndex = start + value.length;
+    } else if (match[2]) {
+      // Bound code before URL lexing. Closing backtick runs must have the
+      // opener's exact length, so literal shorter runs remain URL content.
+      const marker = match[2];
+      const closing = new RegExp(`(?<!\x60)${marker}(?!\x60)`, "g");
+      closing.lastIndex = matcher.lastIndex;
+      const end = closing.exec(description);
+      if (!end) continue;
+      const value = description.slice(matcher.lastIndex, end.index).trim();
+      matcher.lastIndex = end.index + marker.length;
+      if (!value) continue;
+      if (new RegExp(URL_START_SRC).test(value)) {
+        for (const token of distinctiveTokens(value, true)) add(token);
+      } else {
+        const number = new RegExp(`^${NUMERIC_SRC}`, "u").test(value) ? readNumber(value, 0) : undefined;
+        if (number?.value === value) add(number);
+        else {
+          add({ value, kind: "text" });
+          // Inline phrases keep their existing text identity, but numeric
+          // facts inside them must still pass whole-span comparison.
+          for (const token of distinctiveTokens(value, true)) {
+            if (token.kind === "number") add(token);
+          }
+        }
+      }
+    } else if (match[4]) {
+      const token = readNumber(description, start);
+      matcher.lastIndex = start + token.value.length;
+      add(token);
+    } else {
+      const value = match[0].replace(/[.,;:]+$/, "");
+      if (value && !/^[A-Z]$/.test(value)) add({ value, kind: "text" });
     }
-    const kind = new RegExp(`^${URL_START_SRC}`).test(value) ? "url" :
-      match[1] === undefined && new RegExp(`^${NUMBER_SRC}$`, "u").test(value) ? "number" : "text";
-    if (kind === "url") {
-      value = cleanUrl(value, description.slice(0, match.index), inCode);
-      // Resume at the actual URL boundary so adjacent Markdown links or
-      // other details after its closing delimiter are still scanned.
-      matcher.lastIndex = match.index + value.length;
-    } else if (match[1] === undefined) value = value.replace(/[.,;:]+$/, "");
-    if (!value || (match[1] === undefined && /^[A-Z]$/.test(value))) continue;
-    add({ value, kind });
   }
   return tokens;
 }
@@ -187,21 +274,11 @@ function distinctiveTokens(description: string, inCode = false): Token[] {
 function checkCoverage(key: string, description: string, destination: string, citation: Citation): ContentCoverage {
   const tokens = distinctiveTokens(description);
   const normalized = normalizeToken(destination);
-  // Exact URL tokens, rather than substring matches: /source != /source-old.
-  const urls = new Set(distinctiveTokens(destination).filter((t) => t.kind === "url").map((t) => t.value));
-  const missingTokens = tokens.filter(({ value, kind }) => {
-    if (kind === "url") return !urls.has(value);
-    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    let pattern = escape(normalizeToken(value));
-    if (kind === "number") {
-      const parts = new RegExp(`^(${NUMERIC_SRC})(.*)$`).exec(normalizeToken(value))!;
-      pattern = escape(parts[1]) + (parts[2].trim() ? "\\s*" + escape(parts[2].trim()) : "");
-      // A comma/dot followed by digits continues a decimal or grouped
-      // number; sentence punctuation alone can still delimit an amount.
-      pattern = String.raw`(?<!\d[.,])${pattern}(?![.,]\d)`;
-    }
-    // Do not accept identifiers, paths or numbers merely as substrings of
-    // longer tokens (API in APIS, 123 in 1234, foo.md in foo.md.bak).
+  const spans = new Set(distinctiveTokens(destination).map(tokenIdentity));
+  const missingTokens = tokens.filter((token) => {
+    if (token.kind !== "text") return !spans.has(tokenIdentity(token));
+    const pattern = normalizeToken(token.value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Keep fix1's text matching (including unquoted inline identifiers).
     return !new RegExp(String.raw`(?<![\p{L}\p{M}\p{N}_./\\-])${pattern}(?![\p{L}\p{M}\p{N}_/\\-]|\.[\p{L}\p{M}\p{N}_])`, "u").test(normalized);
   }).map((t) => t.value);
   return {

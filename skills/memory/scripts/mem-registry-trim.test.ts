@@ -98,10 +98,10 @@ const REGISTRY = `# MEM Registry
 | MEM-211 | ACTIVE | 2026-08-19 | — | co-mentioned only on the same ambiguous no-subject line as MEM-210 — never cited alone anywhere |
 | MEM-230 | ACTIVE | 2026-08-20 | — | has BOTH an earlier subject-position line AND a later dedicated single-key line — priority-order check (DevGuru, poller-brain#334) |
 | MEM-231 | ACTIVE | 2026-08-20 | — | co-mentioned only on MEM-230's earlier subject-position line — never cited alone anywhere |
-| MEM-240 | ACTIVE | 2026-08-20 | — | first mentioned in a leading RUN of 3 separate tags (still ambiguous), has its own dedicated single-key line elsewhere — leading-run-of-tags check (DevGuru, poller-brain#334 review round 1, blocking 1) |
+| MEM-240 | ACTIVE | 2026-08-20 | — | first mentioned in a leading RUN of three separate tags (still ambiguous), has its own dedicated single-key line elsewhere — leading-run-of-tags check (DevGuru, poller-brain#334 review round one, blocking one) |
 | MEM-241 | ACTIVE | 2026-08-20 | — | co-mentioned only in the leading run-of-tags line with MEM-240 and MEM-242 — never cited alone anywhere |
 | MEM-242 | ACTIVE | 2026-08-20 | — | co-mentioned only in the leading run-of-tags line with MEM-240 and MEM-241 — never cited alone anywhere |
-| MEM-250 | ACTIVE | 2026-08-20 | — | subject of a leading tag on a line that ALSO contains wikilink cross-refs (index-shaped, excluded), has its own dedicated single-key line elsewhere — wikilink cross-ref check (DevGuru, poller-brain#334 review round 1, to-fix 2) |
+| MEM-250 | ACTIVE | 2026-08-20 | — | subject of a leading tag on a line that ALSO contains wikilink cross-refs (index-shaped, excluded), has its own dedicated single-key line elsewhere — wikilink cross-ref check (DevGuru, poller-brain#334 review round one, to-fix two) |
 | MEM-251 | ACTIVE | 2026-08-20 | — | co-mentioned only mid-sentence on MEM-250's wikilink cross-ref line — never cited alone anywhere |
 `;
 
@@ -590,10 +590,10 @@ function inspectCoverage(description: string, destination: string) {
     text: `### Verified distinctive token coverage\nCondensed lesson. [MEM-604]\n${destination}`,
   }]).contentCoverage[0];
 }
-const richDescription = "Read [source](https://example.org/Case_(2017)?q=Yes). Keep src/parser.ts, C:\\data\\facts.csv, /tmp, questions.xlsx, .xls, .xlsx, `parseRecord`, `queue   Job`, 2015, 1.25, 42ms, 2 GB, BIFF and TASK_ID-7. Ignore small counts 12 and 7.";
-const richTokens = ["https://example.org/Case_(2017)?q=Yes", "src/parser.ts", "C:\\data\\facts.csv", "/tmp", "questions.xlsx", ".xls", ".xlsx", "parseRecord", "queue   Job", "2015", "1.25", "42ms", "2 GB", "BIFF", "TASK_ID-7"];
+const richDescription = "Read [source](https://example.org/Case_(2017)?q=Yes). Keep src/parser.ts, C:\\data\\facts.csv, /tmp, questions.xlsx, .xls, .xlsx, `parseRecord`, `queue   Job`, 2015, 1.25, 42ms, 2 GB, BIFF and TASK_ID-7. Keep small counts 12 and 7.";
+const richTokens = ["https://example.org/Case_(2017)?q=Yes", "src/parser.ts", "C:\\data\\facts.csv", "/tmp", "questions.xlsx", ".xls", ".xlsx", "parseRecord", "queue   Job", "2015", "1.25", "42ms", "2 GB", "BIFF", "TASK_ID-7", "12", "7"];
 const richCoverage = inspectCoverage(richDescription,
-  "https://example.org/Case_(2017)?q=Yes\nSRC/PARSER.TS c:\\DATA\\facts.csv /tmp QUESTIONS.XLSX .xls .xlsx parserecord queue\n job 2015 1.25 42 MS 2gb biff task_id-7");
+  "https://example.org/Case_(2017)?q=Yes\nSRC/PARSER.TS c:\\DATA\\facts.csv /tmp QUESTIONS.XLSX .xls .xlsx parserecord queue\n job; 2015; 1.25; 42 MS; 2gb; biff task_id-7; counts 12 and 7");
 assert(JSON.stringify(richCoverage.tokens) === JSON.stringify(richTokens), "#505: deterministic extraction covers all token categories, preserving source order and spelling");
 assert(richCoverage.status === "covered", "#505: case/whitespace normalize for text, including optional whitespace before units");
 assert(inspectCoverage("Read https://example.org/Source", "https://example.org/source").status === "rejected", "#505: URL case stays exact");
@@ -673,6 +673,148 @@ assert(inspectCoverage("API stojí 50 Kč.", "API stojí 50kč.").status === "co
   "#505 review1 currency: preserved Czech currency normalizes case and unit spacing");
 assert(!inspectCoverage("API stojí 50 Kčeských.", "API").tokens.includes("50 Kč"),
   "#505 review1 currency: a unit prefix of a Unicode word is not extracted");
+
+// #505 final iteration: review1 + verify corpus, with explicit expectations
+// in BOTH directions (adding a missing filename is intentionally asymmetric).
+type CoverageStatus = "covered" | "rejected" | "no_verifiable_tokens";
+type CoverageProbe = [group: string, label: string, source: string, destination: string,
+  forward: CoverageStatus, reverse?: CoverageStatus];
+const probeUrl = "https://example.org/export";
+const coverageProbes: CoverageProbe[] = [
+  ["review1", "prose exclamation", `${probeUrl}!`, probeUrl, "covered"],
+  ["review1", "bold", `**${probeUrl}**`, probeUrl, "covered"],
+  ["review1", "prose period", `${probeUrl}.`, probeUrl, "covered"],
+  ["review1", "literal Markdown period", `[source](${probeUrl}.)`, `[copy](${probeUrl})`, "rejected"],
+  ["review1", "literal code period", `\`${probeUrl}.\``, `\`${probeUrl}\``, "rejected"],
+  ["review1", "Markdown labels retain identifiers", `[MPO](${probeUrl})`, `[official source](${probeUrl})`, "rejected", "covered"],
+  ["review1", "balanced URL parentheses", "[source](https://example.org/Case_(2017)).", "https://example.org/Case_(2017)", "covered"],
+  ["review1", "tokenless Czech prose", "Petr bydlí v Brně a má rád zelený čaj.", "Some unrelated content", "no_verifiable_tokens"],
+  ["review1", "Czech unit", "Cena je 50 Kč.", "Cena je 80 Kč.", "rejected"],
+  ["review1", "decimal precision with unit", "Limit je 1,25 kg.", "Limit je 1,250 kg.", "rejected"],
+  ["review1", "decimal precision", "Limit je 1,25.", "Limit je 1,250.", "rejected"],
+  ["review1", "decimal comma magnitude", "Limit je 123.", "Limit je 123,456.", "rejected"],
+  ["review1", "signed number", "Limit je 123.", "Limit je +123.", "rejected"],
+  ["review1", "signed magnitude", "Limit je 123.", "Limit je +1234.", "rejected"],
+  ["review1", "Unicode filename missing", "Použij příručka.xlsx.", "No source file", "rejected", "no_verifiable_tokens"],
+  ["review1", "Unicode filename partial", "API používá příručka.xlsx.", "API používá jiný soubor.", "rejected", "covered"],
+  ["review1", "Czech currency partial", "API stojí 50 Kč.", "API stojí 80 Kč.", "rejected"],
+  ["review1", "semantic facts still require review", "API patří Petrovi z Brna.", "API patří Janovi z Prahy.", "covered"],
+  ["review1", "slash path", "Use foo/bar for the operation.", "Use foo/bar for the operation.", "covered"],
+  ["review1", "comma without whitespace remains one URL", `${probeUrl},https://example.org/unique`, `${probeUrl},https://example.org/unique`, "covered"],
+  ["review1", "filename Markdown delimiters", "Use `facts.csv`.", "Use **facts.csv**.", "covered"],
+  ["verify", "Unicode filename preserved", "API používá příručka.xlsx.", "API používá příručka.xlsx.", "covered"],
+  ["verify", "Czech currency preserved", "API stojí 50 Kč.", "API stojí 50 Kč.", "covered"],
+  ["verify", "Unicode path changed", "API používá návody/příručka.xlsx.", "API používá návody/příručky.xlsx.", "rejected"],
+  ["verify", "combining filename suffix", "API používá příručka.xlsx.", "API používá příručka.xlsx\u0301.", "rejected"],
+  ["verify", "combining filename preserved", "API používá příručka.xlsx.".normalize("NFD"), "API používá příručka.xlsx.".normalize("NFD"), "covered"],
+  ["verify", "currency decimal changed", "API stojí 50 Kč.", "API stojí 50,80 Kč.", "rejected"],
+  ["verify", "currency decimal preserved", "API stojí 50,80 Kč.", "API stojí 50,80 Kč.", "covered"],
+  ["verify", "NBSP before unit", "API stojí 50 Kč.", "API stojí 50\u00a0Kč.", "covered"],
+  ["verify", "decimal suffix", "Limit je 456.", "Limit je 123,456.", "rejected"],
+  ["verify", "grouped prefix", "Limit je 123,456.", "Limit je 123,456,789.", "rejected"],
+  ["verify", "comma prose boundary", "Limit je 123.", "Limit je 123, celkem.", "covered"],
+  ["verify", "URL Unicode query preserved", `[zdroj](${probeUrl}?q=číslo&n=123,456)`, `<${probeUrl}?q=číslo&n=123,456>`, "covered"],
+  ["verify", "URL query changed", `[zdroj](${probeUrl}?q=číslo&n=123,456)`, `<${probeUrl}?q=číslo&n=123>`, "rejected"],
+  ["verify", "triple emphasis", `***${probeUrl}***`, probeUrl, "covered"],
+  ["verify", "italic", `*${probeUrl}*`, probeUrl, "covered"],
+  ["verify", "strikethrough", `~~${probeUrl}~~`, probeUrl, "covered"],
+  ["verify", "code preserves dot", `\`${probeUrl}.\``, `[copy](${probeUrl}.)`, "covered"],
+  ["verify", "adjacent Markdown content", `[zdroj](${probeUrl}.)API používá příručka.xlsx.`, `\`${probeUrl}.\` API používá příručka.xlsx.`, "covered"],
+  ["verify", "space-grouped currency", "API stojí 1 234 Kč.", "API stojí 234 Kč.", "rejected"],
+  ["verify", "space-grouped integer", "Limit je 1 234.", "Limit je 234.", "rejected"],
+  ["verify", "integer suffix in spaced value", "Limit je 123.", "Limit je 1 123.", "rejected"],
+  ["verify", "currency suffix in spaced value", "API stojí 123 Kč.", "API stojí 1 123 Kč.", "rejected"],
+  ["verify", "currency suffix in comma value", "API stojí 123 Kč.", "API stojí 1,123 Kč.", "rejected"],
+  ["verify", "unit list punctuation", "Limity jsou 50 Kč,123 Kč.", "Limity jsou 50 Kč a 123 Kč.", "covered"],
+  ["verify", "decimal list", "Hodnoty jsou 123,456.", "Hodnoty jsou 123,456.", "covered"],
+  ["verify", "Czech grouping preserved", "API stojí 1.234,56 Kč.", "API stojí 1.234,56 Kč.", "covered"],
+  ["verify", "English grouping preserved", "Limit je 1,234.56.", "Limit je 1,234.56.", "covered"],
+  ["verify", "comma grouping preserved", "Limit je 123,456,789.", "Limit je 123,456,789.", "covered"],
+  ["verify", "separator position changed", "API stojí 1.234,56 Kč.", "API stojí 1.234 56 Kč.", "rejected"],
+  ["verify", "escaped paren changed", String.raw`[zdroj](https://example.org/export\)old)`, String.raw`[kopie](https://example.org/export\)new)`, "rejected"],
+  ["verify", "escaped paren preserved", String.raw`[zdroj](https://example.org/export\)old)`, String.raw`[kopie](https://example.org/export\)old)`, "covered"],
+  ["verify", "escaped URL cannot truncate", String.raw`[zdroj](https://example.org/export\)literal)`, "`https://example.org/export\\`", "rejected"],
+  ["verify", "bare to Markdown", probeUrl, `[x](${probeUrl})`, "covered"],
+];
+
+// Additional span invariants, generated as a table rather than separate
+// fallback regexes: group spacing, separator positions, units and escapes.
+for (const separator of [" ", "\u00a0", "\u202f"]) {
+  for (const unit of ["Kč", "%", "€", "$", "MB"]) {
+    const full = `1${separator}234${separator}567,89 ${unit}`;
+    coverageProbes.push(
+      ["spans", `full ${JSON.stringify(full)}`, full, full, "covered"],
+      ["spans", `suffix ${JSON.stringify(full)}`, full, `567,89 ${unit}`, "rejected"],
+      ["spans", `space normalization ${JSON.stringify(full)}`, full, `1 234 567,89${unit.toLowerCase()}`, "covered"],
+    );
+  }
+}
+for (const [left, right] of [["1,234.56", "1.234,56"], ["1 234", "1234"], ["1,25", "1,250"],
+  ["1.234,56", "1234,56"], ["123", "1234"], ["1", "1 234"], ["2", "3"], ["123", "123 MB"],
+  ["123,456,789", "123,456,780"], ["123", "123abc"], ["123", "123_abc"], ["123", "API-123"],
+  ["123", "123/abc"], ["123", "123\\abc"], ["123", "123.md"],
+  ["123 MB", "123 MB/abc"], ["1 234", "1\t234"], ["1 234", "1\n234"], ["1 234", "1  234"]]) {
+  coverageProbes.push(["spans", `distinct ${JSON.stringify(left)} / ${JSON.stringify(right)}`, left, right, "rejected"]);
+}
+for (const marker of ["*", "**", "***", "_", "__", "___", "~~"]) {
+  for (const punctuation of ["", "!", ".", ",", ";", ":"]) {
+    coverageProbes.push(["spans", `${marker} emphasis with ${punctuation}`, `${marker}${probeUrl}${punctuation}${marker}`, probeUrl, "covered"]);
+  }
+}
+for (const suffix of [String.raw`\)old`, String.raw`\(old`, String.raw`\(old\)`, String.raw`\\(old)`, String.raw`\\\)old`, String.raw`\*old`, "?q=😀&n=123,456"]) {
+  const url = probeUrl + suffix;
+  coverageProbes.push(
+    ["spans", `escaped/balanced literal ${suffix}`, `[source](${url})`, `\`${url}\``, "covered"],
+    ["spans", `escaped/balanced changed ${suffix}`, `[source](${url})`, `[copy](${url}new)`, "rejected"],
+  );
+}
+for (const raw of [`${probeUrl}*`, `${probeUrl})`, `[source](${probeUrl}_(old`, `*${probeUrl}**`,
+  `****${probeUrl}****`, String.raw`\*https://example.org/export*`, `\`${probeUrl}.`, `<${probeUrl}_(old`,
+  String.raw`[source\](https://example.org/export.)`, String.raw`\[source](https://example.org/export.)`,
+  `source](${probeUrl}.)`,
+  String.raw`https://example.org/export\.`]) {
+  coverageProbes.push(
+    ["spans", `ambiguous stays raw ${raw}`, raw, probeUrl, "rejected"],
+    ["spans", `identical ambiguous ${raw}`, raw, raw, "covered"],
+  );
+}
+coverageProbes.push(
+  ["spans", "multiple backtick delimiters", `\`\`${probeUrl}.\`\``, `[copy](${probeUrl}.)`, "covered"],
+  ["spans", "literal backtick inside code URL", `\`\`${probeUrl}a\`b\`\``, `[copy](${probeUrl}a\`b)`, "covered"],
+  ["spans", "numeric inline code uses spans", "`123`", "123,456", "rejected"],
+  ["spans", "numeric inline phrase uses spans", "`123 456 foo`", "1 123 456 foo", "rejected"],
+  ["spans", "unit inline code uses spans", "`2gb`", "2 GB", "covered"],
+  ["spans", "URL punctuation explicitly belongs to URL", `[source](${probeUrl}!)`, probeUrl, "rejected"],
+  ["spans", "Unicode autolink index", `<${probeUrl}?q=😀>`, `[copy](${probeUrl}?q=😀)`, "covered"],
+);
+const tableResults = new Map<string, { directions: number; failures: number }>();
+for (const [group, label, source, destination, forward, reverse = forward] of coverageProbes) {
+  const result = tableResults.get(group) ?? { directions: 0, failures: 0 };
+  tableResults.set(group, result);
+  for (const [description, target, expected] of [[source, destination, forward], [destination, source, reverse]] as const) {
+    const before = failed;
+    const report = findTrimCandidates(`| MEM-604 | ACTIVE | 2026-11-12 | — | ${description} |`, [{
+      file: "semantic/details.md", text: `### Verified distinctive token coverage\nCondensed lesson. [MEM-604]\n${target}`,
+    }]);
+    const coverage = report.contentCoverage[0];
+    assert(coverage.status === expected, `#505 table ${group}: ${label}: ${JSON.stringify(description)} -> ${JSON.stringify(target)} expected ${expected}; got ${JSON.stringify(coverage)}`);
+    assert((report.candidates.length === 0) === (expected === "rejected"), `#505 table ${group}: ${label}: candidate eligibility follows coverage`);
+    assert((coverage.missingTokens.length > 0) === (expected === "rejected"), `#505 table ${group}: ${label}: missing tokens explain rejection`);
+    result.directions++;
+    if (failed > before) result.failures++;
+  }
+}
+for (const [group, result] of tableResults) {
+  console.log(`#505 table ${group}: ${result.directions} directions, ${result.failures} failed`);
+}
+// Inspect extraction itself, so identical broken fragments cannot satisfy a
+// preservation test simply by making the same mistake on both sides.
+for (const value of ["123,456,789", "123.456.789", "1.234,56 Kč", "1 234 Kč", "1\u00a0234 Kč", "1\u202f234 Kč", "1 234 567,89 €", "2", "+123", "-12.5°C"]) {
+  assert(JSON.stringify(inspectCoverage(value, value).tokens) === JSON.stringify([value]), `#505 maximal number extraction: ${value}`);
+}
+for (const value of [String.raw`https://example.org/export\)old`, String.raw`https://example.org/export\(old\)`, `${probeUrl}_(part).`]) {
+  assert(JSON.stringify(inspectCoverage(`[source](${value})`, `\`${value}\``).tokens) === JSON.stringify([value]), `#505 maximal URL extraction: ${value}`);
+}
 
 const reviewRegistry = [
   "| MEM-608 | ACTIVE | 2026-11-12 | — | API stojí 50 Kč. |",
