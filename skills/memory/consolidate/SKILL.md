@@ -12,8 +12,9 @@ Process recent daily logs and promote important information to long-term memory.
 
 ## When to Run
 
-First run the Pre-Step-0 state check below. Resume unfinished work or inspect
-unknown history before applying cadence. Once the state is definitive, check
+First run the Pre-Step-0 state check below. An unfinished cycle stops the run:
+inspect it and use the explicit `repair` command (never resume automatically);
+inspect unknown history before applying cadence. Once the state is definitive, check
 the newest `reports/*-memory-consolidation.md` filename for the date of
 last consolidation (`poller-brain#346` — this is the authoritative source, not
 the gitignored `memory/.last_consolidation` marker, which only tracks when a
