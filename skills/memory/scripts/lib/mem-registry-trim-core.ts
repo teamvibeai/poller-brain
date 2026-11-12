@@ -72,6 +72,37 @@ export interface UnreliableHook {
 
 const DATA_ROW_RE = new RegExp(String.raw`^\|\s*(${MEM_ID_PATTERN})\s*\|`);
 
+/** Require exactly five bounded cells; escaped pipes and backslashes stay verbatim. */
+function parseRegistryCells(line: string): string[] | null {
+  const cells: string[] = [];
+  let start = 0;
+  let escaped = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === "|" && !escaped) {
+      cells.push(line.slice(start, i));
+      start = i + 1;
+    }
+    escaped = char === "\\" && !escaped;
+  }
+  cells.push(line.slice(start));
+  if (cells.length !== 7 || cells[0].trim() !== "" || cells[6].trim() !== "") return null;
+  return cells;
+}
+
+/** Count key-bearing rows even if their remaining cells are malformed or already pointers. */
+function findDuplicateKeys(lines: string[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const line of lines) {
+    const key = line.match(DATA_ROW_RE)?.[1];
+    if (!key) continue;
+    if (seen.has(key)) duplicates.add(key);
+    seen.add(key);
+  }
+  return duplicates;
+}
+
 export interface ContentCoverage {
   key: string;
   file: string;
@@ -118,6 +149,8 @@ export const POINTER_DESC_RE = /^see .+\.md( —| -)/;
 
 export interface FindCandidatesResult {
   candidates: TrimCandidate[];
+  /** Repeated registry keys, sorted; no row bearing one of these keys is eligible. */
+  duplicateKeys: string[];
   /** Data rows seen (MEM-N rows in the registry, any status). */
   totalDataRows: number;
   /** Rows already a pointer (idempotence gate) — not re-proposed. */
@@ -151,23 +184,25 @@ export function findTrimCandidates(
   const unreliableHooks: UnreliableHook[] = [];
   const contentCoverage: ContentCoverage[] = [];
   const destinationText = new Map(destinations.map(({ file, text }) => [file, text]));
+  const lines = registry.split("\n");
+  const duplicateKeys = findDuplicateKeys(lines);
   let alreadyPointer = 0;
   let totalDataRows = 0;
 
-  for (const line of registry.split("\n")) {
+  for (const line of lines) {
     const m = line.match(DATA_ROW_RE);
     if (!m) continue;
     totalDataRows++;
     const key = m[1];
 
-    const cells = line.split("|");
-    // Description is the final cell; retain embedded (escaped) pipes so
-    // literal content after one cannot silently evade the guard.
-    const description = cells.slice(5).join("|").replace(/\|\s*$/, "").trim();
+    const cells = parseRegistryCells(line);
+    // An unparseable row has no verifiable body and must fail coverage.
+    const description = cells ? cells[5].trim() : "";
     if (POINTER_DESC_RE.test(description)) {
       alreadyPointer++;
       continue;
     }
+    if (duplicateKeys.has(key)) continue; // a key alone cannot identify an approved row
 
     const citation = citations.get(key);
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
@@ -197,7 +232,8 @@ export function findTrimCandidates(
     });
   }
 
-  return { candidates: sortCandidates(candidates), totalDataRows, alreadyPointer, indexRejections, unreliableHooks,
+  return { candidates: sortCandidates(candidates), duplicateKeys: sortKeys([...duplicateKeys]),
+    totalDataRows, alreadyPointer, indexRejections, unreliableHooks,
     contentCoverage: [...contentCoverage].sort((a, b) => compareMemIds(a.key, b.key)) };
 }
 
@@ -232,6 +268,8 @@ export interface TrimResult {
  * (→ `see <file> — <hook>`) are rewritten. Rows whose key isn't in
  * `candidates` are left completely untouched, including rows that WERE
  * candidates but weren't approved.
+ * Unparseable rows and all rows with duplicated keys are always retained,
+ * including when the approved candidates came from an earlier registry.
  *
  * @param registry     current MEM_REGISTRY.md content
  * @param candidates   the exact set of trims to apply (caller decides trust)
@@ -242,33 +280,36 @@ export function applyTrimCandidates(
   candidates: TrimCandidate[]
 ): TrimResult {
   const byKey = new Map(candidates.map((c) => [c.key, c]));
+  const lines = registry.split("\n");
+  const duplicateKeys = findDuplicateKeys(lines);
   const trimmedKeys: string[] = [];
   let alreadyPointer = 0;
   let candidateRows = 0;
   let totalDataRows = 0;
 
-  const outLines = registry.split("\n").map((line) => {
+  const outLines = lines.map((line) => {
     const m = line.match(DATA_ROW_RE);
     if (!m) return line;
     totalDataRows++;
 
-    const cells = line.split("|");
+    const cells = parseRegistryCells(line);
     const key = m[1];
-    const keyCell = cells[1];
-    const statusCell = cells[2] ?? "";
-    const createdCell = cells[3] ?? "";
-    const description = (cells[5] ?? "").trim();
+    const description = cells ? cells[5].trim() : "";
 
     if (POINTER_DESC_RE.test(description)) {
       alreadyPointer++;
       return line;
     }
     candidateRows++;
+    if (!cells || duplicateKeys.has(key)) return line;
 
     const candidate = byKey.get(key);
     if (!candidate) return line; // no approved candidate for this row — keep full narrative
 
     trimmedKeys.push(key);
+    const keyCell = cells[1];
+    const statusCell = cells[2];
+    const createdCell = cells[3];
     const newObsoleted = ` ${candidate.file}:${candidate.line} `;
     const newDescription = ` see ${candidate.file} — ${candidate.hook} `;
     return `|${keyCell}|${statusCell}|${createdCell}|${newObsoleted}|${newDescription}|`;

@@ -601,6 +601,75 @@ function inspectCoverage(description: string, destination: string) {
     text: `### Verified literal content coverage\nCondensed lesson. [MEM-604]\n${destination}`,
   }]).contentCoverage[0];
 }
+
+// An escaped final pipe is content, even when the closing table delimiter is missing.
+const escapedPipeBody = String.raw`Preserve this escaped trailing pipe \|`;
+const escapedPipeDestinations = [{
+  file: "semantic/escaped-pipe.md",
+  text: `### Preserve literal pipe content\n[MEM-610] ${escapedPipeBody.slice(0, -1)}`,
+}];
+for (const suffix of ["", " ", "\r"]) {
+  const registry = `| MEM-610 | ACTIVE | 2026-11-12 | — | ${escapedPipeBody}${suffix}`;
+  const report = findTrimCandidates(registry, escapedPipeDestinations);
+  assert(report.contentCoverage[0]?.status === "rejected" && report.candidates.length === 0,
+    "#505 escaped pipe: a missing closing delimiter cannot erase literal content and authorize trimming");
+  assert(trimPromotedRows(registry, escapedPipeDestinations).registry === registry,
+    "#505 escaped pipe: malformed trailing-pipe rows remain byte-identical on apply");
+}
+for (const body of [escapedPipeBody, String.raw`Preserve an embedded \| pipe`, String.raw`Preserve odd escapes \\\|`]) {
+  assert(inspectCoverage(body, body).status === "covered",
+    "#505 escaped pipe: a delimited cell preserves escaped pipes literally");
+  assert(inspectCoverage(body, body.replace(/\|/g, "")).status === "rejected",
+    "#505 escaped pipe: removing an escaped pipe changes the complete body");
+}
+assert(inspectCoverage("Ambiguous | extra cell", "Ambiguous | extra cell").status === "rejected",
+  "#505 escaped pipe: extra unescaped cell delimiters fail closed");
+const malformedPipeRegistry = `| MEM-610 | ACTIVE | 2026-11-12 | — | ${escapedPipeBody}`;
+const validPipeCandidates = findTrimCandidates(`${malformedPipeRegistry} |`, [{
+  file: "semantic/escaped-pipe.md", text: `### Preserve literal pipe content\n[MEM-610] ${escapedPipeBody}`,
+}]).candidates;
+assert(validPipeCandidates.length === 1, "#505 escaped pipe: an intact escaped trailing pipe can be covered");
+assert(applyTrimCandidates(malformedPipeRegistry, validPipeCandidates).registry === malformedPipeRegistry,
+  "#505 escaped pipe: apply independently refuses an unparseable row");
+
+// A candidate for one row must never authorize another row with the same key.
+const duplicateBody = "Preserve every detail before trimming this registry entry. ".repeat(4).trim();
+const duplicateCoveredRow = `| MEM-611 | ACTIVE | 2026-11-12 | — | ${duplicateBody} |`;
+const duplicateRejectedRow = "| MEM-611 | ACTIVE | 2026-11-12 | — | Unpromoted facts must stay here. |";
+const duplicateUniqueRow = `| MEM-612 | ACTIVE | 2026-11-12 | — | ${duplicateBody} |`;
+const duplicateDestinations = [{
+  file: "semantic/duplicates.md",
+  text: `### Preserve complete registry entries\n[MEM-611] ${duplicateBody}\n[MEM-612] ${duplicateBody}`,
+}];
+const staleDuplicateCandidate = findTrimCandidates(duplicateCoveredRow, duplicateDestinations).candidates;
+assert(staleDuplicateCandidate.length === 1, "#505 duplicate key: the isolated covered row is eligible");
+const duplicateRegistry = [duplicateCoveredRow, duplicateRejectedRow, duplicateUniqueRow].join("\n");
+for (const rows of [
+  [duplicateCoveredRow, duplicateRejectedRow],
+  [duplicateRejectedRow, duplicateCoveredRow],
+  [duplicateCoveredRow, duplicateCoveredRow],
+  [duplicateCoveredRow, "| MEM-611 | ACTIVE | 2026-11-12 | semantic/old.md:1 | see semantic/old.md — Existing pointer |"],
+  [duplicateCoveredRow, `| MEM-611 | ACTIVE | 2026-11-12 | — | ${escapedPipeBody}`],
+]) {
+  const registry = [...rows, duplicateUniqueRow].join("\n");
+  const report = findTrimCandidates(registry, duplicateDestinations);
+  assert(report.duplicateKeys?.join() === "MEM-611", "#505 duplicate key: every repeated key is reported");
+  assert(!report.candidates.some((c) => c.key === "MEM-611") &&
+    !report.contentCoverage.some((c) => c.key === "MEM-611" && c.status === "covered"),
+    "#505 duplicate key: no duplicate row is authorized by coverage");
+  assert(report.candidates.some((c) => c.key === "MEM-612"), "#505 duplicate key: unique covered keys stay eligible");
+  const applied = trimPromotedRows(registry, duplicateDestinations);
+  assert(applied.registry.split("\n").slice(0, rows.length).join("\n") === rows.join("\n") &&
+    applied.stats.trimmedKeys.join() === "MEM-612", "#505 duplicate key: all duplicate rows remain byte-identical");
+  assert(applyTrimCandidates(registry, staleDuplicateCandidate).registry === registry,
+    "#505 duplicate key: apply independently rejects stale approvals for a now-duplicated key");
+  assert(verifyTrimStats(applied.stats).length === 3, "#505 duplicate key: retaining duplicates preserves count invariants");
+}
+const uncitedDuplicates = ["MEM-613", DATED_A].flatMap((key) =>
+  [`| ${key} | ACTIVE | 2026-11-12 | — | Uncited body. |`].flatMap((row) => [row, row])).join("\n");
+assert(findTrimCandidates(uncitedDuplicates, []).duplicateKeys?.join() === `MEM-613,${DATED_A}`,
+  "#505 duplicate key: uncited legacy and dated duplicates are also reported deterministically");
+
 assert(inspectCoverage("123", "123 MB").status === "rejected", "#505: 123 does not equal the line 123 MB");
 assert(inspectCoverage("Preserve this entry", "Preserve this entry.").status === "rejected", "#505: a trailing period prevents equality");
 assert(inspectCoverage("Preserve this entry", "- Preserve this entry").status === "covered", "#505: one leading dash list marker folds");
@@ -983,6 +1052,23 @@ try {
   const coveredApply = runCoverageCli("--apply", "--only", "MEM-609");
   assert(coveredApply.status === 0, `#505: CLI still applies fully covered rows: ${coveredApply.stderr}`);
   assert(fs.readFileSync(registryPath, "utf8").includes("| MEM-609 | ACTIVE | 2026-11-12 | semantic/equal.md:"), "#505: approved covered row becomes a pointer");
+
+  fs.writeFileSync(registryPath, duplicateRegistry);
+  fs.writeFileSync(path.join(coverageRoot, "memory/semantic/duplicates.md"), duplicateDestinations[0].text);
+  const duplicateProposal = runCoverageCli();
+  assert(duplicateProposal.status === 0 && duplicateProposal.stdout.includes('duplicateKeys: ["MEM-611"]'),
+    "#505 duplicate key: CLI reports duplicated keys in proposal mode");
+  assert(!duplicateProposal.stdout.includes("MEM-611 →") && duplicateProposal.stdout.includes("MEM-612 →"),
+    "#505 duplicate key: CLI proposes only the unique covered row");
+  const duplicateApply = runCoverageCli("--apply", "--only", "MEM-611,MEM-612");
+  assert(duplicateApply.status === 1 && duplicateApply.stdout.includes('duplicateKeys: ["MEM-611"]'),
+    "#505 duplicate key: CLI reports and refuses duplicate approvals");
+  assert(fs.readFileSync(registryPath, "utf8") === duplicateRegistry,
+    "#505 duplicate key: refusing a duplicate aborts the entire write");
+  const uniqueApply = runCoverageCli("--apply", "--only", "MEM-612");
+  assert(uniqueApply.status === 0 && fs.readFileSync(registryPath, "utf8").startsWith(
+    `${duplicateCoveredRow}\n${duplicateRejectedRow}\n`),
+    "#505 duplicate key: applying a unique key preserves all duplicated rows");
 } finally {
   fs.rmSync(coverageRoot, { recursive: true, force: true });
 }

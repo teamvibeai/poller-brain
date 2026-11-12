@@ -199,10 +199,14 @@ function main(): void {
 
   const registryBefore = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, totalDataRows, alreadyPointer, indexRejections, unreliableHooks, contentCoverage } = findTrimCandidates(
+  const { candidates, duplicateKeys, totalDataRows, alreadyPointer, indexRejections, unreliableHooks, contentCoverage } = findTrimCandidates(
     registryBefore,
     destinations
   );
+  console.log(`duplicateKeys: ${JSON.stringify(duplicateKeys)}`);
+  if (duplicateKeys.length > 0) {
+    console.log(`Duplicate registry keys rejected; all rows with these keys are retained: ${duplicateKeys.join(", ")}`);
+  }
   printContentCoverage(contentCoverage);
 
   if (!apply) {
