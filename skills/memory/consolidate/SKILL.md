@@ -570,20 +570,24 @@ The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries arch
 > - **Propose (default, for the existing backlog):** lists every candidate with its full citing line (not just the extracted hook) so you can judge it without opening the destination file. Writes nothing.
 > - **Apply (explicit, for either a reviewed backlog subset or a fresh same-day promotion):** `--apply --only <comma-separated keys>` rewrites exactly those keys. There is no "apply everything found" mode — you always name the keys.
 
+**Content-coverage guard (#505):** Before proposing a row, the script extracts distinctive tokens from its Description and checks the entire selected destination file. Extraction is deterministic, left to right: URLs; inline backtick spans; slash/backslash file paths and dotted filenames (including `.xls`/`.xlsx`); numbers with at least 3 digits, decimals, or a unit from the explicit `UNIT_SRC` list in `lib/mem-registry-trim-core.ts`; and ASCII ALL-CAPS identifiers of at least 2 characters, allowing digits and internal hyphens/underscores. Larger tokens consume their span, so digits within a URL are not separate tokens. Repeated tokens keep their first spelling/order. Text matching folds case and whitespace, allows optional whitespace before numeric units, and checks token boundaries; URLs match exactly after removing prose/Markdown delimiters. This checks distinctive details, not semantic equivalence — review the full narrative as well.
+
+Both modes add a machine-readable `contentCoverage: <JSON array>` line to the existing output. Each entry has `key`, `file`, `line`, `status`, `tokens`, and `missingTokens`; `status` is `covered`, `rejected`, or `no_verifiable_tokens`. **Any missing token rejects the row: it is not proposed and cannot be applied with `--only`. Rejected means do not hand-trim it either. Move the missing content into the destination first, then rerun and review.** A row with zero distinctive tokens keeps the existing proposal behaviour, explicitly flagged **"no verifiable tokens"**; manually verify that its facts survive before approving it. Citation selection and ambiguity rules are unchanged.
+
 **Backfill path (existing bloat, Step 9b over threshold):**
 
 ```bash
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts"
 ```
 
-1. **Run it** and read the printed candidate list (key, `file:line`, full citing line, proposed pointer).
+1. **Run it** and read the coverage report (including missing-token rejections and "no verifiable tokens" flags), then the candidate list (key, `file:line`, full citing line, proposed pointer).
 2. **Review each candidate** — does the citing line actually restate/condense this key's content, or does it just mention the key in passing (a bookkeeping tally, a "per this rule" justification for something else)? Reject anything that isn't clearly the former.
 3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts" --apply --only MEM-1,MEM-5,...`. The script performs its own **count-verify** before writing — it aborts (exit 1) without writing if the registry would grow or if its row/citation counts don't add up.
-4. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), size delta, and the verify checks.
+4. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: proposed count, approved/applied keys, rejected candidates (including missing tokens), "no verifiable tokens" flags, size delta, and the verify checks.
 5. **Report tracking:** add `memory/MEM_REGISTRY.md` to `filesChanged` when anything was applied (skip when nothing was proposed, or nothing was approved).
-6. If `MEM_REGISTRY.md` is under its (scaled) threshold, or nothing is proposed, skip logging this step.
+6. If `MEM_REGISTRY.md` is under its (scaled) threshold, skip this step. If nothing is proposed, skip logging only when there are no coverage rejections to report.
 
-**Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** no scanning is involved — you already know the exact key, destination file, and line with certainty, because you just wrote and verified it yourself moments earlier. Apply it immediately: `--apply --only <that key>`. This is safe without a human review pass precisely because there's no ambiguity to review — unlike the backfill path, nothing was *found*, it was *authored*.
+**Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** you already know the exact key, destination file, and line because you just wrote and verified it. Apply it immediately: `--apply --only <that key>`. The same content-coverage guard still runs: if rejected, move the missing content first and rerun; never bypass rejection with a hand edit. For a "no verifiable tokens" row, verify the destination preserves its facts before applying.
 
 A row the script cannot find cited anywhere (or only ever cited ambiguously) is left with its full narrative — that's expected, not a failure, whether that's because it's genuinely not yet promoted or because a candidate was reviewed and rejected.
 

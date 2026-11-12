@@ -15,6 +15,12 @@
  * just the extracted hook) so a reviewer can judge it without opening the
  * destination file.
  *
+ * The content-coverage guard (#505) rejects a row if any distinctive
+ * Description token is missing from the selected destination file.
+ * Both modes print an additive `contentCoverage: <JSON array>` field;
+ * zero-token rows remain eligible but are flagged "no verifiable tokens".
+ * Rejected rows must not be hand-trimmed before moving the missing content.
+ *
  * Applying is a separate, explicit, opt-in step — pass the exact keys you
  * (or DevGuru, or whoever reviewed the proposal) have approved:
  *   npx tsx mem-registry-trim.ts --apply --only MEM-99,MEM-104
@@ -48,6 +54,7 @@ import {
   type TrimCandidate,
   type IndexRejection,
   type UnreliableHook,
+  type ContentCoverage,
 } from "./lib/mem-registry-trim-core.js";
 
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
@@ -117,6 +124,21 @@ function printProposals(candidates: TrimCandidate[]): void {
   }
 }
 
+function printContentCoverage(contentCoverage: ContentCoverage[]): void {
+  console.log(`contentCoverage: ${JSON.stringify(contentCoverage)}`);
+  for (const c of contentCoverage) {
+    if (c.status === "rejected") {
+      console.log(`  ${c.key} @ ${c.file}:${c.line} rejected — missing tokens: ${JSON.stringify(c.missingTokens)}`);
+    } else if (c.status === "no_verifiable_tokens") {
+      console.log(`  ${c.key} @ ${c.file}:${c.line}: no verifiable tokens — review content manually`);
+    }
+  }
+  if (contentCoverage.some((c) => c.status === "rejected")) {
+    console.log("Rejected rows: move the missing content to the destination first; do not hand-trim them either.");
+  }
+  console.log();
+}
+
 /**
  * Always printed, even when 0 — a silently narrowed scan (destinations
  * skipped as index-shaped) must never read as "nothing was there" (DevGuru
@@ -178,10 +200,11 @@ function main(): void {
 
   const registryBefore = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, totalDataRows, alreadyPointer, indexRejections, unreliableHooks } = findTrimCandidates(
+  const { candidates, totalDataRows, alreadyPointer, indexRejections, unreliableHooks, contentCoverage } = findTrimCandidates(
     registryBefore,
     destinations
   );
+  printContentCoverage(contentCoverage);
 
   if (!apply) {
     printIndexRejections(indexRejections);
@@ -201,7 +224,7 @@ function main(): void {
   const unknown = [...approved].filter((k) => !candidates.some((c) => c.key === k));
   if (unknown.length > 0) {
     console.error(
-      `--only lists key(s) with no trim candidate (not found, or already a pointer): ${unknown.join(", ")}. ` +
+      `--only lists key(s) with no trim candidate (not found, already a pointer, or rejected by a guard): ${unknown.join(", ")}. ` +
         `Aborting — no write performed.`
     );
     process.exit(1);

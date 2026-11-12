@@ -21,8 +21,8 @@
  * rejection, propose-only) lives in ./citation-detect.ts — shared with
  * mem-learnings-trim-core.ts (poller-brain#300), which applies the identical
  * heuristic to memory/core/LEARNINGS.md. See that module's doc comment for
- * the full false-positive-shape history. This module only owns the
- * MEM_REGISTRY.md-specific row format (pipe-table parsing/rewriting).
+ * the full false-positive-shape history. This module owns the
+ * MEM_REGISTRY.md row format and the content-coverage guard (#505).
  *
  * This module is intentionally fs-free so the invariants can be unit-tested
  * against string fixtures without touching a real brain's memory/.
@@ -72,6 +72,116 @@ export interface UnreliableHook {
 
 const DATA_ROW_RE = new RegExp(String.raw`^\|\s*(${MEM_ID_PATTERN})\s*\|`);
 
+export interface ContentCoverage {
+  key: string;
+  file: string;
+  line: number;
+  status: "covered" | "rejected" | "no_verifiable_tokens";
+  tokens: string[];
+  missingTokens: string[];
+}
+
+const URL_START_SRC = String.raw`\b[A-Za-z][A-Za-z0-9+.-]*:\/\/`;
+const URL_SRC = String.raw`${URL_START_SRC}[^\s<>"\x60|]+`;
+const UNIT_SRC = String.raw`(?:%|‰|°[CFK]|(?:ns|us|µs|ms|s|sec|min|h|hr|hrs|days?|weeks?|months?|years?|[KMGTPEkmgtpe]i?[Bb]|bytes?|[kMG]?Hz|[munck]?m|[munpk]?g|[mun]?l|[mun]?L|[kM]?W|[kM]?V|[kM]?A|USD|EUR|CZK|Kč)\b)`;
+const NUMERIC_SRC = String.raw`[-+]?(?:\d+(?:[.,]\d+)?|[.,]\d+)`;
+const NUMBER_SRC = String.raw`(?:${NUMERIC_SRC}\s*${UNIT_SRC}|[-+]?(?:\d*[.,]\d+|\d{3,}))`;
+const SEGMENT_SRC = String.raw`[\w@%+~.-]+`;
+const PATH_SRC = String.raw`(?:(?:[A-Za-z]:[\/\\]|[.~]?[\/\\])${SEGMENT_SRC}(?:[\/\\]${SEGMENT_SRC})*|${SEGMENT_SRC}(?:[\/\\]${SEGMENT_SRC})+)`;
+const FILENAME_SRC = String.raw`[\w@%+~.-]*\.[A-Za-z][\w-]*`;
+const TOKEN_RE = new RegExp(
+  `${URL_SRC}|\x60([^\x60\n]+)\x60|` +
+  String.raw`(?<![\p{L}\p{N}_])(?:${PATH_SRC}|${FILENAME_SRC}|${NUMBER_SRC}|[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*)(?![\p{L}\p{N}_])`,
+  "gu"
+);
+
+interface Token {
+  value: string;
+  kind: "url" | "number" | "text";
+}
+
+function normalizeToken(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Strip prose/Markdown delimiters, retaining balanced URL parentheses. */
+function cleanUrl(url: string): string {
+  let result = url.replace(/[.,;:]+$/, "");
+  for (const [open, close] of [["(", ")"], ["[", "]"], ["{", "}"]]) {
+    while (result.endsWith(close) && result.split(close).length > result.split(open).length) {
+      result = result.slice(0, -1).replace(/[.,;:]+$/, "");
+    }
+  }
+  return result;
+}
+
+/**
+ * Deterministic, left-to-right extraction from the Description cell only:
+ * scheme:// URLs; nonempty inline backtick spans without URLs (spans with
+ * URLs are scanned normally); slash/backslash paths;
+ * dotted filenames (including bare .xls); numbers with >=3 digits, a
+ * dot/comma decimal, or a unit from UNIT_SRC; and >=2-character ASCII
+ * ALL-CAPS identifiers (digits, internal hyphens/underscores allowed).
+ * Earlier alternatives consume their whole span: URL digits/filenames
+ * and inline code are not also emitted as smaller tokens. Plain small
+ * integers and ordinary prose are ignored. Duplicates retain their first
+ * spelling/order, folding case/whitespace except in URLs. This is a
+ * conservative syntactic guard, not proof of semantic equivalence.
+ */
+function distinctiveTokens(description: string): Token[] {
+  const tokens: Token[] = [];
+  const seen = new Set<string>();
+  function add(token: Token): void {
+    const identity = `${token.kind === "url" ? "url" : "text"}:${token.kind === "url" ? token.value : normalizeToken(token.value)}`;
+    if (seen.has(identity)) return;
+    seen.add(identity);
+    tokens.push(token);
+  }
+  for (const match of description.matchAll(TOKEN_RE)) {
+    let value = (match[1] ?? match[0]).trim();
+    if (match[1] !== undefined && new RegExp(URL_START_SRC).test(value)) {
+      // Consume the complete backtick span, then scan its contents. This
+      // also keeps the closing backtick from pairing with the next span.
+      for (const token of distinctiveTokens(value)) add(token);
+      continue;
+    }
+    const kind = new RegExp(`^${URL_START_SRC}`).test(value) ? "url" :
+      match[1] === undefined && new RegExp(`^${NUMBER_SRC}$`, "u").test(value) ? "number" : "text";
+    if (kind === "url") value = cleanUrl(value);
+    else if (match[1] === undefined) value = value.replace(/[.,;:]+$/, "");
+    if (!value || (match[1] === undefined && /^[A-Z]$/.test(value))) continue;
+    add({ value, kind });
+  }
+  return tokens;
+}
+
+function checkCoverage(key: string, description: string, destination: string, citation: Citation): ContentCoverage {
+  const tokens = distinctiveTokens(description);
+  const normalized = normalizeToken(destination);
+  // Exact URL tokens, rather than substring matches: /source != /source-old.
+  const urls = new Set([...destination.matchAll(new RegExp(URL_SRC, "g"))].map((m) => cleanUrl(m[0])));
+  const missingTokens = tokens.filter(({ value, kind }) => {
+    if (kind === "url") return !urls.has(value);
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let pattern = escape(normalizeToken(value));
+    if (kind === "number") {
+      const parts = new RegExp(`^(${NUMERIC_SRC})(.*)$`).exec(normalizeToken(value))!;
+      pattern = escape(parts[1]) + (parts[2].trim() ? "\\s*" + escape(parts[2].trim()) : "");
+    }
+    // Do not accept identifiers, paths or numbers merely as substrings of
+    // longer tokens (API in APIS, 123 in 1234, foo.md in foo.md.bak).
+    return !new RegExp(String.raw`(?<![\p{L}\p{N}_./\\-])${pattern}(?![\p{L}\p{N}_/\\-]|\.[\p{L}\p{N}_])`, "u").test(normalized);
+  }).map((t) => t.value);
+  return {
+    key,
+    file: citation.file,
+    line: citation.line,
+    status: missingTokens.length ? "rejected" : tokens.length ? "covered" : "no_verifiable_tokens",
+    tokens: tokens.map((t) => t.value),
+    missingTokens,
+  };
+}
+
 /** Matches an already-trimmed pointer row's Description cell. */
 export const POINTER_DESC_RE = /^see .+\.md( —| -)/;
 
@@ -85,11 +195,16 @@ export interface FindCandidatesResult {
   indexRejections: IndexRejection[];
   /** Keys with a genuine citation but an unreliable extracted hook — excluded from `candidates`, surfaced so coverage loss is never silent. */
   unreliableHooks: UnreliableHook[];
+  /** Additive machine-readable guard report; rejected rows are never candidates. */
+  contentCoverage: ContentCoverage[];
 }
 
 /**
  * Find rows that are NOT yet a pointer and have a genuine single-key
- * citation somewhere in `destinations`. Read-only — never mutates
+ * citation somewhere in `destinations` and whose distinctive Description
+ * tokens are all present in that citation's file. Zero-token rows retain
+ * the citation-only behaviour, explicitly flagged in `contentCoverage`.
+ * Read-only — never mutates
  * `registry` and never decides what gets written. The caller (a human
  * reviewing the full `lineText` per candidate, or a step that already
  * knows a specific key/file/line is trustworthy) decides which candidates,
@@ -102,6 +217,8 @@ export function findTrimCandidates(
   const { citations, indexRejections } = firstCitations(destinations);
   const candidates: TrimCandidate[] = [];
   const unreliableHooks: UnreliableHook[] = [];
+  const contentCoverage: ContentCoverage[] = [];
+  const destinationText = new Map(destinations.map(({ file, text }) => [file, text]));
   let alreadyPointer = 0;
   let totalDataRows = 0;
 
@@ -112,7 +229,9 @@ export function findTrimCandidates(
     const key = m[1];
 
     const cells = line.split("|");
-    const description = (cells[5] ?? "").trim();
+    // Description is the final cell; retain embedded (escaped) pipes so
+    // distinctive details after one cannot silently evade the guard.
+    const description = cells.slice(5).join("|").replace(/\|\s*$/, "").trim();
     if (POINTER_DESC_RE.test(description)) {
       alreadyPointer++;
       continue;
@@ -120,6 +239,10 @@ export function findTrimCandidates(
 
     const citation = citations.get(key);
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
+
+    const coverage = checkCoverage(key, description, destinationText.get(citation.file) ?? "", citation);
+    contentCoverage.push(coverage);
+    if (coverage.status === "rejected") continue;
 
     const hook = extractHook(citation);
     if (hook === null || !isReliableHook(hook)) {
@@ -142,7 +265,8 @@ export function findTrimCandidates(
     });
   }
 
-  return { candidates: sortCandidates(candidates), totalDataRows, alreadyPointer, indexRejections, unreliableHooks };
+  return { candidates: sortCandidates(candidates), totalDataRows, alreadyPointer, indexRejections, unreliableHooks,
+    contentCoverage: [...contentCoverage].sort((a, b) => compareMemIds(a.key, b.key)) };
 }
 
 function sortCandidates(candidates: TrimCandidate[]): TrimCandidate[] {

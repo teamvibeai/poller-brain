@@ -147,6 +147,9 @@ const DESTINATIONS: DestinationFile[] = [
       "### Wikilink dedicated recap (only reachable via scan-past, since the wikilink line is index-shaped)",
       "",
       "- **[MEM-250] dedicated:** own single-key line, found via scan-past past the wikilink line.",
+      // #505: these older citation-selection fixtures must also retain
+      // their row's distinctive details somewhere in the destination.
+      "Fixture details: LEARNINGS.md; SUBJECT; BOTH; AND; RUN; ALSO; poller-brain#334.",
     ].join("\n"),
   },
 ];
@@ -466,6 +469,7 @@ const HOOK_DESTINATIONS: DestinationFile[] = [
       "**How to apply:** mention them explicitly in the closing comment. [MEM-501]",
       "",
       "Some unrelated intro paragraph, no heading of its own, still under the same section. [MEM-503]",
+      "The Rule/Why/How-to-apply block keeps the PR review rule intact.",
     ].join("\n"),
   },
   {
@@ -554,6 +558,91 @@ try {
   assert(written.includes(`| ${DATED_A} | ACTIVE | 2026-11-07 | — | Full narrative`), "CLI preserves unselected dated row");
 } finally {
   fs.rmSync(trimRoot, { recursive: true, force: true });
+}
+
+// #505: a citation alone must not discard the only copy of a URL or filename.
+const coverageRegistry = [
+  "| MEM-601 | ACTIVE | 2026-11-12 | — | Read https://example.org/Questions2017 and questions.xlsx before answering. |",
+  "| MEM-602 | ACTIVE | 2026-11-12 | — | Read https://example.org/Questions2017 and questions.xlsx before answering. |",
+  "| MEM-603 | ACTIVE | 2026-11-12 | — | Always preserve the original facts before condensing the prose. |",
+].join("\n");
+const coverageDestinations: DestinationFile[] = [
+  { file: "semantic/missing.md", text: "### Official question procedure\nThe procedure is documented here. [MEM-601]" },
+  { file: "semantic/covered.md", text: "### Official question procedure\nRead https://example.org/Questions2017 and questions.xlsx before answering. [MEM-602]" },
+  { file: "semantic/plain.md", text: "### Preserve original facts\nPreserve the facts before condensing. [MEM-603]" },
+];
+const coverageFound = findTrimCandidates(coverageRegistry, coverageDestinations);
+assert(!coverageFound.candidates.some((c) => c.key === "MEM-601"), "#505: missing URL/filename rejects the row instead of proposing a pointer");
+const missingCoverage = coverageFound.contentCoverage?.find((c) => c.key === "MEM-601");
+assert(missingCoverage?.status === "rejected" &&
+  JSON.stringify(missingCoverage.missingTokens) === JSON.stringify(["https://example.org/Questions2017", "questions.xlsx"]),
+  "#505: rejected row reports its missing URL and filename as machine-readable tokens");
+assert(coverageFound.candidates.some((c) => c.key === "MEM-602"), "#505: fully covered row is still proposed");
+assert(coverageFound.contentCoverage?.find((c) => c.key === "MEM-602")?.status === "covered", "#505: covered row reports successful coverage");
+assert(coverageFound.candidates.some((c) => c.key === "MEM-603"), "#505: row without distinctive tokens retains proposal behaviour");
+const noTokens = coverageFound.contentCoverage?.find((c) => c.key === "MEM-603");
+assert(noTokens?.status === "no_verifiable_tokens" && noTokens.tokens.length === 0 && noTokens.missingTokens.length === 0,
+  "#505: row without distinctive tokens is flagged no verifiable tokens");
+
+function inspectCoverage(description: string, destination: string) {
+  return findTrimCandidates(`| MEM-604 | ACTIVE | 2026-11-12 | — | ${description} |`, [{
+    file: "semantic/details.md",
+    text: `### Verified distinctive token coverage\nCondensed lesson. [MEM-604]\n${destination}`,
+  }]).contentCoverage[0];
+}
+const richDescription = "Read [source](https://example.org/Case_(2017)?q=Yes). Keep src/parser.ts, C:\\data\\facts.csv, /tmp, questions.xlsx, .xls, .xlsx, `parseRecord`, `queue   Job`, 2015, 1.25, 42ms, 2 GB, BIFF and TASK_ID-7. Ignore small counts 12 and 7.";
+const richTokens = ["https://example.org/Case_(2017)?q=Yes", "src/parser.ts", "C:\\data\\facts.csv", "/tmp", "questions.xlsx", ".xls", ".xlsx", "parseRecord", "queue   Job", "2015", "1.25", "42ms", "2 GB", "BIFF", "TASK_ID-7"];
+const richCoverage = inspectCoverage(richDescription,
+  "https://example.org/Case_(2017)?q=Yes\nSRC/PARSER.TS c:\\DATA\\facts.csv /tmp QUESTIONS.XLSX .xls .xlsx parserecord queue\n job 2015 1.25 42 MS 2gb biff task_id-7");
+assert(JSON.stringify(richCoverage.tokens) === JSON.stringify(richTokens), "#505: deterministic extraction covers all token categories, preserving source order and spelling");
+assert(richCoverage.status === "covered", "#505: case/whitespace normalize for text, including optional whitespace before units");
+assert(inspectCoverage("Read https://example.org/Source", "https://example.org/source").status === "rejected", "#505: URL case stays exact");
+assert(inspectCoverage("Read https://example.org/source", "https://example.org/source-old").status === "rejected", "#505: a longer URL does not cover a shorter URL");
+assert(JSON.stringify(inspectCoverage("Read https://example.org/source and facts.csv", "https://example.org/source").missingTokens) === JSON.stringify(["facts.csv"]),
+  "#505: partial coverage reports only the tokens that are actually missing");
+assert(inspectCoverage("Keep s3://Bucket/Case and HTTPS://example.org/Case", "s3://Bucket/Case HTTPS://example.org/Case").status === "covered", "#505: URL schemes are generic and matching preserves their exact spelling");
+assert(inspectCoverage("Keep -12.5°C, .5kg and +123", "-12.5 °c .5 kg +123").status === "covered", "#505: signed numbers and leading-dot decimals remain verifiable");
+assert(inspectCoverage("Keep questions.xlsx, `parseRecord`, 123 and API", "questions.xlsx.bak parseRecords 1234 APIS").missingTokens.length === 4,
+  "#505: filenames, identifiers, numbers and caps IDs require token boundaries");
+assert(inspectCoverage("Keep `curl https://example.org/Source` then `parseRecord`", "https://example.org/source parseRecord").missingTokens.includes("https://example.org/Source"),
+  "#505: URLs inside inline code remain exact, and adjacent code spans stay separate");
+const duplicates = inspectCoverage("Keep `parseRecord` and `PARSERECORD` with 123 and 123", "parseRecord 123");
+assert(JSON.stringify(duplicates.tokens) === JSON.stringify(["parseRecord", "123"]), "#505: repeated normalized tokens are deduplicated deterministically");
+assert(inspectCoverage("Preserve content \\| https://example.org/unique", "No source here").status === "rejected", "#505: content after an escaped table pipe remains guarded");
+const otherFile = findTrimCandidates(coverageRegistry, [...coverageDestinations, {
+  file: "semantic/unrelated.md", text: "https://example.org/Questions2017 questions.xlsx",
+}]);
+assert(!otherFile.candidates.some((c) => c.key === "MEM-601"), "#505: tokens in a different file cannot cover the selected destination");
+assert(trimPromotedRows(coverageRegistry, coverageDestinations).registry.includes("| MEM-601 | ACTIVE | 2026-11-12 | — | Read https://"),
+  "#505: the convenience apply wrapper also preserves rejected rows");
+
+const coverageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mem-registry-coverage-"));
+try {
+  fs.mkdirSync(path.join(coverageRoot, "memory/semantic"), { recursive: true });
+  fs.writeFileSync(path.join(coverageRoot, "CLAUDE.md"), "fixture");
+  const registryPath = path.join(coverageRoot, "memory/MEM_REGISTRY.md");
+  fs.writeFileSync(registryPath, coverageRegistry);
+  for (const destination of coverageDestinations) {
+    fs.writeFileSync(path.join(coverageRoot, "memory", destination.file), destination.text);
+  }
+  const runCoverageCli = (...args: string[]) => spawnSync(process.execPath,
+    [...process.execArgv, path.resolve("skills/memory/scripts/mem-registry-trim.ts"), ...args],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: coverageRoot } });
+  const proposal = runCoverageCli();
+  const report = JSON.parse(proposal.stdout.split("\n").find((line) => line.startsWith("contentCoverage: "))!.slice("contentCoverage: ".length));
+  assert(proposal.status === 0 && report.find((r: { key: string }) => r.key === "MEM-601").missingTokens.length === 2,
+    "#505: CLI emits additive machine-readable missing-token coverage");
+  assert(proposal.stdout.includes("no verifiable tokens") && proposal.stdout.includes("do not hand-trim"), "#505: CLI flags unverifiable rows and explains rejected rows");
+  assert(!proposal.stdout.includes("MEM-601 →") && proposal.stdout.includes("MEM-602 →"), "#505: CLI proposes only eligible rows");
+  assert(fs.readFileSync(registryPath, "utf8") === coverageRegistry, "#505: proposal mode is read-only");
+  const rejectedApply = runCoverageCli("--apply", "--only", "MEM-601,MEM-602");
+  assert(rejectedApply.status === 1 && rejectedApply.stdout.includes("contentCoverage: "), "#505: apply reports coverage and refuses a rejected key");
+  assert(fs.readFileSync(registryPath, "utf8") === coverageRegistry, "#505: rejected key aborts the entire apply without writing");
+  const coveredApply = runCoverageCli("--apply", "--only", "MEM-602");
+  assert(coveredApply.status === 0, `#505: CLI still applies fully covered rows: ${coveredApply.stderr}`);
+  assert(fs.readFileSync(registryPath, "utf8").includes("| MEM-602 | ACTIVE | 2026-11-12 | semantic/covered.md:"), "#505: approved covered row becomes a pointer");
+} finally {
+  fs.rmSync(coverageRoot, { recursive: true, force: true });
 }
 
 console.log(`${passed} assertions passed, ${failed} failed`);
