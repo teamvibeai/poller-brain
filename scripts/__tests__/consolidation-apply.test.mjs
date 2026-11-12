@@ -13,10 +13,12 @@ const hash = text => createHash('sha256').update(text).digest('hex')
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'consolidation-apply-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+  // Snapshot inspection must not refresh the index after its raw bytes are read.
+  // Creating a hardlink changes ctime even though the target bytes stay intact.
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com' }
   const git = (...args) => {
-    const r = spawnSync('git', args, { cwd: dir, env, encoding: 'utf8' })
+    const r = spawnSync('git', ['-c', 'diff.autoRefreshIndex=false', ...args], { cwd: dir, env, encoding: 'utf8' })
     assert.equal(r.status, 0, r.stderr)
     return r.stdout.trim()
   }

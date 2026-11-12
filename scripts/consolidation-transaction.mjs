@@ -26,24 +26,28 @@ const gitText = args => git(args).toString().trim()
 function safePath(path) {
   if (typeof path !== 'string' || !/^memory\/(?:[\p{L}\p{N}_-][\p{L}\p{N}_. -]*\/)*[\p{L}\p{N}_-][\p{L}\p{N}_. -]*\.md$/u.test(path) ||
       path.split('/').some(part => part === '.' || part === '..' || part.endsWith(' '))) fail(`unsafe memory path: ${path}`)
+  const parts = path.split('/')
   let current = root
-  for (const [i, part] of path.split('/').entries()) {
+  for (const [i, part] of parts.entries()) {
     current = join(current, part)
     const info = stat(current)
     if (!info) continue
-    if (info.isFile() && info.nlink > 1) fail(`hardlinked memory target: ${path}`)
-    if (info.isSymbolicLink() || (i < path.split('/').length - 1 ? !info.isDirectory() : !info.isFile())) fail(`unsafe memory path component: ${path}`)
+    if (info.isFile() && info.nlink !== 1) fail(`hardlinked memory target: ${path}`)
+    if (info.isSymbolicLink() || (i < parts.length - 1 ? !info.isDirectory() : !info.isFile())) fail(`unsafe memory path component: ${path}`)
   }
+  return current
 }
 // Never write through an existing inode, including when restoring a failed batch.
 function atomicWrite(path, bytes, mode) {
-  safePath(path)
-  const target = join(root, path)
+  // Validate the exact rename destination before creating or writing any output.
+  const target = safePath(path)
   const temp = join(dirname(target), `.consolidation-${randomUUID()}.tmp`)
   const fd = openSync(temp, 'wx', 0o600)
   try {
     writeFileSync(fd, bytes)
     fchmodSync(fd, (mode ?? 0o644) & 0o777)
+    // Reject links introduced while preparing the exclusively created inode.
+    safePath(path)
     renameSync(temp, target)
   } finally {
     closeSync(fd)
