@@ -77,217 +77,63 @@ export interface ContentCoverage {
   file: string;
   line: number;
   status: "covered" | "rejected" | "no_verifiable_tokens";
+  /** Legacy report field; always empty (coverage uses the complete body). */
   tokens: string[];
+  /** Empty when covered, otherwise ["no-literal-match"]. */
   missingTokens: string[];
 }
 
-const URL_START_SRC = String.raw`(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:\/\/`;
-const UNIT_SRC = String.raw`(?:%|‰|€|\$|°[CFK]|ns|us|µs|ms|s|sec|min|h|hr|hrs|days?|weeks?|months?|years?|[KMGTPEkmgtpe]i?[Bb]|bytes?|[kMG]?Hz|[munck]?m|[munpk]?g|[mun]?l|[mun]?L|[kM]?W|[kM]?V|[kM]?A|USD|EUR|CZK|Kč)(?![\p{L}\p{M}\p{N}_])`;
-// Separators belong to a number only between digits. Never infer a locale
-// or erase comma/dot positions: 1.234,56 != 1.234 56.
-const NUMERIC_SRC = String.raw`[-+]?(?:\d+(?:[ ,.\u00a0\u202f]\d+)*|[.,]\d+)`;
-const SEGMENT_SRC = String.raw`[\p{L}\p{M}\p{N}_@%+~.-]+`;
-const PATH_SRC = String.raw`(?:(?:[A-Za-z]:[\/\\]|[.~]?[\/\\])${SEGMENT_SRC}(?:[\/\\]${SEGMENT_SRC})*|${SEGMENT_SRC}(?:[\/\\]${SEGMENT_SRC})+)`;
-const FILENAME_SRC = String.raw`[\p{L}\p{M}\p{N}_@%+~.-]*\.[\p{L}][\p{L}\p{M}\p{N}_-]*`;
-// Locate starts only. The readers consume each complete number/URL before
-// any boundary decision, so a failed suffix cannot backtrack to a fragment.
-const TOKEN_START_RE = new RegExp(
-  `(${URL_START_SRC})|(\x60+)|` +
-  String.raw`(?<![\p{L}\p{M}\p{N}_])(?:(${PATH_SRC}|${FILENAME_SRC})|(?<![./\\+-])([-+]?(?:\d|[.,](?=\d)))|([A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*)(?![\p{L}\p{M}\p{N}_]))`,
-  "gu"
-);
-
-interface Token {
-  value: string;
-  kind: "url" | "number" | "text";
+/** Only presentation whitespace, an initial list marker and a final period fold. */
+function normalizeCoverageText(text: string): string {
+  return text.normalize("NFC")
+    .replace(/[\s\u00a0\u202f\u2009]+/gu, " ")
+    .trim()
+    .replace(/^(?:[-*]|[0-9]+\.) /u, "")
+    .replace(/\.$/u, "");
 }
 
-function normalizeToken(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+const CONTINUATION = /[\/+\-−,.~]/u;
 
-function tokenIdentity({ value, kind }: Token): string {
-  if (kind === "url") return `url:${value}`;
-  if (kind === "number") {
-    const [, number, unit] = new RegExp(`^(${NUMERIC_SRC})(.*)$`, "u").exec(value)!;
-    return `number:${number.replace(/[\u00a0\u202f]/g, " ")}:${unit.trim().toLowerCase()}`;
-  }
-  return `text:${normalizeToken(value)}`;
-}
-
-/** Read once, greedily, before deciding whether the span has a unit. */
-function readNumber(text: string, start: number): Token {
-  const number = new RegExp(`^${NUMERIC_SRC}`, "u").exec(text.slice(start))![0];
-  const unit = new RegExp(`^[ \\t\\u00a0\\u202f]*${UNIT_SRC}`, "iu").exec(text.slice(start + number.length));
-  const value = number + (unit?.[0] ?? "");
-  const rest = text.slice(start + value.length);
-  // A number attached to an identifier/path is not a standalone amount.
-  // Preserve the complete spelling as text rather than emitting its digits.
-  const tail = /^(?:[\p{L}\p{M}\p{N}_/\\-]|\.[\p{L}\p{M}\p{N}_])[\p{L}\p{M}\p{N}_./\\-]*/u.exec(rest)?.[0];
-  return tail ? { value: value + tail, kind: "text" } : { value, kind: "number" };
-}
-
-function isEscaped(text: string, index: number): boolean {
-  let slashes = 0;
-  while (index > 0 && text[--index] === "\\") slashes++;
-  return slashes % 2 === 1;
-}
-
-/** Uncertain delimiters retain the raw maximal span, never a prefix. */
-function readUrl(text: string, start: number, inCode: boolean): string {
-  const raw = /^\S+/.exec(text.slice(start))![0];
-  if (inCode) return raw;
-  const before = text.slice(0, start);
-  // A code opener reaching this reader had no matching closing run.
-  if (before.endsWith("`")) return raw;
-  if (before.endsWith("<") && !isEscaped(text, start - 1)) {
-    for (let i = 0; i < raw.length; i++) {
-      if (raw[i] === ">" && !isEscaped(raw, i)) return raw.slice(0, i);
-    }
-    return raw;
-  }
-  if (before.endsWith("](")) {
-    if (isEscaped(text, start - 1) || isEscaped(text, start - 2)) return raw;
-    // A literal/escaped bracket sequence is not proof of a link boundary.
-    let labelDepth = 1;
-    for (let i = start - 3; i >= 0; i--) {
-      if (isEscaped(text, i)) continue;
-      if (text[i] === "]") labelDepth++;
-      if (text[i] === "[" && --labelDepth === 0) break;
-    }
-    if (labelDepth !== 0) return raw;
-    let depth = 0;
-    for (let i = 0; i < raw.length; i++) {
-      if (isEscaped(raw, i)) continue;
-      if (raw[i] === "(") depth++;
-      if (raw[i] === ")") {
-        if (depth === 0) return raw.slice(0, i);
-        depth--;
-      }
-    }
-    // Whitespace may precede a Markdown title. Missing/invalid closing
-    // syntax keeps the same raw span, including any literal punctuation.
-    return raw;
-  }
-
-  // Read surrounding wrappers as a stack. Remove a suffix only with its
-  // matching opener; a mismatch retains the complete original span.
-  const wrappers: string[] = [];
-  let cursor = start;
-  while (cursor > 0) {
-    const prefix = text.slice(0, cursor);
-    const marker = /(?:\*+|_+|~+|[([{])$/.exec(prefix)?.[0];
-    if (!marker || isEscaped(text, cursor - marker.length)) break;
-    if (!/^(?:\*{1,3}|_{1,3}|~~|[([{])$/.test(marker)) return raw;
-    if (/^[_*~]/.test(marker) && /[\p{L}\p{N}_]/u.test(text[cursor - marker.length - 1] ?? "")) break;
-    wrappers.push(marker);
-    cursor -= marker.length;
-  }
-  let result = raw;
-  const stripProse = () => {
-    while (/[.,;:!?]$/.test(result) && !isEscaped(result, result.length - 1)) result = result.slice(0, -1);
-  };
-  stripProse();
-  for (const open of wrappers.reverse()) {
-    const close = ({ "(": ")", "[": "]", "{": "}" } as Record<string, string>)[open] ?? open;
-    if (!result.endsWith(close) || isEscaped(result, result.length - close.length)) return raw;
-    result = result.slice(0, -close.length);
-    stripProse();
-  }
-  // Unmatched delimiters cannot safely be interpreted as prose. Escaped
-  // delimiters are URL characters, and never affect the balancing stack.
-  const stack: string[] = [];
-  for (let i = 0; i < result.length; i++) {
-    if (isEscaped(result, i)) continue;
-    const char = result[i];
-    if ("([{".includes(char)) stack.push(char);
-    if (")]}".includes(char)) {
-      const open = ({ ")": "(", "]": "[", "}": "{" } as Record<string, string>)[char];
-      if (stack.pop() !== open) return raw;
-    }
-  }
-  if (stack.length || /[*_~`<>]$/.test(result)) return raw;
-  return result;
-}
-
-/**
- * Deterministic left-to-right lexing: consumed URLs, numbers, paths and
- * code spans are never rescanned for fragments. Both texts use the same
- * readers. URLs/numbers compare whole spans; filenames, paths and inline
- * identifiers retain fix1's case/whitespace/boundary behavior. All numbers
- * (including small integers) are guarded. Unknown URL syntax stays raw.
- */
-function distinctiveTokens(description: string, inCode = false): Token[] {
-  const tokens: Token[] = [];
-  const seen = new Set<string>();
-  function add(token: Token): void {
-    const identity = tokenIdentity(token);
-    if (seen.has(identity)) return;
-    seen.add(identity);
-    tokens.push(token);
-  }
-  const matcher = new RegExp(TOKEN_START_RE);
-  let match: RegExpExecArray | null;
-  while ((match = matcher.exec(description)) !== null) {
-    const start = match.index;
-    if (match[1]) {
-      const value = readUrl(description, start, inCode);
-      add({ value, kind: "url" });
-      matcher.lastIndex = start + value.length;
-    } else if (match[2]) {
-      // Bound code before URL lexing. Closing backtick runs must have the
-      // opener's exact length, so literal shorter runs remain URL content.
-      const marker = match[2];
-      const closing = new RegExp(`(?<!\x60)${marker}(?!\x60)`, "g");
-      closing.lastIndex = matcher.lastIndex;
-      const end = closing.exec(description);
-      if (!end) continue;
-      const value = description.slice(matcher.lastIndex, end.index).trim();
-      matcher.lastIndex = end.index + marker.length;
-      if (!value) continue;
-      if (new RegExp(URL_START_SRC).test(value)) {
-        for (const token of distinctiveTokens(value, true)) add(token);
-      } else {
-        const number = new RegExp(`^${NUMERIC_SRC}`, "u").test(value) ? readNumber(value, 0) : undefined;
-        if (number?.value === value) add(number);
-        else {
-          add({ value, kind: "text" });
-          // Inline phrases keep their existing text identity, but numeric
-          // facts inside them must still pass whole-span comparison.
-          for (const token of distinctiveTokens(value, true)) {
-            if (token.kind === "number") add(token);
-          }
-        }
-      }
-    } else if (match[4]) {
-      const token = readNumber(description, start);
-      matcher.lastIndex = start + token.value.length;
-      add(token);
-    } else {
-      const value = match[0].replace(/[.,;:]+$/, "");
-      if (value && !/^[A-Z]$/.test(value)) add({ value, kind: "text" });
-    }
-  }
-  return tokens;
+/** Check edges of a literal span; never extract or reinterpret its contents. */
+function isBounded(text: string, start: number, end: number): boolean {
+  // Array.from keeps boundary checks Unicode-aware even beside astral letters.
+  const before = Array.from(text.slice(0, start));
+  const after = Array.from(text.slice(end));
+  const span = Array.from(text.slice(start, end));
+  const first = span[0];
+  const last = span.at(-1)!;
+  const left = before.at(-1) ?? "";
+  const right = after[0] ?? "";
+  if (LETTER_OR_DIGIT.test(left) || LETTER_OR_DIGIT.test(right)) return false;
+  if (CONTINUATION.test(right) && LETTER_OR_DIGIT.test(after[1] ?? "")) return false;
+  if (CONTINUATION.test(left) &&
+      (LETTER_OR_DIGIT.test(before.at(-2) ?? "") || LETTER_OR_DIGIT.test(first))) return false;
+  // A grouping space and Czech ,−/,- notation cannot turn an amount into a suffix/prefix.
+  if (/\p{N}/u.test(first) && left === " " && /\p{N}/u.test(before.at(-2) ?? "")) return false;
+  if (/\p{N}/u.test(last) && ((right === " " && /\p{N}/u.test(after[1] ?? "")) || /^,[-−]/u.test(text.slice(end)))) return false;
+  return true;
 }
 
 function checkCoverage(key: string, description: string, destination: string, citation: Citation): ContentCoverage {
-  const tokens = distinctiveTokens(description);
-  const normalized = normalizeToken(destination);
-  const spans = new Set(distinctiveTokens(destination).map(tokenIdentity));
-  const missingTokens = tokens.filter((token) => {
-    if (token.kind !== "text") return !spans.has(tokenIdentity(token));
-    const pattern = normalizeToken(token.value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Keep fix1's text matching (including unquoted inline identifiers).
-    return !new RegExp(String.raw`(?<![\p{L}\p{M}\p{N}_./\\-])${pattern}(?![\p{L}\p{M}\p{N}_/\\-]|\.[\p{L}\p{M}\p{N}_])`, "u").test(normalized);
-  }).map((t) => t.value);
+  const body = normalizeCoverageText(description);
+  const text = normalizeCoverageText(destination);
+  let covered = false;
+  // Empty bodies are not evidence. Continue past an unbounded occurrence:
+  // a later occurrence may preserve the complete entry with valid boundaries.
+  for (let start = body ? text.indexOf(body) : -1; start !== -1; start = text.indexOf(body, start + 1)) {
+    if (isBounded(text, start, start + body.length)) {
+      covered = true;
+      break;
+    }
+  }
   return {
     key,
     file: citation.file,
     line: citation.line,
-    status: missingTokens.length ? "rejected" : tokens.length ? "covered" : "no_verifiable_tokens",
-    tokens: tokens.map((t) => t.value),
-    missingTokens,
+    status: covered ? "covered" : "rejected",
+    tokens: [], // Retained for consumers of the original report shape; no token extraction.
+    missingTokens: covered ? [] : ["no-literal-match"],
   };
 }
 
@@ -310,9 +156,9 @@ export interface FindCandidatesResult {
 
 /**
  * Find rows that are NOT yet a pointer and have a genuine single-key
- * citation somewhere in `destinations` and whose distinctive Description
- * tokens are all present in that citation's file. Zero-token rows retain
- * the citation-only behaviour, explicitly flagged in `contentCoverage`.
+ * citation somewhere in `destinations` and whose complete normalized
+ * Description occurs literally, case-sensitively and with valid boundaries
+ * in that citation's file. Any failure retains the full registry row.
  * Read-only — never mutates
  * `registry` and never decides what gets written. The caller (a human
  * reviewing the full `lineText` per candidate, or a step that already
@@ -339,7 +185,7 @@ export function findTrimCandidates(
 
     const cells = line.split("|");
     // Description is the final cell; retain embedded (escaped) pipes so
-    // distinctive details after one cannot silently evade the guard.
+    // literal content after one cannot silently evade the guard.
     const description = cells.slice(5).join("|").replace(/\|\s*$/, "").trim();
     if (POINTER_DESC_RE.test(description)) {
       alreadyPointer++;
@@ -351,7 +197,7 @@ export function findTrimCandidates(
 
     const coverage = checkCoverage(key, description, destinationText.get(citation.file) ?? "", citation);
     contentCoverage.push(coverage);
-    if (coverage.status === "rejected") continue;
+    if (coverage.status !== "covered") continue;
 
     const hook = extractHook(citation);
     if (hook === null || !isReliableHook(hook)) {

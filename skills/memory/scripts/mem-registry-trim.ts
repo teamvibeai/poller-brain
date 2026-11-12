@@ -15,10 +15,10 @@
  * just the extracted hook) so a reviewer can judge it without opening the
  * destination file.
  *
- * The content-coverage guard (#505) rejects a row if any distinctive
- * Description token is missing from the selected destination file.
+ * The content-coverage guard (#505) requires bounded, case-sensitive literal
+ * containment of the complete normalized Description in the selected file.
  * Both modes print an additive `contentCoverage: <JSON array>` field;
- * zero-token rows remain eligible but are flagged "no verifiable tokens".
+ * Rejections carry a single `no-literal-match` reason in `missingTokens`.
  * Rejected rows must not be hand-trimmed before moving the missing content.
  *
  * Applying is a separate, explicit, opt-in step — pass the exact keys you
@@ -128,9 +128,7 @@ function printContentCoverage(contentCoverage: ContentCoverage[]): void {
   console.log(`contentCoverage: ${JSON.stringify(contentCoverage)}`);
   for (const c of contentCoverage) {
     if (c.status === "rejected") {
-      console.log(`  ${c.key} @ ${c.file}:${c.line} rejected — missing tokens: ${JSON.stringify(c.missingTokens)}`);
-    } else if (c.status === "no_verifiable_tokens") {
-      console.log(`  ${c.key} @ ${c.file}:${c.line}: no verifiable tokens — review content manually`);
+      console.log(`  ${c.key} @ ${c.file}:${c.line} rejected — coverage reason: ${JSON.stringify(c.missingTokens)}`);
     }
   }
   if (contentCoverage.some((c) => c.status === "rejected")) {
