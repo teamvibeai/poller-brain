@@ -70,6 +70,36 @@ Before staging, inspect and reconcile unexpected local changes under the base-br
 
 For reviewed outputs outside those default paths (Step 5 skill/guard promotion, Step 8 `HEARTBEAT.md`, Step 9c `CLAUDE.md`), append only the exact files this cycle changed to the helper command, for example `... "steps 8-9" HEARTBEAT.md CLAUDE.md`. Never pass a broad directory or unrelated user file. Inspect and reconcile pre-existing user changes within allowed paths before running the helper; the allowlist is not permission to include unrelated edits there.
 
+### Mutation submission (Steps 1–5d and Step 7)
+
+For **every memory mutation in Steps 1–5d and every Step 7 deletion**, submit a JSON manifest to the command below. All instructions in those steps to write, update, replace, remove, merge, split, archive, or register mean **prepare the desired content and submit it through this helper**, never edit the live memory files directly. Group related changes (e.g. registry + promotion, archive + pointer) into one request. Each successful request has already committed its checkpoint; do not defer submission until Step 4a, 6a, or 7a. This includes Step 5d before entering Step 6.
+
+```bash
+bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-apply.sh" . YYYY-MM-DD "step 5d" < "$CONSOLIDATION_MANIFEST"
+```
+
+Use the original marker date and the exact step label (`step 1`, `step 1b`, `step 1c`, `step 2`, `step 3`, `step 4`, `step 5`, `step 5b`, `step 5c`, `step 5d`, or `step 7`). Save the manifest outside `memory/` (prefer a temporary file). Its schema is:
+
+```json
+{
+  "version": 1,
+  "baseline": "<full git rev-parse HEAD captured before planning>",
+  "validation": { "alarms": [] },
+  "mutations": [
+    { "op": "write", "path": "memory/core/LEARNINGS.md", "before": "<SHA-256 of original file bytes>", "content": "<complete desired UTF-8 content>" },
+    { "op": "delete", "path": "memory/semantic/obsolete.md", "before": "<SHA-256 of original file bytes>" }
+  ]
+}
+```
+
+For a new file, `before` is `null`. Record every unresolved integrity/validation alarm in `validation.alarms`; a missing validation result or nonempty alarm list blocks the transaction. This field attests to the step-specific checks above; the helper additionally checks paths, marker/date/ancestry, baseline content/index conflicts, and Git whitespace errors. Do not clear alarms to obtain a commit. Steps 1–5d allow Markdown files in `core/`, `semantic/`, `episodic/`, `procedural/`, `daily/`, plus `TODAY.md`, `MEM_REGISTRY.md`, and `MEM_REGISTRY_ARCHIVE.md`, all under `memory/`. Step 7 accepts only deletions of `memory/daily/YYYY-MM-DD.md` or `weekly-YYYY-MM-DD.md` older than 30 days relative to both the cycle date and current UTC date. Traversal, symlinks, hardlinked targets (`lstat.nlink > 1`), non-files, and paths outside the allowlist fail closed. Writes and rollback restores use a new temporary file in the target directory followed by rename; they never overwrite an existing inode.
+
+The helper uses the strict exact-path mode of `consolidation-commit.sh` (`--memory-only BRAIN_DIR YYYY-MM-DD BOUNDARY EXACT_MEMORY_PATH...`). It preserves unrelated staged and working changes, including other memory files, and never pushes. Target files must match committed baseline bytes and have no staged changes. A stale baseline is rejected except for an unchanged, already-committed retry, which leaves HEAD unchanged. Require exit 0 and verify the promoted content before continuing. On failure, stop and inspect; do not bypass the helper or automatically recover/restart. The start marker remains until final completion is verified and explicitly cleared by the existing completion step.
+
+Every transaction Git command disables all Git hooks, including `post-index-change` and `post-commit`. After committing, the helper checks every target's working bytes against its committed blob, checks each blob against the manifest's requested bytes (or the captured working bytes in strict memory-only mode), and checks the prepared index for staged target changes before atomically publishing that index. It reports success only after scratch and lock cleanup succeeds. It constructs the exact transaction commit ID in advance. On synchronous failure it restores the baseline only if HEAD is that exact transaction commit (or is already the baseline). Any other HEAD or rollback ref conflict stops with `no rollback; operator repair required`: it preserves HEAD, working files, the real index, marker, lifecycle/index locks, and the `consolidation-index-*` directory named in the error. Do not rerun the transaction or reset HEAD to the baseline.
+
+**Operator repair after unexpected HEAD:** Verify the writer has exited. Save the error (baseline and transaction IDs), current HEAD/reflog, `git status --short`, staged/unstaged diffs, target file bytes, and copies of the marker, real index, both locks, and named scratch directory outside the worktree. Resolve Git metadata paths with `git rev-parse --git-path`; linked worktrees have their own paths. Inspect the independent commit and transaction object with `git show` and reconcile their changes with the preserved working files and index, retaining independent work. After the audit and reconciliation, remove only the confirmed abandoned index/lifecycle locks and scratch directory whose evidence was saved. Run marker `inspect` again, capture its output, and use the audited `consolidation-marker.sh repair` procedure above with archive/report review notes. Repair does not reconcile commits or files; that operator work must precede a fresh state check and `start`.
+
 ### 0. Archive TODAY.md
 
 Require the durable start marker above before any write, including creating a missing TODAY.md. Before processing, archive `memory/TODAY.md` to the daily/ directory:
@@ -153,7 +183,7 @@ If a `[REMEMBER]` tag is found (without a `[MEM-NNN]` key):
    - **UPDATE** the existing entry with any new detail (preserve the `[MEM-NNN]` key)
    - If identical, **NOOP** (don't create duplicates)
 
-4. **Write** to the destination file. The `[MEM-NNN]` key MUST be preserved in the promoted entry:
+4. **Submit** the destination content and any registry/daily-log edits through `consolidation-apply.sh` with `step 1b`. Require checkpoint success. The `[MEM-NNN]` key MUST be preserved in the promoted entry:
    ```markdown
    # In core/LEARNINGS.md:
    - [MEM-3] Deploy flow: main = STAGING only, produkce = version tag (v0.0.X)...
@@ -168,6 +198,8 @@ If no `[MEM-NNN]` or `[REMEMBER]` tags are found, skip this step and note "no [M
 ### 1c. MEM Lifecycle — Obsolescence Check
 
 Review entries in `memory/MEM_REGISTRY.md` with status `ACTIVE`:
+
+Submit each related registry/content lifecycle change together through `consolidation-apply.sh` with `step 1c`; never write the live files directly.
 
 1. **Check for contradictions** — if newer daily log entries contradict or supersede an existing ACTIVE entry, mark it `OBSOLETE`:
    - Update registry: status → `OBSOLETE`, set obsoleted date
@@ -202,6 +234,8 @@ For each extracted fact, compare with existing memory files:
 
 Route new/updated facts to appropriate locations:
 
+Prepare the destination content below, then submit it through `consolidation-apply.sh` with `step 4`. Require checkpoint success for every promotion before continuing.
+
 | Type | Destination |
 |------|-------------|
 | Team/project facts | `memory/semantic/{topic}.md` |
@@ -213,7 +247,7 @@ Route new/updated facts to appropriate locations:
 
 ### 4a. Checkpoint Commit (crash-safety)
 
-**Commit immediately after Step 4, before Step 5.** Protect the verified MEM promotions, tier writes, and registry/lifecycle changes from Steps 1–4 (#458); the Step 0a archive checkpoint does not cover those later writes. Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the allowed consolidation paths have no changes.
+**Before Step 5**, verify that every Steps 1–4 memory mutation was submitted through `consolidation-apply.sh` and returned success. Those writes already have structural checkpoints (#458). Stop on an unresolved alarm or unsubmitted memory change. Use the scoped helper below for any pending report changes, applying **Checkpoint Rules** first.
 
 ```bash
 bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-commit.sh" . YYYY-MM-DD "steps 1-4"
@@ -229,8 +263,8 @@ Review `memory/core/MISTAKES.md` for entries ready to be promoted. For each entr
    - Is it critical enough for automated prevention? → Create a guard (file check, validation step) and document it in `memory/procedural/`
 
 2. **Execute the promotion:**
-   - Write the promoted content to its destination
-   - Update the MISTAKES.md entry status to `promoted → {destination}`
+   - For memory destinations, submit the promoted content and the MISTAKES.md status `promoted → {destination}` together through `consolidation-apply.sh` with `step 5`.
+   - For skill/guard destinations outside memory, prepare and verify the exact output first and checkpoint it under **Checkpoint Rules** using the exact extra path. Only after that succeeds, submit the memory status change through `consolidation-apply.sh`; its allowlist never permits skill/script writes.
 
 3. **Clean up previously promoted entries:**
    - Remove entries that were marked `promoted` in the *previous* consolidation run (they've been visible for one cycle)
@@ -245,6 +279,8 @@ If MISTAKES.md has no entries or doesn't exist, skip this step.
 Scan `memory/semantic/` for stale, oversized, or redundant files. This step keeps semantic memory clean and navigable — without it, old files accumulate noise that degrades search quality.
 
 **This step MUST run before Step 6 (Regenerate SUMMARY.md)** — otherwise SUMMARY.md will contain stale pointers to files that were just deleted or renamed.
+
+Submit all UPDATE/DELETE/MERGE/split results (including any TODAY.md pointer edits) through `consolidation-apply.sh` with `step 5b`. Group each move's writes and deletions into one manifest and require checkpoint success.
 
 #### Staleness Detection
 
@@ -336,6 +372,8 @@ If `memory/core/LEARNINGS.md` exceeds its threshold, perform **one** small archi
 
 Add `memory/core/LEARNINGS.md` and the archive file to `filesChanged` when archival fires.
 
+Prepare both files without changing live memory, then submit their complete desired contents together through `consolidation-apply.sh` with `step 5c`. Require its checkpoint success before Step 5d.
+
 This ensures steady progress toward the threshold while requiring lifecycle-provenance (MEM_REGISTRY or episodic) rather than unstructured age-based deletion.
 
 ### 5d. LEARNINGS.md Promoted-Entry Trim
@@ -360,7 +398,7 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts"
 2. **Review each candidate** — does the citing line actually restate/condense this entry's lesson, or does it just mention the key in passing? Reject anything that isn't clearly the former (same judgment call as Step 9e).
 
    > **Generic hooks are a navigation aid, not evidence of content match.** The proposed pointer's hook text comes from the citation's nearest governing heading (`extractHook`), which is often a section title shared by many unrelated entries in the same file (e.g. `Consolidation/Reflection History Archive — 2026 H2` — DevGuru measured 9 of 25 real hooks on one brain sharing just 3 such headings). A matching hook string across two candidates means "open this destination to check," never "these two entries say the same thing" — judge the actual citing line's content in step 2, not hook-string equality.
-3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts" --apply --only MEM-1,MEM-5,...`. A key with only one candidate takes a bare key; a key with 2+ candidates (false-positive shape #5 above) is rejected as ambiguous unless you disambiguate with `MEM-N@<entryStartLine>`, e.g. `--only MEM-25@67,MEM-5`. The script count-verifies before writing — it aborts (exit 1) without writing if `LEARNINGS.md` would grow or if the set of distinct `MEM-N` keys cited in the file would change.
+3. **Prepare the approved subset in a scratch copy:** copy `memory/` and `CLAUDE.md` into a temporary brain directory, capture the live baseline HEAD and original LEARNINGS.md SHA-256, then run `BRAIN_ROOT="$CONSOLIDATION_SCRATCH" npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts" --apply --only MEM-1,MEM-5,...`. Never run `--apply` against the live brain during this step. A key with only one candidate takes a bare key; a key with 2+ candidates (false-positive shape #5 above) is rejected as ambiguous unless you disambiguate with `MEM-N@<entryStartLine>`, e.g. `--only MEM-25@67,MEM-5`. The script count-verifies before writing — it aborts (exit 1) without writing if `LEARNINGS.md` would grow or if the set of distinct `MEM-N` keys cited in the file would change. Require those checks to pass, then submit the scratch LEARNINGS.md as the desired `content` through `consolidation-apply.sh` with `step 5d`. Require its checkpoint success before Step 6; a successful scratch trim alone does not finish this step.
 4. **Log it** in the markdown report under `## LEARNINGS.md Promoted-Entry Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), size delta, and the verify checks.
 5. **Report tracking:** add `memory/core/LEARNINGS.md` to `filesChanged` when anything was applied (skip when nothing was proposed, or nothing was approved).
 6. If `LEARNINGS.md` is under its (scaled) threshold, or nothing is proposed, skip logging this step.
@@ -418,7 +456,7 @@ bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-commit.sh" . YYYY-MM-DD "steps 5-
 This 30-day figure is also restated in base-brain `CLAUDE.md`'s memory-persistence rules (always in context, unlike this skill, which only loads during consolidation) — if this threshold ever changes, update that mention too so the two don't drift apart the way `MAINTENANCE.md` and this file did (`teamvibeai/poller-brain#318`).
 
 For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older than 30 days:
-- **Delete them.** Their content has already been promoted to long-term memory in steps 2–4.
+- **Submit deletions through `consolidation-apply.sh` with `step 7`.** Their content has already been promoted to long-term memory in steps 2–4. Never delete live daily files directly; require the helper's committed success before continuing.
 - Do NOT create weekly summary files (`weekly-*.md`) — they accumulate in `memory/daily/` and eventually become stale files themselves, causing this step to fail in future runs.
 - If any weekly summary files from a previous approach still exist in `memory/daily/` and are older than 30 days, delete those too.
 - After deletion, verify no files dated more than 30 days ago remain in `memory/daily/`.
@@ -427,7 +465,7 @@ For daily log files (format: `YYYY-MM-DD.md`) in `memory/daily/` that are older 
 
 ### 7a. Checkpoint Commit (crash-safety)
 
-**Commit retention deletions immediately after Step 7, before Step 8 or any Step 9 work (#472).** Keep 9g as an additional checkpoint for the later sweep/audit/trim work. Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the allowed consolidation paths have no changes.
+**Before Step 8 or any Step 9 work (#472)**, require successful `consolidation-apply.sh` submission for every Step 7 deletion. Each deletion batch is already committed before that helper returns. Stop on any unsubmitted deletion or unresolved alarm. Keep 9g for the later sweep/audit/trim work; the scoped helper below checkpoints any remaining report changes under **Checkpoint Rules**.
 
 ```bash
 bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-commit.sh" . YYYY-MM-DD "step 7"

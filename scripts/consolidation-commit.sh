@@ -3,7 +3,13 @@
 # Usage: bash consolidation-commit.sh BRAIN_DIR YYYY-MM-DD BOUNDARY [EXACT_PATH...]
 # BOUNDARY is a checkpoint label (e.g. "step 0") or "final". Extra paths must
 # be individually reviewed skill outputs (e.g. HEARTBEAT.md), never directories.
+# Strict mode: --memory-only BRAIN_DIR YYYY-MM-DD BOUNDARY EXACT_MEMORY_PATH...
+# Requires a valid cycle marker and clean target index; never sweeps memory/.
 set -euo pipefail
+if [ "${1:-}" = --memory-only ]; then
+  shift
+  exec node "$(dirname "${BASH_SOURCE[0]}")/consolidation-transaction.mjs" commit "$@"
+fi
 BRAIN_DIR=${1:?brain directory required}
 CYCLE_DATE=${2:?cycle date required}
 BOUNDARY=${3:?checkpoint boundary or final required}
