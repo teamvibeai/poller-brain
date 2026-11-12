@@ -1,8 +1,8 @@
 #!/bin/bash
 # Checks if maintenance consolidation should run.
-# Exit 0 = consolidation needed, resume OR inspection required; exit 1 = skip.
-# consolidation_resume: true means reconcile/continue the interrupted cycle,
-# never restart at Step 0. Unknown history requires inspection before cadence.
+# Exit 0 = fresh consolidation needed; exit 1 = skip or inspection required.
+# Unfinished cycles require explicit inspection and audited marker repair.
+# Unknown history blocks fresh starts before cadence.
 # Completion requires a final commit and committed report-pair evidence.
 # Usage: bash "$CLAUDE_CONFIG_DIR/scripts/maintenance-guard.sh" [brain_dir]
 #
@@ -48,8 +48,6 @@
 # A non-numeric or `0` threshold disables the idle-skip (fail-open by design).
 
 BRAIN_DIR="${1:-.}"
-# Keep the persistent caller's PID, not a short-lived command substitution PID.
-export CONSOLIDATION_OWNER_PID="${CONSOLIDATION_OWNER_PID:-$PPID}"
 REPORTS_DIR="$BRAIN_DIR/reports"
 INTERVAL_HOURS=24
 FALLBACK_HOURS=48
@@ -61,30 +59,12 @@ ACTIVITY_MEM_MIN="${CONSOLIDATION_ACTIVITY_MEM_MIN:-1}"
 ACTIVITY_BYTES_MIN="${CONSOLIDATION_ACTIVITY_BYTES_MIN:-32768}"
 
 # Durable start markers and checkpoints precede cadence, idle-skip, and a report merely on disk.
-# Check across UTC midnight too: an interrupted run still needs recovery.
+# Check across UTC midnight too: an unfinished cycle still blocks a fresh start.
 STATE_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-state.sh" "$BRAIN_DIR")
 STATE_STATUS=$?
-if [ "$STATE_STATUS" -eq 1 ]; then
-  bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-marker.sh" inspect "$BRAIN_DIR" >/dev/null
-  MARKER_STATUS=$?
-  if [ "$MARKER_STATUS" -eq 1 ]; then
-    CLAIM_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-marker.sh" claim "$BRAIN_DIR")
-    if [ "$?" -ne 0 ]; then
-      echo "consolidation_needed: false (active cycle elsewhere; $CLAIM_OUTPUT)"
-      exit 1
-    fi
-  elif [ "$MARKER_STATUS" -ne 0 ]; then
-    echo 'consolidation_needed: false (active cycle elsewhere or marker changed during inspection; inspect before retrying)'
-    exit 1
-  fi
-fi
-if [ "$STATE_STATUS" -eq 1 ]; then
-  echo "$STATE_OUTPUT"
-  exit 0
-fi
 if [ "$STATE_STATUS" -ne 0 ]; then
   echo "consolidation_inspect: true (state check exit $STATE_STATUS; ${STATE_OUTPUT:-unknown state check error}; inspect existing work, start marker and history/reports; do not start a fresh cycle before state is verified)"
-  exit 0
+  exit 1
 fi
 
 # Get current UTC hour
@@ -223,8 +203,8 @@ is_idle_since_last_run() {
 #
 # The filename date is when the *report* was written, which is normally the
 # same day the run happened — except mid-run, while a backfill/recovery
-# session is still processing an older gap and hasn't written today's report
-# yet: checkpoint detection above selects resume before this cadence check,
+# session has not finished an older gap or written today's report
+# yet: checkpoint detection above blocks a fresh start before this cadence check,
 # avoiding a duplicate archive/reset from Step 0.
 #
 # `[0-9]*` (not the bare `*` used above in is_idle_since_last_run) excludes

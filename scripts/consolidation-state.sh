@@ -1,17 +1,26 @@
 #!/bin/bash
 # Read-only completion check shared by Step 0 and maintenance-guard.sh.
 # The durable start marker precedes checkpoints, reports and cadence.
-# Exit 0 = complete/no unfinished evidence, 1 = resume, 2 = inspect unknown history.
+# Exit 0 = complete/no unfinished evidence, 1 = unfinished, 2 = inspect unknown history.
 # JSON is consumed by the platform. Evidence may live in Step 12a's checkpoint
 # even when the final marker's tree no longer contains the JSON.
 BRAIN_DIR="${1:-.}"
 export GIT_OPTIONAL_LOCKS=0  # detection must not refresh or rewrite the index
+REPAIR_GUIDANCE='unfinished consolidation cycle — inspect, then run `consolidation-marker.sh repair`'
 unknown() {
-  echo "consolidation_state: unknown ($1; inspect before citing)"
+  local guidance='inspect before citing'
+  if [ "${MARKER_STATUS:-0}" -ne 0 ]; then
+    guidance=$REPAIR_GUIDANCE
+  fi
+  echo "consolidation_state: unknown ($1; $guidance)"
   exit 2
 }
-resume() {
-  echo "consolidation_resume: true ($1; $2; inspect existing work and resume)"
+unfinished() {
+  if [ "$MARKER_STATUS" -eq 1 ]; then
+    echo "consolidation_state: blocked ($1; $2; $REPAIR_GUIDANCE)"
+  else
+    echo "consolidation_state: blocked (unfinished consolidation cycle — inspect checkpoint history and reports; $1; $2)"
+  fi
   exit 1
 }
 pair_in_commit() {
@@ -66,7 +75,7 @@ if [ -n "$REPORT_STATUS" ]; then
 ') || unknown "cannot parse report changes"
 fi
 if [ -n "$DIRTY" ]; then
-  resume "in progress" "uncommitted report changes; inspect and reconcile report drafts"
+  unfinished "in progress" "uncommitted report changes; inspect and reconcile report drafts"
 fi
 
 CHECKPOINT_SHA=${CHECKPOINT%% *}
@@ -87,7 +96,7 @@ TODAY=$(date -u +%F) || unknown "cannot determine report date"
 if [ "$CYCLE_DATE" != "$TODAY" ] && [ -f "$BRAIN_DIR/reports/$TODAY-memory-consolidation.md" ]; then
   TODAY_FINAL=$(final_for_date "$TODAY") || unknown "cannot read today's final history"
   if [ -z "$TODAY_FINAL" ] || ! pair_in_commit "$TODAY_FINAL" "$TODAY"; then
-    resume "$TODAY; in progress" "report without committed completion evidence; inspect and reconcile"
+    unfinished "$TODAY; in progress" "report without committed completion evidence; inspect and reconcile"
   fi
 fi
 if [ -z "$CHECKPOINT" ] && [ "$MARKER_STATUS" -eq 0 ]; then
@@ -118,6 +127,6 @@ if [ -n "$FINAL" ]; then
   fi
 fi
 if [ "$MARKER_STATUS" -eq 1 ]; then
-  resume "$CYCLE_DATE; start marker at $START_HEAD" "$REASON; do not repeat archive/reset blindly"
+  unfinished "$CYCLE_DATE; start marker at $START_HEAD" "$REASON; do not repeat archive/reset blindly"
 fi
-resume "$CYCLE_DATE; checkpoint $CHECKPOINT_SHA" "$REASON"
+unfinished "$CYCLE_DATE; checkpoint $CHECKPOINT_SHA" "$REASON"
