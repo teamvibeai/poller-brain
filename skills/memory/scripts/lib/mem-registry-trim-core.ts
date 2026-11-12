@@ -82,51 +82,27 @@ export interface ContentCoverage {
   /** Empty when covered, otherwise ["no-literal-match"]. */
   missingTokens: string[];
 }
-
-/** Only presentation whitespace, an initial list marker and a final period fold. */
+/** Only NFC, NBSP/thin-space -> space, trim and one initial list marker fold; tabs and space runs stay significant (fail closed). */
+/** Only NFC, presentation whitespace and one initial list marker fold. */
 function normalizeCoverageText(text: string): string {
   return text.normalize("NFC")
-    .replace(/[\s\u00a0\u202f\u2009]+/gu, " ")
+    .replace(/[\u00a0\u202f\u2009]/gu, " ")
     .trim()
-    .replace(/^(?:[-*]|[0-9]+\.) /u, "")
-    .replace(/\.$/u, "");
-}
-
-const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
-const CONTINUATION = /[\/+\-−,.~]/u;
-
-/** Check edges of a literal span; never extract or reinterpret its contents. */
-function isBounded(text: string, start: number, end: number): boolean {
-  // Array.from keeps boundary checks Unicode-aware even beside astral letters.
-  const before = Array.from(text.slice(0, start));
-  const after = Array.from(text.slice(end));
-  const span = Array.from(text.slice(start, end));
-  const first = span[0];
-  const last = span.at(-1)!;
-  const left = before.at(-1) ?? "";
-  const right = after[0] ?? "";
-  if (LETTER_OR_DIGIT.test(left) || LETTER_OR_DIGIT.test(right)) return false;
-  if (CONTINUATION.test(right) && LETTER_OR_DIGIT.test(after[1] ?? "")) return false;
-  if (CONTINUATION.test(left) &&
-      (LETTER_OR_DIGIT.test(before.at(-2) ?? "") || LETTER_OR_DIGIT.test(first))) return false;
-  // A grouping space and Czech ,−/,- notation cannot turn an amount into a suffix/prefix.
-  if (/\p{N}/u.test(first) && left === " " && /\p{N}/u.test(before.at(-2) ?? "")) return false;
-  if (/\p{N}/u.test(last) && ((right === " " && /\p{N}/u.test(after[1] ?? "")) || /^,[-−]/u.test(text.slice(end)))) return false;
-  return true;
+    .replace(/^(?:[-*+]|[0-9]+\.) /u, "");
 }
 
 function checkCoverage(key: string, description: string, destination: string, citation: Citation): ContentCoverage {
   const body = normalizeCoverageText(description);
-  const text = normalizeCoverageText(destination);
-  let covered = false;
-  // Empty bodies are not evidence. Continue past an unbounded occurrence:
-  // a later occurrence may preserve the complete entry with valid boundaries.
-  for (let start = body ? text.indexOf(body) : -1; start !== -1; start = text.indexOf(body, start + 1)) {
-    if (isBounded(text, start, start + body.length)) {
-      covered = true;
-      break;
+  // Empty bodies are not evidence. Never join lines or strip Markdown,
+  // punctuation or a trailing citation to manufacture a match.
+  const covered = body.length > 0 && destination.split(/\r\n|[\n\r]/u).some((line) => {
+    const text = normalizeCoverageText(line);
+    if (body === text) return true;
+    for (const prefix of [`[${key}]`, `${key}:`]) {
+      if (text.startsWith(prefix) && body === text.slice(prefix.length).trimStart()) return true;
     }
-  }
+    return false;
+  });
   return {
     key,
     file: citation.file,
@@ -157,8 +133,9 @@ export interface FindCandidatesResult {
 /**
  * Find rows that are NOT yet a pointer and have a genuine single-key
  * citation somewhere in `destinations` and whose complete normalized
- * Description occurs literally, case-sensitively and with valid boundaries
- * in that citation's file. Any failure retains the full registry row.
+ * Description equals a complete normalized line in that citation's file,
+ * optionally after removing one leading prefix for this key. Any failure
+ * retains the full registry row.
  * Read-only — never mutates
  * `registry` and never decides what gets written. The caller (a human
  * reviewing the full `lineText` per candidate, or a step that already

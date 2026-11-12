@@ -147,10 +147,10 @@ const DESTINATIONS: DestinationFile[] = [
       "### Wikilink dedicated recap (only reachable via scan-past, since the wikilink line is index-shaped)",
       "",
       "- **[MEM-250] dedicated:** own single-key line, found via scan-past past the wikilink line.",
-      // Citation-selection fixtures preserve the complete entry bodies too.
-      "Fixture details: " + REGISTRY.split("\n").filter((line) =>
+      // Citation-selection fixtures preserve each complete entry on its own line.
+      ...REGISTRY.split("\n").filter((line) =>
         /^\| MEM-(?:99|172|210|230|240|250) \|/.test(line))
-        .map((line) => line.split("|").slice(5, -1).join("|").trim()).join("; "),
+        .map((line) => line.split("|").slice(5, -1).join("|").trim()),
     ].join("\n"),
   },
 ];
@@ -470,8 +470,8 @@ const HOOK_DESTINATIONS: DestinationFile[] = [
       "**How to apply:** mention them explicitly in the closing comment. [MEM-501]",
       "",
       "Some unrelated intro paragraph, no heading of its own, still under the same section. [MEM-503]",
-      "Fixture details: " + HOOK_REGISTRY.split("\n").filter((line) => /^\| MEM-(?:501|503) \|/.test(line))
-        .map((line) => line.split("|").slice(5, -1).join("|").trim()).join("; "),
+      ...HOOK_REGISTRY.split("\n").filter((line) => /^\| MEM-(?:501|503) \|/.test(line))
+        .map((line) => line.split("|").slice(5, -1).join("|").trim()),
     ].join("\n"),
   },
   {
@@ -568,9 +568,11 @@ try {
 const coverageRegistry = [
   "| MEM-601 | ACTIVE | 2026-11-12 | — | Read https://example.org/Questions2017 and questions.xlsx before answering. |",
   "| MEM-602 | ACTIVE | 2026-11-12 | — | Read https://example.org/Questions2017 and questions.xlsx before answering. |",
+  "| MEM-609 | ACTIVE | 2026-11-12 | — | Preserve this complete entry before trimming the registry. Preserve every URL, filename, amount and identifier exactly as written. |",
   "| MEM-603 | ACTIVE | 2026-11-12 | — | Always preserve the original facts before condensing the prose. |",
 ].join("\n");
 const coverageDestinations: DestinationFile[] = [
+  { file: "semantic/equal.md", text: "### Preserve complete entries\n[MEM-609] Preserve this complete entry before trimming the registry. Preserve every URL, filename, amount and identifier exactly as written." },
   { file: "semantic/missing.md", text: "### Official question procedure\nThe procedure is documented here. [MEM-601]" },
   { file: "semantic/covered.md", text: "### Official question procedure\nRead https://example.org/Questions2017 and questions.xlsx before answering. [MEM-602]" },
   { file: "semantic/plain.md", text: "### Preserve original facts\nPreserve the facts before condensing. [MEM-603]" },
@@ -581,8 +583,11 @@ const missingCoverage = coverageFound.contentCoverage?.find((c) => c.key === "ME
 assert(missingCoverage?.status === "rejected" &&
   JSON.stringify(missingCoverage.missingTokens) === JSON.stringify(["no-literal-match"]),
   "#505: rejected row reports one machine-readable no-literal-match reason");
-assert(coverageFound.candidates.some((c) => c.key === "MEM-602"), "#505: fully covered row is still proposed");
-assert(coverageFound.contentCoverage?.find((c) => c.key === "MEM-602")?.status === "covered", "#505: covered row reports successful coverage");
+// fail closed: whole-line equality (#505 redesign)
+assert(!coverageFound.candidates.some((c) => c.key === "MEM-602"), "#505: a trailing citation prevents whole-line equality");
+// fail closed: whole-line equality (#505 redesign)
+assert(coverageFound.contentCoverage?.find((c) => c.key === "MEM-602")?.status === "rejected", "#505: a trailing citation reports rejected coverage");
+assert(coverageFound.candidates.some((c) => c.key === "MEM-609"), "#505: an equal line with a leading key is still proposed");
 // fail closed: literal containment only (#505 redesign)
 assert(!coverageFound.candidates.some((c) => c.key === "MEM-603"), "#505: a paraphrase without distinctive tokens is rejected");
 const noTokens = coverageFound.contentCoverage?.find((c) => c.key === "MEM-603");
@@ -596,6 +601,30 @@ function inspectCoverage(description: string, destination: string) {
     text: `### Verified literal content coverage\nCondensed lesson. [MEM-604]\n${destination}`,
   }]).contentCoverage[0];
 }
+assert(inspectCoverage("123", "123 MB").status === "rejected", "#505: 123 does not equal the line 123 MB");
+assert(inspectCoverage("Preserve this entry", "Preserve this entry.").status === "rejected", "#505: a trailing period prevents equality");
+assert(inspectCoverage("Preserve this entry", "- Preserve this entry").status === "covered", "#505: one leading dash list marker folds");
+for (const marker of ["", "- ", "* ", "+ ", "1. "]) {
+  assert(inspectCoverage("API stojí 1 234 Kč.", `${marker}API stojí 1\u00a0234\u202fKč.`).status === "covered",
+    `#505: NBSP/thin space and a single list marker fold without changing punctuation: ${marker}`);
+  assert(inspectCoverage(`${marker}API stojí 50 Kč.`, "API stojí 50 Kč.").status === "covered",
+    `#505: entry list markers fold too: ${marker}`);
+}
+for (const prefix of ["[MEM-604] ", "MEM-604: ", "[MEM-604]", "MEM-604:", "- [MEM-604] ", "+ MEM-604: "]) {
+  assert(inspectCoverage("Preserve this entry.", `${prefix}Preserve this entry.`).status === "covered",
+    `#505: one leading prefix for the same key folds: ${prefix}`);
+}
+for (const prefix of ["[MEM-605] ", "MEM-605: ", "[MEM-604] [MEM-604] ", "[MEM-604] - ", "**[MEM-604]** ", "- - "]) {
+  assert(inspectCoverage("Preserve this entry.", `${prefix}Preserve this entry.`).status === "rejected",
+    `#505: other keys, repeated prefixes and Markdown stay literal: ${prefix}`);
+}
+assert(inspectCoverage("API", "API/h; (API)\nAPI").status === "covered", "#505: a later complete equal line covers the entry");
+assert(inspectCoverage("API", "Prefix API suffix").status === "rejected", "#505: extra prose prevents whole-line equality");
+assert(inspectCoverage("API", "Unrelated\rAPI\r\nOther").status === "covered", "#505: CR and CRLF separate destination lines");
+const datedPrefixCoverage = findTrimCandidates(`| ${DATED_A} | ACTIVE | 2026-11-12 | — | Preserve this dated entry. |`, [{
+  file: "semantic/dated-prefix.md", text: `### Preserve dated entries\n[${DATED_A}] Preserve this dated entry.`,
+}]);
+assert(datedPrefixCoverage.contentCoverage[0]?.status === "covered", "#505: a complete dated key prefix folds");
 const richDescription = "Read [source](https://example.org/Case_(2017)?q=Yes). Keep src/parser.ts, C:\\data\\facts.csv, /tmp, questions.xlsx, .xls, .xlsx, `parseRecord`, `queue   Job`, 2015, 1.25, 42ms, 2 GB, BIFF and TASK_ID-7. Keep small counts 12 and 7.";
 const richCoverage = inspectCoverage(richDescription,
   "https://example.org/Case_(2017)?q=Yes\nSRC/PARSER.TS c:\\DATA\\facts.csv /tmp QUESTIONS.XLSX .xls .xlsx parserecord queue\n job; 2015; 1.25; 42 MS; 2gb; biff task_id-7; counts 12 and 7");
@@ -634,12 +663,13 @@ for (const suffix of [".", "!", "?", ",", ";", ":", "**", "__", "_(part)."]) {
 }
 for (const decorated of ["https://example.org/export.", "https://example.org/export!", "https://example.org/export?",
   "**https://example.org/export**", "__https://example.org/export__", "**https://example.org/export!**", "(https://example.org/export). "]) {
-  // fail closed: literal containment only (#505 redesign)
+  // fail closed: whole-line equality (#505 redesign)
   assert(inspectCoverage(decorated, "https://example.org/export").status ===
-    (decorated === "https://example.org/export." ? "covered" : "rejected"),
-    `#505 review1 URL: only a trailing sentence period folds in ${decorated}`);
-  assert(inspectCoverage("https://example.org/export", decorated).status === "covered",
-    `#505 review1 URL: strip surrounding prose/Markdown from destination ${decorated}`);
+    "rejected",
+    `#505 review1 URL: literal destination must equal ${decorated}`);
+  // fail closed: whole-line equality (#505 redesign)
+  assert(inspectCoverage("https://example.org/export", decorated).status === "rejected",
+    `#505 review1 URL: surrounding prose/Markdown prevents equality with ${decorated}`);
 }
 // fail closed: literal containment only (#505 redesign)
 assert(inspectCoverage('[source](https://example.org/export. "Export title")', "`https://example.org/export.`").status === "rejected",
@@ -660,8 +690,9 @@ assert(inspectCoverage("Limit je 456.", "Limit je 123,456.").status === "rejecte
   "#505 review1 numeric: a comma-separated numeric suffix is not a standalone amount");
 assert(inspectCoverage("Limit je 123,456.", "Limit je 123,456,789.").status === "rejected",
   "#505 review1 numeric: a decimal token cannot match a prefix of a longer grouped number");
-assert(inspectCoverage("Limit je 123.", "Limit je 123, celkem.").status === "covered",
-  "#505 review1 numeric: ordinary sentence punctuation still delimits a number");
+// fail closed: whole-line equality (#505 redesign)
+assert(inspectCoverage("Limit je 123.", "Limit je 123, celkem.").status === "rejected",
+  "#505 review1 numeric: extra prose prevents whole-line equality");
 
 // Review1 finding 3: both composed letters and combining marks belong to
 // filename/path segments, including Windows paths and non-ASCII extensions.
@@ -712,24 +743,30 @@ const coverageProbes: CoverageProbe[] = [
   ["boundaries", "Czech amount continuation", "50", "50,- Kč", "rejected"],
   ["literal", "identical prose without technical tokens", "Petr bydlí v Brně a má rád zelený čaj.", "Petr bydlí v Brně a má rád zelený čaj.", "covered"],
   ["literal", "NFC", "API používá příručka.xlsx.".normalize("NFD"), "API používá příručka.xlsx.", "covered"],
-  ["literal", "whitespace folding", "API stojí 1 234 Kč.", "API\tstojí 1\u202f234\u2009Kč", "covered"],
-  ["literal", "trailing period", "API stojí 50 Kč.", "API stojí 50 Kč", "covered"],
-  ["literal", "dash list marker", "- API stojí 50 Kč.", "API stojí 50 Kč", "covered"],
-  ["literal", "asterisk list marker", "* API stojí 50 Kč.", "API stojí 50 Kč", "covered"],
-  ["literal", "numbered list marker", "1. API stojí 50 Kč.", "API stojí 50 Kč", "covered"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["literal", "whitespace folding", "API stojí 1 234 Kč.", "API\tstojí 1\u202f234\u2009Kč", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["literal", "trailing period", "API stojí 50 Kč.", "API stojí 50 Kč", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["literal", "dash list marker", "- API stojí 50 Kč.", "API stojí 50 Kč", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["literal", "asterisk list marker", "* API stojí 50 Kč.", "API stojí 50 Kč", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["literal", "numbered list marker", "1. API stojí 50 Kč.", "API stojí 50 Kč", "rejected"],
   ["literal", "case sensitive prose", "API stojí 50 Kč", "api stojí 50 Kč", "rejected"],
   ["literal", "literal Markdown", "Use **facts.csv**.", "Use **facts.csv**.", "covered"],
-  // fail closed: literal containment only (#505 redesign)
-  ["review1", "prose exclamation", `${probeUrl}!`, probeUrl, "rejected", "covered"],
-  // fail closed: literal containment only (#505 redesign)
-  ["review1", "bold", `**${probeUrl}**`, probeUrl, "rejected", "covered"],
-  ["review1", "prose period", `${probeUrl}.`, probeUrl, "covered"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["review1", "prose exclamation", `${probeUrl}!`, probeUrl, "rejected", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["review1", "bold", `**${probeUrl}**`, probeUrl, "rejected", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["review1", "prose period", `${probeUrl}.`, probeUrl, "rejected"],
   ["review1", "literal Markdown period", `[source](${probeUrl}.)`, `[copy](${probeUrl})`, "rejected"],
   ["review1", "literal code period", `\`${probeUrl}.\``, `\`${probeUrl}\``, "rejected"],
   // fail closed: literal containment only (#505 redesign)
   ["review1", "Markdown labels retain identifiers", `[MPO](${probeUrl})`, `[official source](${probeUrl})`, "rejected", "rejected"],
-  // fail closed: literal containment only (#505 redesign)
-  ["review1", "balanced URL parentheses", "[source](https://example.org/Case_(2017)).", "https://example.org/Case_(2017)", "rejected", "covered"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["review1", "balanced URL parentheses", "[source](https://example.org/Case_(2017)).", "https://example.org/Case_(2017)", "rejected", "rejected"],
   // fail closed: literal containment only (#505 redesign)
   ["review1", "tokenless Czech prose", "Petr bydlí v Brně a má rád zelený čaj.", "Some unrelated content", "rejected"],
   ["review1", "Czech unit", "Cena je 50 Kč.", "Cena je 80 Kč.", "rejected"],
@@ -759,15 +796,15 @@ const coverageProbes: CoverageProbe[] = [
   ["verify", "NBSP before unit", "API stojí 50 Kč.", "API stojí 50\u00a0Kč.", "covered"],
   ["verify", "decimal suffix", "Limit je 456.", "Limit je 123,456.", "rejected"],
   ["verify", "grouped prefix", "Limit je 123,456.", "Limit je 123,456,789.", "rejected"],
-  // fail closed: literal containment only (#505 redesign)
-  ["verify", "comma prose boundary", "Limit je 123.", "Limit je 123, celkem.", "covered", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["verify", "comma prose boundary", "Limit je 123.", "Limit je 123, celkem.", "rejected", "rejected"],
   // fail closed: literal containment only (#505 redesign)
   ["verify", "URL Unicode query preserved", `[zdroj](${probeUrl}?q=číslo&n=123,456)`, `<${probeUrl}?q=číslo&n=123,456>`, "rejected"],
   ["verify", "URL query changed", `[zdroj](${probeUrl}?q=číslo&n=123,456)`, `<${probeUrl}?q=číslo&n=123>`, "rejected"],
-  // fail closed: literal containment only (#505 redesign)
-  ["verify", "triple emphasis", `***${probeUrl}***`, probeUrl, "rejected", "covered"],
-  // fail closed: literal containment only (#505 redesign)
-  ["verify", "italic", `*${probeUrl}*`, probeUrl, "rejected", "covered"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["verify", "triple emphasis", `***${probeUrl}***`, probeUrl, "rejected", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["verify", "italic", `*${probeUrl}*`, probeUrl, "rejected", "rejected"],
   // fail closed: literal containment only (#505 redesign)
   ["verify", "strikethrough", `~~${probeUrl}~~`, probeUrl, "rejected"],
   // fail closed: literal containment only (#505 redesign)
@@ -790,8 +827,8 @@ const coverageProbes: CoverageProbe[] = [
   // fail closed: literal containment only (#505 redesign)
   ["verify", "escaped paren preserved", String.raw`[zdroj](https://example.org/export\)old)`, String.raw`[kopie](https://example.org/export\)old)`, "rejected"],
   ["verify", "escaped URL cannot truncate", String.raw`[zdroj](https://example.org/export\)literal)`, "`https://example.org/export\\`", "rejected"],
-  // fail closed: literal containment only (#505 redesign)
-  ["verify", "bare to Markdown", probeUrl, `[x](${probeUrl})`, "covered", "rejected"],
+  // fail closed: whole-line equality (#505 redesign)
+  ["verify", "bare to Markdown", probeUrl, `[x](${probeUrl})`, "rejected", "rejected"],
 ];
 
 // Additional span invariants, generated as a table rather than separate
@@ -816,8 +853,8 @@ for (const [left, right] of [["1,234.56", "1.234,56"], ["1 234", "1234"], ["1,25
 }
 for (const marker of ["*", "**", "***", "_", "__", "___", "~~"]) {
   for (const punctuation of ["", "!", ".", ",", ";", ":"]) {
-    // fail closed: literal containment only (#505 redesign)
-    coverageProbes.push(["spans", `${marker} emphasis with ${punctuation}`, `${marker}${probeUrl}${punctuation}${marker}`, probeUrl, "rejected", marker === "~~" ? "rejected" : "covered"]);
+    // fail closed: whole-line equality (#505 redesign)
+    coverageProbes.push(["spans", `${marker} emphasis with ${punctuation}`, `${marker}${probeUrl}${punctuation}${marker}`, probeUrl, "rejected", "rejected"]);
   }
 }
 for (const suffix of [String.raw`\)old`, String.raw`\(old`, String.raw`\(old\)`, String.raw`\\(old)`, String.raw`\\\)old`, String.raw`\*old`, "?q=😀&n=123,456"]) {
@@ -882,9 +919,11 @@ for (const letter of ["č", "９", "𐐀", "𝟠"]) {
   assert(inspectCoverage("API", `API${letter}`).status === "rejected", `#505 boundary: right Unicode ${letter}`);
   assert(inspectCoverage("API", `${letter}API`).status === "rejected", `#505 boundary: left Unicode ${letter}`);
 }
-assert(inspectCoverage("API", "API/h; (API)").status === "covered", "#505: keep searching after an unbounded first occurrence");
-assert(inspectCoverage("API stojí 1 234 Kč.", "API\tstojí\n1\u202f234\u2009Kč").status === "covered",
-  "#505: destination newlines fold to spaces too");
+// fail closed: whole-line equality (#505 redesign)
+assert(inspectCoverage("API", "API/h; (API)").status === "rejected", "#505: an isolated substring is not a whole line");
+// fail closed: whole-line equality (#505 redesign)
+assert(inspectCoverage("API stojí 1 234 Kč.", "API\tstojí\n1\u202f234\u2009Kč").status === "rejected",
+  "#505: destination newlines separate lines rather than join a body");
 for (const empty of ["", " ", ".", "- .", "* .", "1. ."]) {
   assert(inspectCoverage(empty, "Unrelated prose").status === "rejected", "#505: empty normalized bodies fail closed");
 }
@@ -936,14 +975,14 @@ try {
   assert(proposal.status === 0 && report.find((r: { key: string }) => r.key === "MEM-601").missingTokens.join() === "no-literal-match",
     "#505: CLI emits additive machine-readable rejection reasons");
   assert(proposal.stdout.includes("no-literal-match") && proposal.stdout.includes("do not hand-trim"), "#505: CLI explains rejected rows with no-literal-match");
-  assert(!proposal.stdout.includes("MEM-601 →") && proposal.stdout.includes("MEM-602 →"), "#505: CLI proposes only eligible rows");
+  assert(!proposal.stdout.includes("MEM-601 →") && proposal.stdout.includes("MEM-609 →"), "#505: CLI proposes only eligible rows");
   assert(fs.readFileSync(registryPath, "utf8") === coverageRegistry, "#505: proposal mode is read-only");
-  const rejectedApply = runCoverageCli("--apply", "--only", "MEM-601,MEM-602");
+  const rejectedApply = runCoverageCli("--apply", "--only", "MEM-601,MEM-609");
   assert(rejectedApply.status === 1 && rejectedApply.stdout.includes("contentCoverage: "), "#505: apply reports coverage and refuses a rejected key");
   assert(fs.readFileSync(registryPath, "utf8") === coverageRegistry, "#505: rejected key aborts the entire apply without writing");
-  const coveredApply = runCoverageCli("--apply", "--only", "MEM-602");
+  const coveredApply = runCoverageCli("--apply", "--only", "MEM-609");
   assert(coveredApply.status === 0, `#505: CLI still applies fully covered rows: ${coveredApply.stderr}`);
-  assert(fs.readFileSync(registryPath, "utf8").includes("| MEM-602 | ACTIVE | 2026-11-12 | semantic/covered.md:"), "#505: approved covered row becomes a pointer");
+  assert(fs.readFileSync(registryPath, "utf8").includes("| MEM-609 | ACTIVE | 2026-11-12 | semantic/equal.md:"), "#505: approved covered row becomes a pointer");
 } finally {
   fs.rmSync(coverageRoot, { recursive: true, force: true });
 }

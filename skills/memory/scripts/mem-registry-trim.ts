@@ -15,8 +15,9 @@
  * just the extracted hook) so a reviewer can judge it without opening the
  * destination file.
  *
- * The content-coverage guard (#505) requires bounded, case-sensitive literal
- * containment of the complete normalized Description in the selected file.
+ * The content-coverage guard (#505) requires case-sensitive equality between
+ * the complete normalized Description and a whole line in the selected file,
+ * optionally removing one leading prefix for the same key.
  * Both modes print an additive `contentCoverage: <JSON array>` field;
  * Rejections carry a single `no-literal-match` reason in `missingTokens`.
  * Rejected rows must not be hand-trimmed before moving the missing content.
