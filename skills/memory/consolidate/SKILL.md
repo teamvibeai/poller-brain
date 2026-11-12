@@ -12,8 +12,9 @@ Process recent daily logs and promote important information to long-term memory.
 
 ## When to Run
 
-First run the Pre-Step-0 state check below. Resume unfinished work or inspect
-unknown history before applying cadence. Once the state is definitive, check
+First run the Pre-Step-0 state check below. An unfinished cycle stops the run:
+inspect it and use the explicit `repair` command (never resume automatically);
+inspect unknown history before applying cadence. Once the state is definitive, check
 the newest `reports/*-memory-consolidation.md` filename for the date of
 last consolidation (`poller-brain#346` — this is the authoritative source, not
 the gitignored `memory/.last_consolidation` marker, which only tracks when a
@@ -32,11 +33,32 @@ Before resetting TODAY.md or writing any consolidation citation, record the sess
 bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .
 ```
 
-This read-only check finds the newest checkpoint, extracts its cycle date, and requires a later exact `chore: consolidate memory (YYYY-MM-DD)` final commit plus the matching markdown/JSON report pair in that final commit or its preceding Step 12a checkpoint. The markdown must also exist on disk without uncommitted report edits. The JSON may have been consumed by the platform, so its committed copy is the evidence. A report on disk alone never proves completion.
+This read-only check inspects the durable start marker first, then finds the newest checkpoint, extracts its cycle date, and requires a later exact `chore: consolidate memory (YYYY-MM-DD)` final commit plus the matching markdown/JSON report pair in that final commit or its preceding Step 12a checkpoint. With a marker, its starting HEAD must be an ancestor of both the selected checkpoint (if present) and the final commit; merging another clone's same-date completion does not complete this cycle. The markdown must also exist on disk without uncommitted report edits. The JSON may have been consumed by the platform, so its committed copy is the evidence. A report on disk alone never proves completion.
 
-- **Exit 1 / `consolidation_resume: true`:** treat the prior cycle as incomplete. Inspect `git status --short`, checkpoint history, and any report drafts; reconcile existing work and resume after the last verified completed step. Do NOT repeat Step 0's archive/reset or retention deletions blindly. Checkpoint subjects identify a boundary, not proof that later steps ran. Record the interrupted date, checkpoint SHA, missing evidence, and recovery in the current markdown report's `## Prior-Cycle Recovery` section and JSON `processImprovements`. Audit SUMMARY.md and episodic history citations to that cycle; remove or label unsupported claims as incomplete.
-- **Exit 2 / history unavailable:** inspect available history and reports manually, record the uncertainty, and do not assert completion from unverified citations. A shallow clone with no visible checkpoint is also uncertain. Maintenance returns `consolidation_inspect: true` (non-skip); do not apply cadence until history is definitive.
-- **Exit 0:** no unfinished checkpoint/report evidence was found in available history. Still inspect `git status --short` and today's report together before starting: a clean tree with no report or an uncommitted report can both represent an interruption before any checkpoint. Reconcile rather than discard existing work.
+- **Exit 1 / unfinished cycle:** stop and report the interrupted date, starting HEAD/checkpoint, and missing evidence. An unfinished marker always blocks a later invocation, regardless of its age or other metadata. Inspect existing work, then explicitly run `consolidation-marker.sh repair` using the audited procedure below. Do not repeat Step 0's archive/reset or retention deletions blindly. Checkpoint subjects identify a boundary, not proof that later steps ran. Audit SUMMARY.md and episodic history citations; remove or label unsupported claims as incomplete. Without a marker, inspect and reconcile unfinished checkpoint/report evidence manually before a fresh start.
+- **Exit 2 / marker malformed/unreadable or history unavailable:** stop and report the uncertainty. Inspect available history and reports manually; do not assert completion from unverified citations. A shallow clone with no visible checkpoint is also uncertain. Maintenance returns non-zero with `consolidation_inspect: true`; do not start a fresh cycle or apply cadence until state is definitive. For a malformed/unreadable marker, use the explicit audited `repair` procedure below.
+- **Exit 0:** no unfinished evidence was found, or the existing cycle's completion was verified. Still inspect `git status --short` and today's report together before starting. If a verified completed marker remains, run `clear` before starting a fresh cycle.
+
+**Durable start (required before the first maintenance log/archive mutation):** For a fresh cycle that is due, run:
+
+```bash
+bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" start .
+```
+
+Require exit 0 before writing the maintenance session log or entering Step 0. The helper atomically publishes a versioned marker (temporary file + rename) at `git rev-parse --git-path consolidation-start`, outside the index, containing the UTC cycle date and starting HEAD. It refuses to overwrite any existing marker or bypass unfinished/unknown state. The successful `start` authorizes this fresh cycle's uninterrupted execution. If MAINTENANCE.md just completed the prior-state check and successful `start` before logging in this same invocation, proceed directly to Step 0 using that date and HEAD. Do not rerun the prior-state check after starting. Any later invocation must run the check and stop on an unfinished marker; finding a marker never grants permission to continue writing.
+
+```bash
+bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" inspect .
+```
+
+Inspect is read-only: exit 0 means absent, 1 prints `v1 YYYY-MM-DD START_HEAD` (older v2 records remain readable; their extra metadata grants no authority), and 2 requires inspection. Use the cycle's original date and starting HEAD for checkpoints, reports and Step 10, including across UTC midnight. A marker with no checkpoint can mean Step 0 was partly or fully applied. A previous completed cycle, even on the same date, does not supersede the marker. A leftover lifecycle lock after a killed writer requires manual inspection; inspect/state perform no repair.
+
+**Audited marker repair (the only path for an interrupted marker):** Repair is an explicit action after inspection, never called by the guard. It accepts valid unfinished markers as well as malformed/unreadable markers:
+
+1. Capture current `inspect` output in a file (exit 1 or 2 is expected), for example `bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" inspect . > "$(git rev-parse --git-path consolidation-start).inspect.txt"`.
+2. Inspect `git status --short`, checkpoint/final history, TODAY.md and daily archives, the progress ledger, report drafts, and committed markdown/JSON report evidence. Reconcile whether Step 0 or later writes already happened. Save review notes with non-empty lines `Archives inspected: <findings>` and `Reports inspected: <findings>` in a separate file in Git metadata. This is an attestation of the inspection; the helper validates its presence, not the correctness of the review.
+3. Run `bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" repair . INSPECT_CAPTURE REVIEW_NOTES` (paths are relative to the brain root, or absolute). The helper locks lifecycle changes and requires the captured output to match current inspection and both review notes. It preserves the marker by moving it to a timestamped `consolidation-start.*.broken` path, saves the inspection/notes in the adjacent `.audit`, and logs request/completion in `consolidation-start.repair.log`.
+4. Rerun state inspection and reconcile unfinished archives/reports before a new `start`. Repair changes no archive, report, index or commit and does not establish completion. Keep the backup and audit. Use `consolidation-marker.sh repair . INSPECT_CAPTURE REVIEW_NOTES` instead of manually removing or overwriting a marker.
 
 **No forward completion citations:** Until the final commit and report pair are verified, SUMMARY.md/episodic history may describe this run only as "in progress" with existing checkpoint SHAs. Do not write "Commit: see chore: consolidate memory (YYYY-MM-DD)" or a completed-history report link before that evidence exists. Defer completion citations until after the final commit; commit any subsequent citation edits separately.
 
@@ -44,13 +66,13 @@ This read-only check finds the newest checkpoint, extracts its cycle date, and r
 
 **Never commit over an unresolved integrity alarm.** If Step 9d or any other step (including recovery of a prior cycle) raises an integrity alarm, stop and investigate under that step's guidance; do not commit a partial state or advance to the next step until resolved. This preserves Step 9g's exception at every new checkpoint as well as 6a and the final commit. Do not clear an alarm merely to make a checkpoint.
 
-Before staging, inspect and reconcile unexpected local changes under the base-brain git-safety protocol. Use `consolidation-commit.sh` for every checkpoint/final commit below. It stages and commits only changed paths under `memory/` (including the Step 10a ledger) and the cycle's exact report pair. Unrelated modified, untracked, and staged user files remain untouched, including their staged state. It never commits the deletion of a consumed JSON report. Never use repository-wide staging. If there are no consolidation changes, the helper skips intermediate commits silently; other commit failures must be investigated, never silently ignored. Use the cycle's original date in every checkpoint/final subject, including a resume across midnight. Keep a cumulative `filesChanged` list across checkpoints; a clean tree does not erase earlier work from the report.
+Before staging, inspect and reconcile unexpected local changes under the base-brain git-safety protocol. Use `consolidation-commit.sh` for every checkpoint/final commit below. It stages and commits only changed paths under `memory/` (including the Step 10a ledger) and the cycle's exact report pair. Unrelated modified, untracked, and staged user files remain untouched, including their staged state. It never commits the deletion of a consumed JSON report. Never use repository-wide staging. If there are no consolidation changes, the helper skips intermediate commits silently; other commit failures must be investigated, never silently ignored. Use the cycle's original date in every checkpoint/final subject, including a cycle crossing midnight. Keep a cumulative `filesChanged` list across checkpoints; a clean tree does not erase earlier work from the report.
 
 For reviewed outputs outside those default paths (Step 5 skill/guard promotion, Step 8 `HEARTBEAT.md`, Step 9c `CLAUDE.md`), append only the exact files this cycle changed to the helper command, for example `... "steps 8-9" HEARTBEAT.md CLAUDE.md`. Never pass a broad directory or unrelated user file. Inspect and reconcile pre-existing user changes within allowed paths before running the helper; the allowlist is not permission to include unrelated edits there.
 
 ### 0. Archive TODAY.md
 
-Before processing, archive `memory/TODAY.md` to the daily/ directory:
+Require the durable start marker above before any write, including creating a missing TODAY.md. Before processing, archive `memory/TODAY.md` to the daily/ directory:
 
 1. Read `memory/TODAY.md` — extract the date header(s) (format: `# YYYY-MM-DD`)
 2. For each date section in TODAY.md:
@@ -636,7 +658,7 @@ Before self-critique, run observable checks on the daily log scratchpad and reco
 
 Checks (all over the last 7 days unless specified):
 
-1. **Today's log exists.** First, determine if user sessions ran today *before* this consolidation by running `git log <session-start-HEAD> --oneline --since='midnight'`. Use the pre-Step-0 HEAD recorded at session start (or the original HEAD from a resumed run's ledger) to exclude this run's checkpoint commits; they are maintenance work, not evidence of earlier user sessions.
+1. **Today's log exists.** First, determine if user sessions ran today *before* this consolidation by running `git log <session-start-HEAD> --oneline --since='midnight'`. Use the pre-Step-0 HEAD recorded at session start (or this cycle's original HEAD from its ledger) to exclude this run's checkpoint commits; they are maintenance work, not evidence of earlier user sessions.
    - **No pre-consolidation commits today:** write `Today's log: no user sessions before this consolidation — not applicable` in the compliance section; set `daily-log-exists-today` to `true` in selfAssessment (criterion is excluded from scoring for this report).
    - **Pre-consolidation commits exist today:** verify `memory/daily/YYYY-MM-DD.md` (the file that Step 0 archived from TODAY.md) exists and contains content from those sessions (more than just a consolidation stub line). If it does, write `Today's log: present, N entries ✅`; set `daily-log-exists-today` to `true`. If it is missing or contains only a consolidation stub, write `Today's log: missing or stub-only despite N commits today ❌`; set `daily-log-exists-today` to `false`.
    - **Important:** Do NOT use `memory/TODAY.md` for this check — Step 0 resets it to a bare consolidation stub regardless of whether sessions ran. Only `memory/daily/YYYY-MM-DD.md` contains actual pre-consolidation session content.
@@ -750,6 +772,9 @@ After Step 12a, apply **Checkpoint Rules** again and create the final completion
 ```bash
 bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-commit.sh" . YYYY-MM-DD final
 bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .
+bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" clear .
 ```
 
-Confirm the guard reports `consolidation_state: complete` before claiming completion to the user or adding completion citations. If it reports resume/unknown, investigate and finish the missing evidence first. The intermediate boundaries are Step 0a (archive), 4a (promotions), 6a (SUMMARY/lifecycle), 7a (retention), 9g (sweep/audit/trims), 10a (compliance ledger), and 12a (completed reports).
+Require `consolidation_state: complete` before running `clear`. The lifecycle helper clears only when the marker's cycle has an exact final commit after its starting HEAD/latest checkpoint and committed report-pair evidence (including Step 12a if JSON was consumed), with markdown still on disk and no unfinished report edits. The starting HEAD must be an ancestor of both checkpoint and final. It leaves the marker in place on failure. An unfinished or malformed marker requires the explicit audited `repair` procedure above; use that command instead of manual marker removal.
+
+Confirm the guard reports `consolidation_state: complete` before claiming completion to the user or adding completion citations. If it reports unfinished/unknown, stop and report; inspect the missing evidence and use the audited `repair` procedure for an interrupted marker. The intermediate boundaries are Step 0a (archive), 4a (promotions), 6a (SUMMARY/lifecycle), 7a (retention), 9g (sweep/audit/trims), 10a (compliance ledger), and 12a (completed reports).

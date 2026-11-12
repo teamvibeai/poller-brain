@@ -2,11 +2,11 @@
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
 const zeroPromotion = `## Tier Coverage
@@ -246,12 +246,12 @@ function state(dir) {
 }
 
 for (const daysAgo of [0, 1, 3]) {
-  test(`checkpoint without report requires resume even ${daysAgo} days later and outside window`, t => {
+  test(`checkpoint without report blocks maintenance even ${daysAgo} days later and outside window`, t => {
     const { dir, checkpoint } = history(t)
     checkpoint(dateAgo(daysAgo))
     const result = guard(dir, { CONSOLIDATION_WINDOW_START: '24', CONSOLIDATION_WINDOW_END: '25' })
-    assert.equal(result.status, 0, result.stdout)
-    assert.match(result.stdout, /consolidation_resume: true/)
+    assert.notEqual(result.status, 0, result.stdout)
+    assert.match(result.stdout, /unfinished consolidation cycle/)
     assert.doesNotMatch(result.stdout, /consolidation_needed/)
     assert.equal(state(dir).status, 1)
   })
@@ -265,8 +265,8 @@ test('report files on disk, staged or checkpointed, do not prove final completio
     if (stage === 'staged') git('add', '-A')
     if (stage === 'checkpointed') commit(`chore: consolidate memory checkpoint (${dateAgo(0)}) — steps 10-12`)
     const result = guard(dir)
-    assert.equal(result.status, 0, result.stdout)
-    assert.match(result.stdout, /consolidation_resume: true/)
+    assert.notEqual(result.status, 0, result.stdout)
+    assert.match(result.stdout, /unfinished consolidation cycle/)
   }
 })
 
@@ -301,7 +301,7 @@ for (const missing of ['md', 'json']) {
     git('add', '-A')
     commit(`chore: consolidate memory (${dateAgo(0)})`)
     assert.equal(state(dir).status, 1)
-    assert.match(guard(dir).stdout, /consolidation_resume: true/)
+    assert.match(guard(dir).stdout, /unfinished consolidation cycle/)
   })
 }
 
@@ -413,7 +413,7 @@ for (const failure of ['shallow', 'missing repository', 'git log error', 'shallo
       overrides.PATH = `${bin}:${process.env.PATH}`
     }
     const result = guard(dir, overrides)
-    assert.equal(result.status, 0, result.stdout)
+    assert.notEqual(result.status, 0, result.stdout)
     assert.match(result.stdout, /consolidation_inspect: true.*unknown/)
     assert.doesNotMatch(result.stdout, /consolidation_needed: false/)
   })
@@ -426,10 +426,10 @@ for (const phase of ['untracked', 'staged', 'committed without final']) {
     if (phase !== 'untracked') git('add', '--', 'reports')
     if (phase === 'committed without final') commit('unfinished report draft')
     assert.equal(state(dir).status, 1, state(dir).stdout)
-    assert.match(state(dir).stdout, /consolidation_resume: true.*report/)
+    assert.match(state(dir).stdout, /unfinished consolidation cycle.*report/)
     const result = guard(dir)
-    assert.equal(result.status, 0, result.stdout)
-    assert.match(result.stdout, /consolidation_resume: true/)
+    assert.notEqual(result.status, 0, result.stdout)
+    assert.match(result.stdout, /unfinished consolidation cycle/)
   })
 }
 
@@ -546,7 +546,7 @@ test('report pair in an unrelated earlier commit cannot substitute for Step 12a 
   git('add', '--', 'reports')
   commit(`chore: consolidate memory (${dateAgo(0)})`)
   assert.equal(state(dir).status, 1)
-  assert.match(guard(dir).stdout, /consolidation_resume: true/)
+  assert.match(guard(dir).stdout, /unfinished consolidation cycle/)
 })
 
 test('today report draft cannot be hidden by a completed prior cycle', t => {
@@ -559,16 +559,16 @@ test('today report draft cannot be hidden by a completed prior cycle', t => {
   git('add', '--', 'reports')
   commit('unfinished report for today')
   assert.equal(state(dir).status, 1)
-  assert.match(guard(dir).stdout, /consolidation_resume: true/)
+  assert.match(guard(dir).stdout, /unfinished consolidation cycle/)
 })
 
-test('detached HEAD, prior-day checkpoint and absent reports directory still resume', t => {
+test('detached HEAD, prior-day checkpoint and absent reports directory still block maintenance', t => {
   const { dir, git, checkpoint } = history(t)
   checkpoint(dateAgo(1))
   git('checkout', '--detach', '-q')
   rmSync(join(dir, 'reports'), { recursive: true })
   assert.equal(state(dir).status, 1)
-  assert.match(guard(dir).stdout, /consolidation_resume: true/)
+  assert.match(guard(dir).stdout, /unfinished consolidation cycle/)
 })
 
 test('stale in-progress ledger does not override a committed prior-day completion', t => {
@@ -581,4 +581,328 @@ test('stale in-progress ledger does not override a committed prior-day completio
   commit(`chore: consolidate memory (${dateAgo(1)})`)
   assert.equal(state(dir).status, 0, state(dir).stdout)
   assert.match(state(dir).stdout, /complete/)
+})
+
+// #506: the durable marker covers mutations before the first checkpoint.
+function marker(dir, action, date, overrides = {}) {
+  return spawnSync('bash', [join(repoRoot, 'scripts/consolidation-marker.sh'), action, dir, ...(date ? [date] : [])], {
+    encoding: 'utf8', env: { ...process.env, ...overrides },
+  })
+}
+const markerStart = (dir, date) => marker(dir, 'start', date)
+const markerPath = dir => join(dir, '.git', 'consolidation-start')
+
+for (const kind of ['malformed', 'unfinished']) {
+  test(`audited repair preserves ${kind} marker bytes and unblocks a fresh start`, t => {
+    const { dir, git } = history(t)
+    const path = markerPath(dir)
+    if (kind === 'unfinished') assert.equal(markerStart(dir).status, 0)
+    const broken = kind === 'unfinished' ? readFileSync(path) : Buffer.from('v1 interrupted\0\n')
+    writeFileSync(path, broken)
+    if (kind === 'unfinished') assert.notEqual(guard(dir).status, 0)
+    const capture = join(dir, '.git', 'marker-inspect.txt')
+    const notes = join(dir, '.git', 'marker-review.txt')
+    writeFileSync(capture, marker(dir, 'inspect').stdout)
+    writeFileSync(notes, 'Archives inspected: TODAY.md and daily archives unchanged; no Step 0 writes\nReports inspected: git status/log and reports show only completed prior cycles\n')
+    const before = { head: git('rev-parse', 'HEAD'), index: readFileSync(join(dir, '.git', 'index')), status: git('status', '--porcelain') }
+    const result = spawnSync('bash', [join(repoRoot, 'scripts/consolidation-marker.sh'), 'repair', dir, capture, notes], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    assert.match(result.stdout, /repaired.*\.broken/)
+    const backup = readdirSync(join(dir, '.git')).find(name => /consolidation-start\..*\.broken$/.test(name))
+    assert.ok(backup)
+    assert.deepEqual(readFileSync(join(dir, '.git', backup)), broken)
+    const audit = readFileSync(join(dir, '.git', `${backup}.audit`), 'utf8')
+    assert.ok(audit.includes(readFileSync(capture, 'utf8').trim()))
+    assert.ok(audit.includes(readFileSync(notes, 'utf8').trim()))
+    assert.match(readFileSync(`${path}.repair.log`, 'utf8'), /repaired.*\.broken/)
+    assert.equal(git('rev-parse', 'HEAD'), before.head)
+    assert.deepEqual(readFileSync(join(dir, '.git', 'index')), before.index)
+    assert.equal(git('status', '--porcelain'), before.status)
+    assert.equal(marker(dir, 'inspect').status, 0)
+    assert.equal(marker(dir, 'start').status, 0)
+  })
+}
+
+for (const kind of ['malformed', 'unfinished']) {
+  for (const blocked of ['no capture', 'wrong capture', 'no archive review', 'no report review']) {
+    test(`repair of ${kind} marker fails closed with ${blocked}`, t => {
+      const { dir } = history(t)
+      if (kind === 'unfinished') assert.equal(markerStart(dir).status, 0)
+      else writeFileSync(markerPath(dir), 'truncated\n')
+      const capture = join(dir, '.git', 'inspect.txt'), notes = join(dir, '.git', 'review.txt')
+      if (blocked !== 'no capture') writeFileSync(capture, blocked === 'wrong capture' ? 'not the inspection\n' : marker(dir, 'inspect').stdout)
+      writeFileSync(notes, [
+        blocked === 'no archive review' ? '' : 'Archives inspected: compared TODAY and daily archives with git',
+        blocked === 'no report review' ? '' : 'Reports inspected: checked drafts, committed reports and final history',
+      ].join('\n') + '\n')
+      const before = readFileSync(markerPath(dir))
+      const result = spawnSync('bash', [join(repoRoot, 'scripts/consolidation-marker.sh'), 'repair', dir, capture, notes], { encoding: 'utf8' })
+      assert.equal(result.status, 2, result.stdout + result.stderr)
+      assert.deepEqual(readFileSync(markerPath(dir)), before)
+      assert.equal(readdirSync(join(dir, '.git')).filter(name => name.endsWith('.broken')).length, 0)
+    })
+  }
+}
+
+function asyncGuard(dir) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('bash', [join(repoRoot, 'scripts/maintenance-guard.sh'), dir])
+    let stdout = '', stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    child.on('error', reject)
+    child.on('close', status => resolve({ status, stdout, stderr }))
+  })
+}
+
+for (const version of ['v1', 'v2']) {
+  test(`unfinished ${version} marker refuses every guard, including two concurrent guards`, async t => {
+    const { dir, git } = history(t)
+    assert.equal(markerStart(dir).status, 0)
+    // Continue to recognize existing v2 records, without using their metadata.
+    if (version === 'v2') writeFileSync(markerPath(dir), `v2 ${dateAgo(0)} ${git('rev-parse', 'HEAD')} prior-session 123 prior-host 1\n`)
+    const before = readFileSync(markerPath(dir))
+    const results = [state(dir), guard(dir), ...await Promise.all([asyncGuard(dir), asyncGuard(dir)])]
+    for (const result of results) {
+      assert.notEqual(result.status, 0, result.stdout)
+      assert.match(result.stdout, /unfinished consolidation cycle — inspect, then run `consolidation-marker.sh repair`/)
+      assert.doesNotMatch(result.stdout, /consolidation_resume: true|consolidation_needed: true/)
+      assert.equal(result.stderr, '')
+    }
+    assert.equal(markerStart(dir).status, 2)
+    assert.deepEqual(readFileSync(markerPath(dir)), before)
+    assert.deepEqual(readdirSync(join(dir, '.git')).filter(name => name.startsWith('consolidation-start')), ['consolidation-start'])
+  })
+}
+
+for (const localFinal of [false, true]) {
+  test(`merged pre-start branch cannot complete local marker (local final=${localFinal})`, t => {
+    const { dir, git, pair, commit } = history(t)
+    git('branch', 'other-clone')
+    commit('local session before consolidation start')
+    const local = git('rev-parse', 'HEAD')
+    assert.equal(marker(dir, 'start').status, 0)
+    const record = readFileSync(markerPath(dir))
+    git('checkout', '-q', 'other-clone')
+    pair()
+    git('add', '--', 'reports')
+    commit(`chore: consolidate memory checkpoint (${dateAgo(0)}) — steps 10-12`)
+    commit(`chore: consolidate memory (${dateAgo(0)})`)
+    git('checkout', '--detach', '-q', local)
+    git('merge', '--no-ff', '-m', 'merge other clone reports', 'other-clone')
+    if (localFinal) commit(`chore: consolidate memory (${dateAgo(0)})`)
+    assert.notEqual(state(dir).status, 0, state(dir).stdout)
+    assert.equal(marker(dir, 'clear').status, 2)
+    assert.deepEqual(readFileSync(markerPath(dir)), record)
+  })
+}
+
+for (const newestDaysAgo of [0, 3]) {
+  test(`pre-0a interruption overrides ${newestDaysAgo === 0 ? 'recent-run' : 'idle'} suppression without changing existing work`, t => {
+    const { dir, git } = history(t, { newestDaysAgo, today: '# source log\n- original entry\n' })
+    assert.equal(guard(dir).status, 1)
+    const head = git('rev-parse', 'HEAD')
+    const index = readFileSync(join(dir, '.git', 'index'))
+    assert.equal(markerStart(dir).status, 0)
+    assert.equal(marker(dir, 'inspect').stdout, `v1 ${dateAgo(0)} ${head}\n`)
+    assert.equal(git('status', '--porcelain'), '') // metadata is never staged
+    assert.deepEqual(readFileSync(join(dir, '.git', 'index')), index)
+    // Simulate kill after archive/reset, before 0a or any report/checkpoint.
+    mkdirSync(join(dir, 'memory', 'daily'))
+    const archive = join(dir, 'memory', 'daily', `${dateAgo(0)}.md`)
+    writeFileSync(archive, '# source log\n- original entry\n')
+    writeFileSync(join(dir, 'memory', 'TODAY.md'), '# reset\n- memory consolidation started\n')
+    writeFileSync(join(dir, 'user-staged.md'), 'unrelated staged work\n')
+    git('add', '--', 'user-staged.md')
+    writeFileSync(join(dir, 'user-staged.md'), 'unrelated unstaged work\n')
+    const before = {
+      status: git('status', '--porcelain'), index: readFileSync(join(dir, '.git', 'index')),
+      diff: git('diff', '--binary'), marker: readFileSync(markerPath(dir)),
+    }
+    for (let wake = 0; wake < 2; wake++) {
+      const result = guard(dir, { CONSOLIDATION_WINDOW_START: '24', CONSOLIDATION_WINDOW_END: '25' })
+      assert.notEqual(result.status, 0, result.stdout)
+      assert.match(result.stdout, /unfinished consolidation cycle.*consolidation-marker.sh repair/)
+      assert.doesNotMatch(result.stdout, /consolidation_needed/)
+      assert.equal(state(dir).status, 1)
+      assert.equal(marker(dir, 'clear').status, 2)
+      assert.equal(marker(dir, 'start').status, 2)
+    }
+    assert.equal(git('status', '--porcelain'), before.status)
+    assert.deepEqual(readFileSync(join(dir, '.git', 'index')), before.index)
+    assert.equal(git('diff', '--binary'), before.diff)
+    assert.deepEqual(readFileSync(markerPath(dir)), before.marker)
+    assert.equal(readFileSync(archive, 'utf8'), '# source log\n- original entry\n')
+    assert.equal(readFileSync(join(dir, 'memory', 'TODAY.md'), 'utf8'), '# reset\n- memory consolidation started\n')
+    assert.equal(git('rev-parse', 'HEAD'), head)
+  })
+}
+
+for (const daysAgo of [0, 1]) {
+  test(`previous completed cycle cannot hide a new start marker (${daysAgo === 0 ? 'same date' : 'UTC rollover'})`, t => {
+    const { dir, git, checkpoint, pair, commit } = history(t)
+    const cycleDate = dateAgo(daysAgo)
+    checkpoint(cycleDate)
+    pair(cycleDate)
+    git('add', '--', 'reports')
+    commit(`chore: consolidate memory (${cycleDate})`)
+    assert.match(state(dir).stdout, /consolidation_state: complete/)
+    assert.equal(markerStart(dir, cycleDate).status, 0)
+    const result = guard(dir)
+    assert.notEqual(result.status, 0, result.stdout)
+    assert.match(result.stdout, new RegExp(`${cycleDate}.*unfinished consolidation cycle.*consolidation-marker.sh repair`))
+    assert.equal(marker(dir, 'clear').status, 2)
+    assert.equal(marker(dir, 'inspect').status, 1)
+  })
+}
+
+for (const corrupt of ['empty', 'truncated', 'version', 'date', 'extra line', 'binary', 'directory', 'unreadable']) {
+  test(`malformed/unreadable marker (${corrupt}) blocks a fresh cycle before recent cadence`, t => {
+    const { dir, git } = history(t, { newestDaysAgo: 0 })
+    const path = markerPath(dir)
+    const valid = `v1 ${dateAgo(0)} ${git('rev-parse', 'HEAD')}\n`
+    const records = {
+      empty: '', truncated: `v1 ${dateAgo(0)}\n`, version: valid.replace('v1', 'v2'),
+      date: valid.replace(dateAgo(0), '2026-02-31'), 'extra line': valid + '\n', binary: valid + '\0',
+    }
+    const overrides = {}
+    if (corrupt === 'directory') mkdirSync(path)
+    else writeFileSync(path, records[corrupt] ?? valid)
+    // Deterministically simulate an I/O failure even when tests run as root.
+    if (corrupt === 'unreadable') {
+      const bin = join(dir, 'bin')
+      mkdirSync(bin)
+      const actualCat = spawnSync('which', ['cat'], { encoding: 'utf8' }).stdout.trim()
+      writeFileSync(join(bin, 'cat'), `#!/bin/bash\ncase "$1" in *consolidation-start) exit 1;; esac\nexec '${actualCat}' "$@"\n`, { mode: 0o755 })
+      overrides.PATH = `${bin}:${process.env.PATH}`
+    }
+    const before = git('status', '--porcelain')
+    const result = guard(dir, overrides)
+    assert.notEqual(result.status, 0, result.stdout)
+    assert.match(result.stdout, /consolidation_inspect: true.*(malformed|unreadable|cannot read).*do not start a fresh cycle/)
+    assert.doesNotMatch(result.stdout, /consolidation_needed/)
+    assert.equal(marker(dir, 'start', undefined, overrides).status, 2)
+    const clearance = marker(dir, 'clear', undefined, overrides)
+    assert.equal(clearance.status, 2)
+    assert.match(clearance.stdout, /inspect required.*no valid start marker to clear/)
+    assert.equal(git('status', '--porcelain'), before)
+    if (corrupt !== 'directory') assert.equal(readFileSync(path, 'utf8'), records[corrupt] ?? valid)
+  })
+}
+
+for (const consumption of ['present', 'deleted before final', 'deletion committed before final']) {
+  test(`marker clears only after its verified final/report evidence (${consumption}) across UTC rollover`, t => {
+    const { dir, git, pair, commit } = history(t)
+    const cycleDate = dateAgo(1)
+    assert.equal(marker(dir, 'start', cycleDate).status, 0)
+    assert.equal(marker(dir, 'clear').status, 2)
+    pair(cycleDate)
+    assert.equal(marker(dir, 'clear').status, 2) // drafts alone do not finish
+    git('add', '--', 'reports')
+    commit(`chore: consolidate memory checkpoint (${cycleDate}) — steps 10-12`)
+    assert.equal(marker(dir, 'clear').status, 2) // checkpoint alone does not finish
+    if (consumption !== 'present') rmSync(join(dir, 'reports', `${cycleDate}-memory-consolidation.json`))
+    if (consumption.startsWith('deletion committed')) { git('add', '--', 'reports'); commit('consume JSON') }
+    commit(`chore: consolidate memory (${dateAgo(0)})`)
+    assert.equal(marker(dir, 'clear').status, 2) // final must match marker date
+    commit(`chore: consolidate memory (${cycleDate})`)
+    const record = readFileSync(markerPath(dir))
+    assert.equal(state(dir).status, 0, state(dir).stdout)
+    assert.match(state(dir).stdout, /consolidation_state: complete/)
+    assert.deepEqual(readFileSync(markerPath(dir)), record) // detection never clears
+    const index = readFileSync(join(dir, '.git', 'index'))
+    const result = marker(dir, 'clear')
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    assert.match(result.stdout, /cleared.*verified final commit\/report evidence/)
+    assert.deepEqual(readFileSync(join(dir, '.git', 'index')), index)
+    assert.equal(marker(dir, 'inspect').status, 0)
+    assert.equal(state(dir).status, 0)
+  })
+}
+
+for (const missing of ['md', 'json']) {
+  test(`start marker cannot clear when final lacks committed ${missing} evidence`, t => {
+    const { dir, git, pair, commit } = history(t)
+    assert.equal(markerStart(dir).status, 0)
+    pair()
+    rmSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.${missing}`))
+    git('add', '--', 'reports')
+    commit(`chore: consolidate memory (${dateAgo(0)})`)
+    assert.equal(marker(dir, 'clear').status, 2)
+    assert.match(guard(dir).stdout, /unfinished consolidation cycle.*consolidation-marker.sh repair/)
+  })
+}
+
+test('final pair without intermediate checkpoints verifies marker completion, but report edits block clearance', t => {
+  const { dir, git, pair, commit } = history(t)
+  assert.equal(markerStart(dir).status, 0)
+  pair()
+  git('add', '--', 'reports')
+  commit(`chore: consolidate memory (${dateAgo(0)})`)
+  assert.equal(guard(dir).status, 1)
+  writeFileSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.md`), 'unfinished revision\n')
+  assert.equal(marker(dir, 'clear').status, 2)
+  assert.match(guard(dir).stdout, /unfinished consolidation cycle.*consolidation-marker.sh repair/)
+  writeFileSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.md`), zeroPromotion)
+  assert.equal(marker(dir, 'clear').status, 0)
+})
+
+test('unavailable marker HEAD and abandoned writer lock fail closed without repair', t => {
+  const { dir } = history(t, { newestDaysAgo: 0 })
+  writeFileSync(markerPath(dir), `v1 ${dateAgo(0)} ${'0'.repeat(40)}\n`)
+  assert.equal(state(dir).status, 2)
+  assert.equal(marker(dir, 'clear').status, 2)
+  assert.match(guard(dir).stdout, /consolidation_inspect: true.*start marker HEAD/)
+  rmSync(markerPath(dir))
+  mkdirSync(`${markerPath(dir)}.lock`)
+  assert.match(guard(dir).stdout, /consolidation_inspect: true.*lifecycle lock/)
+  assert.equal(marker(dir, 'start').status, 2)
+  // inspect/guard never remove the lock or create a marker.
+  assert.equal(marker(dir, 'inspect').status, 2)
+})
+
+test('marker start refuses unfinished legacy checkpoints and invalid dates', t => {
+  const { dir, checkpoint } = history(t)
+  assert.equal(marker(dir, 'start', '2026-02-31').status, 2)
+  assert.equal(marker(dir, 'inspect').status, 0)
+  checkpoint()
+  assert.equal(marker(dir, 'start').status, 2)
+  assert.equal(marker(dir, 'inspect').status, 0)
+})
+
+test('linked worktrees have independent durable markers', t => {
+  const { dir, git } = history(t)
+  const linked = join(dir, 'linked')
+  git('worktree', 'add', '--detach', linked, 'HEAD')
+  assert.equal(markerStart(linked).status, 0)
+  assert.equal(marker(linked, 'inspect').status, 1)
+  assert.equal(marker(dir, 'inspect').status, 0)
+  assert.match(guard(linked).stdout, /unfinished consolidation cycle.*consolidation-marker.sh repair/)
+})
+
+
+test('failed atomic publication leaves logs, archives, index and history untouched', t => {
+  const { dir, git } = history(t, { today: '# original log\n' })
+  const bin = join(dir, 'bin')
+  mkdirSync(bin)
+  writeFileSync(join(bin, 'mv'), '#!/bin/bash\nexit 1\n', { mode: 0o755 })
+  const head = git('rev-parse', 'HEAD')
+  const index = readFileSync(join(dir, '.git', 'index'))
+  const result = marker(dir, 'start', undefined, { PATH: `${bin}:${process.env.PATH}` })
+  assert.equal(result.status, 2, result.stdout)
+  assert.match(result.stdout, /cannot publish start marker.*do not start a fresh cycle/)
+  assert.deepEqual(readdirSync(join(dir, 'memory')), ['TODAY.md'])
+  assert.equal(readFileSync(join(dir, 'memory', 'TODAY.md'), 'utf8'), '# original log\n')
+  assert.deepEqual(readFileSync(join(dir, '.git', 'index')), index)
+  assert.equal(git('rev-parse', 'HEAD'), head)
+  assert.deepEqual(readdirSync(join(dir, '.git')).filter(name => name.startsWith('consolidation-start')), [])
+  assert.equal(marker(dir, 'start').status, 0)
+})
+
+test('maintenance and direct skill entry require marker before initial log/archive mutation', () => {
+  const maintenance = readFileSync(join(repoRoot, 'MAINTENANCE.md'), 'utf8')
+  const skill = readFileSync(join(repoRoot, 'skills/memory/consolidate/SKILL.md'), 'utf8')
+  assert.ok(maintenance.indexOf('consolidation-marker.sh" start .') < maintenance.indexOf('scripts/log-write.ts'))
+  assert.ok(skill.indexOf('consolidation-marker.sh" start .') < skill.indexOf('### 0. Archive TODAY.md'))
+  assert.ok(skill.indexOf('consolidation-marker.sh" clear .') > skill.indexOf('consolidation-commit.sh" . YYYY-MM-DD final'))
 })
