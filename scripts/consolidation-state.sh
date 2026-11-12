@@ -32,7 +32,7 @@ MARKER_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-marker.sh" in
 MARKER_STATUS=$?
 HISTORY_RANGE=HEAD
 if [ "$MARKER_STATUS" -eq 1 ]; then
-  read -r _ MARKER_DATE START_HEAD <<< "$MARKER_OUTPUT"
+  read -r _ MARKER_DATE START_HEAD _ <<< "$MARKER_OUTPUT"
   if ! git -C "$BRAIN_DIR" cat-file -e "$START_HEAD^{commit}" 2>/dev/null ||
      ! git -C "$BRAIN_DIR" merge-base --is-ancestor "$START_HEAD" HEAD 2>/dev/null; then
     unknown "start marker HEAD unavailable or outside current history; do not start a fresh cycle"
@@ -70,6 +70,10 @@ if [ -n "$DIRTY" ]; then
 fi
 
 CHECKPOINT_SHA=${CHECKPOINT%% *}
+if [ "$MARKER_STATUS" -eq 1 ] && [ -n "$CHECKPOINT_SHA" ]; then
+  git -C "$BRAIN_DIR" merge-base --is-ancestor "$START_HEAD" "$CHECKPOINT_SHA" 2>/dev/null ||
+    unknown "checkpoint is outside the start marker's cycle history; do not start a fresh cycle"
+fi
 CYCLE_DATE=$(printf '%s\n' "$CHECKPOINT" | sed -nE 's/.*checkpoint \(([0-9]{4}-[0-9]{2}-[0-9]{2})\).*/\1/p') || unknown "cannot parse checkpoint date"
 if [ "$MARKER_STATUS" -eq 1 ]; then
   if [ -n "$CYCLE_DATE" ] && [ "$CYCLE_DATE" != "$MARKER_DATE" ]; then
@@ -94,6 +98,8 @@ FINAL=$(final_for_date "$CYCLE_DATE" "${CHECKPOINT_SHA:-$START_HEAD}..HEAD") || 
 REASON="matching final commit missing after cycle start/checkpoint"
 if [ -n "$FINAL" ]; then
   if [ "$MARKER_STATUS" -eq 1 ]; then
+    git -C "$BRAIN_DIR" merge-base --is-ancestor "$START_HEAD" "$FINAL" 2>/dev/null ||
+      unknown "final commit is outside the start marker's cycle history; do not start a fresh cycle"
     git -C "$BRAIN_DIR" merge-base --is-ancestor "${CHECKPOINT_SHA:-$START_HEAD}" "$FINAL" 2>/dev/null ||
       unknown "final commit is outside the start marker's cycle history; do not start a fresh cycle"
   fi

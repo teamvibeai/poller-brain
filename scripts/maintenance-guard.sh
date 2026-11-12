@@ -48,6 +48,8 @@
 # A non-numeric or `0` threshold disables the idle-skip (fail-open by design).
 
 BRAIN_DIR="${1:-.}"
+# Keep the persistent caller's PID, not a short-lived command substitution PID.
+export CONSOLIDATION_OWNER_PID="${CONSOLIDATION_OWNER_PID:-$PPID}"
 REPORTS_DIR="$BRAIN_DIR/reports"
 INTERVAL_HOURS=24
 FALLBACK_HOURS=48
@@ -62,6 +64,20 @@ ACTIVITY_BYTES_MIN="${CONSOLIDATION_ACTIVITY_BYTES_MIN:-32768}"
 # Check across UTC midnight too: an interrupted run still needs recovery.
 STATE_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-state.sh" "$BRAIN_DIR")
 STATE_STATUS=$?
+if [ "$STATE_STATUS" -eq 1 ]; then
+  bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-marker.sh" inspect "$BRAIN_DIR" >/dev/null
+  MARKER_STATUS=$?
+  if [ "$MARKER_STATUS" -eq 1 ]; then
+    CLAIM_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-marker.sh" claim "$BRAIN_DIR")
+    if [ "$?" -ne 0 ]; then
+      echo "consolidation_needed: false (active cycle elsewhere; $CLAIM_OUTPUT)"
+      exit 1
+    fi
+  elif [ "$MARKER_STATUS" -ne 0 ]; then
+    echo 'consolidation_needed: false (active cycle elsewhere or marker changed during inspection; inspect before retrying)'
+    exit 1
+  fi
+fi
 if [ "$STATE_STATUS" -eq 1 ]; then
   echo "$STATE_OUTPUT"
   exit 0
