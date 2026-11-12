@@ -72,15 +72,15 @@ test('apply commits before success, preserves unrelated staged/worktree/untracke
   assert.equal(git('rev-parse', 'HEAD'), head)
 })
 
-// Intercept the command, not an argument position: commit has per-command config.
-function wrapCommit(f, body) {
+// Intercept the command, not an argument position: Git has per-command config.
+function wrapGit(f, command, body) {
   const actualGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim()
   const bin = join(f.dir, 'bin')
   mkdirSync(bin)
   writeFileSync(join(bin, 'git'), `#!/bin/bash
 actual_git='${actualGit}'
 for arg in "$@"; do
-  if [ "$arg" = commit ]; then
+  if [ "$arg" = '${command}' ]; then
 ${body}
   fi
 done
@@ -89,6 +89,65 @@ exec "$actual_git" "$@"
   f.env.PATH = `${bin}:${f.env.PATH}`
   return join(bin, 'git')
 }
+const wrapCommit = (f, body) => wrapGit(f, 'commit', body)
+
+test('post-index-change hooks cannot add unrelated files or alter user state', t => {
+  const f = fixture(t)
+  writeFileSync(join(f.dir, 'user.md'), 'staged user\n')
+  f.git('add', 'user.md')
+  writeFileSync(join(f.dir, 'user.md'), 'unstaged user\n')
+  const staged = f.git('diff', '--cached', '--binary')
+  const work = f.git('diff', '--binary')
+  writeFileSync(join(f.dir, '.git/hooks/post-index-change'), `#!/bin/sh
+case "$GIT_INDEX_FILE" in
+  */consolidation-index-*/index)
+    printf 'hook edit\\n' > user.md
+    git -c core.hooksPath=/dev/null add -- user.md
+    ;;
+esac
+`, { mode: 0o755 })
+  const r = f.apply()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(f.git('show', '--format=', '--name-only', 'HEAD'), 'memory/core/LEARNINGS.md')
+  assert.equal(f.git('show', 'HEAD:user.md'), 'original user')
+  assert.equal(f.git('diff', '--cached', '--binary'), staged)
+  assert.equal(f.git('diff', '--binary'), work)
+  assert.equal(readFileSync(join(f.dir, 'user.md'), 'utf8'), 'unstaged user\n')
+})
+
+test('a concurrent staging edit cannot replace manifest bytes and rolls back the own commit', t => {
+  const f = fixture(t)
+  wrapGit(f, 'add', `    printf 'external\\n' > memory/core/LEARNINGS.md`)
+  const before = f.snapshot()
+  const r = f.apply()
+  assert.notEqual(r.status, 0, r.stdout + r.stderr)
+  assert.match(r.stderr, /committed.*requested/)
+  assert.doesNotMatch(r.stdout, /checkpoint|verified/)
+  assert.deepEqual(f.snapshot(), before)
+  // The transaction was published, then its exact commit was rolled back.
+  const ownCommit = f.git('rev-parse', 'HEAD@{1}')
+  assert.notEqual(ownCommit, before.head)
+  assert.equal(f.git('show', `${ownCommit}:memory/core/LEARNINGS.md`), 'external')
+})
+
+test('scratch cleanup failure exits nonzero without checkpoint or verified success', t => {
+  const f = fixture(t)
+  wrapCommit(f, `    "$actual_git" "$@" || exit $?
+    blocked="$(dirname "$GIT_INDEX_FILE")/blocked"
+    mkdir "$blocked"
+    printf 'keep\\n' > "$blocked/child"
+    chmod 000 "$blocked"
+    exit 0`)
+  let r
+  try { r = f.apply() } finally {
+    for (const name of readdirSync(join(f.dir, '.git'))) {
+      if (name.startsWith('consolidation-index-')) chmodSync(join(f.dir, '.git', name, 'blocked'), 0o700)
+    }
+  }
+  assert.notEqual(r.status, 0, r.stdout + r.stderr)
+  assert.match(r.stderr, /EACCES|EPERM|ENOTEMPTY/)
+  assert.doesNotMatch(r.stdout, /checkpoint|verified/)
+})
 
 test('post-commit hook cannot create an independent child commit', t => {
   const f = fixture(t)

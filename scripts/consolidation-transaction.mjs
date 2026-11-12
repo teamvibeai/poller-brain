@@ -16,9 +16,12 @@ const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.te
 const stat = path => { try { return lstatSync(path) } catch (e) { if (e.code === 'ENOENT') return null; throw e } }
 let root, env, lock, indexLock, scratch
 let preserveState = false
+const success = []
 function git(args, options = {}) {
-  const result = spawnSync('git', ['--literal-pathspecs', ...args], { cwd: root, env, maxBuffer: 32 * 1024 * 1024, ...options })
-  const command = args[0] === '-c' ? args[2] : args[0]
+  // Index-writing commands can run hooks too, so disable hooks for every call.
+  const result = spawnSync('git', ['--literal-pathspecs', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.autoRefreshIndex=false', ...args],
+    { cwd: root, env, maxBuffer: 32 * 1024 * 1024, ...options })
+  const command = args[0]
   if (result.error || result.status !== 0) fail(`git ${command} failed: ${result.error?.message || result.stderr?.toString().trim()}`)
   return result.stdout
 }
@@ -68,17 +71,19 @@ function cleanIndex(paths) {
 function checkDiff() {
   git(['diff', '--cached', '--check'])
 }
-function verifyTargets(paths, head) {
+function verifyTargets(paths, head, desiredHashes) {
   cleanIndex(paths)
   for (const path of paths) {
     safePath(path)
-    if (!same(disk(path), committed(path, head))) fail(`working bytes differ from committed blob: ${path}`)
+    const blob = committed(path, head)
+    if (!same(disk(path), blob)) fail(`working bytes differ from committed blob: ${path}`)
+    if (sha(blob) !== desiredHashes.get(path)) fail(`committed blob differs from requested bytes: ${path}`)
   }
 }
-function commitMemory(paths, head) {
+function commitMemory(paths, head, desiredHashes = new Map(paths.map(path => [path, sha(disk(path))]))) {
   cleanIndex(paths)
   const changed = paths.filter(path => !same(disk(path), committed(path)))
-  if (!changed.length) { verifyTargets(paths, head); return }
+  if (!changed.length) { verifyTargets(paths, head, desiredHashes); return }
   // Hold the real index lock throughout. Git uses a private index;
   // failure cannot stage outputs or consume unrelated partially staged work.
   const index = resolve(root, gitText(['rev-parse', '--git-path', 'index']))
@@ -113,20 +118,19 @@ function commitMemory(paths, head) {
     const identDate = who => `@${gitText(['var', who]).match(/\d+ [+-]\d{4}$/)[0]}`
     env = { ...env, GIT_AUTHOR_DATE: identDate('GIT_AUTHOR_IDENT'), GIT_COMMITTER_DATE: identDate('GIT_COMMITTER_IDENT') }
     transactionCommit = gitText(['commit-tree', tree, '-p', head, '--no-gpg-sign', '-m', subject])
-    // core.hooksPath disables every hook, including post-commit (unlike --no-verify).
-    git(['-c', 'core.hooksPath=/dev/null', 'commit', '--no-gpg-sign', '--cleanup=verbatim', '-C', transactionCommit])
+    git(['commit', '--no-gpg-sign', '--cleanup=verbatim', '-C', transactionCommit])
     const resultHead = gitText(['rev-parse', 'HEAD'])
     if (resultHead !== transactionCommit) fail('commit did not publish the transaction commit')
     // Verify all targets, including unchanged ones, against committed bytes and
     // the prepared real index after commit, before publishing it or success.
     env = { ...env, GIT_INDEX_FILE: nextIndex }
-    verifyTargets(paths, transactionCommit)
+    verifyTargets(paths, transactionCommit, desiredHashes)
     if (gitText(['rev-parse', 'HEAD']) !== transactionCommit) fail('HEAD changed after commit verification')
     // Publishing a prepared index requires no further Git operation.
     renameSync(nextIndex, indexLock)
     renameSync(indexLock, index)
     indexLock = undefined
-    process.stdout.write(`${prefix}: checkpoint ${resultHead}\n`)
+    success.push(`${prefix}: checkpoint ${resultHead}\n`)
   } catch (error) {
     // Never infer ownership from an observed HEAD, ancestry, tree or subject.
     // Only our preconstructed object may be rolled back, with a ref CAS.
@@ -210,7 +214,7 @@ try {
             atomicWrite(c.path, c.desired, c.mode)
           }
         }
-        commitMemory([...paths], head)
+        commitMemory([...paths], head, new Map(changes.map(c => [c.path, sha(c.desired)])))
       } catch (error) {
         // Synchronous failure restores only this request; interrupted processes
         // retain marker/lock evidence and require manual inspection (#606).
@@ -223,7 +227,7 @@ try {
         throw error
       }
     }
-    process.stdout.write(`${prefix}: verified ${changes.length} mutation(s)\n`)
+    success.push(`${prefix}: verified ${changes.length} mutation(s)\n`)
   }
 } catch (error) {
   process.stderr.write(`${prefix}: ${error.message}; stop and inspect, no automatic recovery\n`)
@@ -233,3 +237,5 @@ try {
   if (!preserveState && indexLock) { try { unlinkSync(indexLock) } catch {} }
   if (!preserveState && lock) rmdirSync(lock)
 }
+// Cleanup must complete before any checkpoint or verified success is reported.
+if (!process.exitCode) process.stdout.write(success.join(''))
