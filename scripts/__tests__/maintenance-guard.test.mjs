@@ -479,10 +479,29 @@ test('final marker leaves consumed JSON deletion uncommitted and never recreates
   assert.equal(guard(dir).status, 1)
 })
 
-test('all seven skill checkpoints and final use the scoped helper', () => {
+test('documented mutation command commits before returning and keeps maintenance blocked until final verification', t => {
   const skill = readFileSync(join(repoRoot, 'skills/memory/consolidate/SKILL.md'), 'utf8')
   assert.doesNotMatch(skill, /git add -A/)
-  assert.equal((skill.match(/bash "\$CLAUDE_CONFIG_DIR\/scripts\/consolidation-commit.sh"/g) || []).length, 8)
+  const command = skill.match(/^bash "\$CLAUDE_CONFIG_DIR\/scripts\/consolidation-apply.sh" .+$/m)?.[0]
+  assert.ok(command, 'skill must supply an executable mutation submission command')
+  const { dir, git } = history(t)
+  assert.equal(markerStart(dir).status, 0)
+  const record = readFileSync(markerPath(dir))
+  const manifest = join(dir, '.git', 'mutations.json')
+  writeFileSync(manifest, JSON.stringify({ version: 1, baseline: git('rev-parse', 'HEAD'), validation: { alarms: [] },
+    mutations: [{ op: 'write', path: 'memory/semantic/promotion.md', before: null, content: 'verified promotion\n' }] }))
+  const result = spawnSync('bash', ['-c', command.replace('YYYY-MM-DD', dateAgo(0))], { cwd: dir, encoding: 'utf8', env: {
+    ...process.env, CLAUDE_CONFIG_DIR: repoRoot, CONSOLIDATION_MANIFEST: manifest,
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com',
+  } })
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.equal(git('show', 'HEAD:memory/semantic/promotion.md'), 'verified promotion')
+  assert.match(git('log', '-1', '--format=%s'), /checkpoint .*step 5d$/)
+  assert.equal(git('status', '--porcelain'), '')
+  assert.deepEqual(readFileSync(markerPath(dir)), record)
+  assert.equal(marker(dir, 'clear').status, 2)
+  assert.match(guard(dir).stdout, /unfinished consolidation cycle/)
 })
 
 for (const stagedDeletion of [false, true]) {
