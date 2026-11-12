@@ -570,20 +570,24 @@ The stub the script leaves is a pointer — `> 📦 N REMOVED audit entries arch
 > - **Propose (default, for the existing backlog):** lists every candidate with its full citing line (not just the extracted hook) so you can judge it without opening the destination file. Writes nothing.
 > - **Apply (explicit, for either a reviewed backlog subset or a fresh same-day promotion):** `--apply --only <comma-separated keys>` rewrites exactly those keys. There is no "apply everything found" mode — you always name the keys.
 
+**Content-coverage guard (#505):** Before proposing a row, the script requires its complete normalized Description to equal a complete normalized line in the selected destination file, optionally after removing one leading `[MEM-…]` or `MEM-…:` prefix for that same key. Normalization applies Unicode NFC, folds whitespace (including NBSP, narrow NBSP and thin space) to one ASCII space, trims, and removes one leading list marker (`- `, `* `, `+ `, `1. `). Destination lines are checked separately, never joined. Nothing else is removed or folded: trailing periods, case, digits, signs (including `−`), currencies, punctuation, URLs and Markdown remain literal. Substrings, paraphrases, reordered details, case changes and partial matches are rejected.
+
+Both modes add a machine-readable `contentCoverage: <JSON array>` line. Each entry retains `key`, `file`, `line`, `status`, `tokens`, and `missingTokens`. The script emits only `covered` or `rejected`; `tokens` is always empty, and `missingTokens` is empty when covered or `["no-literal-match"]` when rejected. **A rejected row is not proposed and cannot be applied with `--only`. Rejected means do not hand-trim it either. Preserve the complete entry text in the destination first, then rerun and review.** Empty descriptions also fail closed. Citation selection and ambiguity rules are unchanged.
+
 **Backfill path (existing bloat, Step 9b over threshold):**
 
 ```bash
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts"
 ```
 
-1. **Run it** and read the printed candidate list (key, `file:line`, full citing line, proposed pointer).
+1. **Run it** and read the coverage report (including `no-literal-match` rejections), then the candidate list (key, `file:line`, full citing line, proposed pointer).
 2. **Review each candidate** — does the citing line actually restate/condense this key's content, or does it just mention the key in passing (a bookkeeping tally, a "per this rule" justification for something else)? Reject anything that isn't clearly the former.
 3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts" --apply --only MEM-1,MEM-5,...`. The script performs its own **count-verify** before writing — it aborts (exit 1) without writing if the registry would grow or if its row/citation counts don't add up.
-4. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), size delta, and the verify checks.
+4. **Log it** in the markdown report under `## MEM_REGISTRY Promoted-Row Trim`: proposed count, approved/applied keys, rejected candidates (including coverage reasons), size delta, and the verify checks.
 5. **Report tracking:** add `memory/MEM_REGISTRY.md` to `filesChanged` when anything was applied (skip when nothing was proposed, or nothing was approved).
-6. If `MEM_REGISTRY.md` is under its (scaled) threshold, or nothing is proposed, skip logging this step.
+6. If `MEM_REGISTRY.md` is under its (scaled) threshold, skip this step. If nothing is proposed, skip logging only when there are no coverage rejections to report.
 
-**Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** no scanning is involved — you already know the exact key, destination file, and line with certainty, because you just wrote and verified it yourself moments earlier. Apply it immediately: `--apply --only <that key>`. This is safe without a human review pass precisely because there's no ambiguity to review — unlike the backfill path, nothing was *found*, it was *authored*.
+**Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** you already know the exact key, destination file, and line because you just wrote and verified it. Apply it immediately: `--apply --only <that key>`. The same content-coverage guard still runs: if rejected, preserve the complete entry text in the destination first and rerun; never bypass rejection with a hand edit.
 
 A row the script cannot find cited anywhere (or only ever cited ambiguously) is left with its full narrative — that's expected, not a failure, whether that's because it's genuinely not yet promoted or because a candidate was reviewed and rejected.
 
