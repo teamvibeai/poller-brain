@@ -1,8 +1,9 @@
 #!/bin/bash
 # Checks if maintenance consolidation should run.
-# Exit 0 = consolidation needed OR resume required; exit 1 = skip.
+# Exit 0 = consolidation needed, resume OR inspection required; exit 1 = skip.
 # consolidation_resume: true means reconcile/continue the interrupted cycle,
-# never restart at Step 0. Completion requires a final commit and report pair.
+# never restart at Step 0. Unknown history requires inspection before cadence.
+# Completion requires a final commit and committed report-pair evidence.
 # Usage: bash "$CLAUDE_CONFIG_DIR/scripts/maintenance-guard.sh" [brain_dir]
 #
 # brain_dir defaults to current working directory.
@@ -63,6 +64,10 @@ STATE_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-state.sh" "$BR
 STATE_STATUS=$?
 if [ "$STATE_STATUS" -eq 1 ]; then
   echo "$STATE_OUTPUT"
+  exit 0
+fi
+if [ "$STATE_STATUS" -ne 0 ]; then
+  echo "consolidation_inspect: true (state check exit $STATE_STATUS; ${STATE_OUTPUT:-unknown state check error}; inspect history/reports before applying cadence)"
   exit 0
 fi
 
