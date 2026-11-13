@@ -234,11 +234,8 @@ function parseEntries(text: string): { entries: Entry[]; lines: string[] } {
     if (BULLET_START_RE.test(line)) {
       // An unsupported block may own these bullets too; resume only at a known heading boundary.
       if (current?.format === "unknown") continue;
-      if (current?.headingLevel) {
-        if (atxHeading(lines[idx - 1] ?? "", idx - 1)) {
-          skip(idx, "bullet immediately follows a heading without a blank line; ownership is ambiguous");
-        }
-      } else {
+      // A supported heading already owns its bullets, with or without a blank.
+      if (!current?.headingLevel) {
         start(idx, "bullet");
         if (atxHeading(lines[idx - 1] ?? "", idx - 1)) {
           skip(idx, "bullet immediately follows a heading without a blank line; ownership is ambiguous");
@@ -590,7 +587,8 @@ export function verifyLearningsTrimStructure(before: string, after: string, cand
 
 function pointerFor(text: string, candidate: LearningsTrimCandidate): string {
   const source = extractSource(text);
-  const marker = candidate.format === "heading" ? "###" : "-";
+  // Changing ## to ### would nest this entry under a preceding ## sibling.
+  const marker = candidate.format === "heading" ? text.match(/^#{2,6}/)![0] : "-";
   const pointer = `${marker} [${candidate.key}] → see ${candidate.file}:${candidate.line} — ${candidate.hook}`;
   return source ? `${pointer} (Source: ${source})` : pointer;
 }
@@ -601,8 +599,8 @@ function pointerFor(text: string, candidate: LearningsTrimCandidate): string {
  * `findLearningsTrimCandidates` returned). An entry is replaced WHOLESALE
  * (its entire span, not a single line) with a single pointer line whose
  * marker matches the entry's own format — `- [MEM-NNN] → see <file>:<line>
- * — <hook>` for a bullet entry, `### [MEM-NNN] → see <file>:<line> —
- * <hook>` for a heading entry — plus the original `(Source: ...)`
+ * — <hook>` for a bullet entry, and the original heading level followed by
+ * `[MEM-NNN] → see <file>:<line> — <hook>` for a heading entry — plus `(Source: ...)`
  * provenance, if any was found anywhere in the entry. Entries whose key
  * isn't in `candidates` are left completely untouched, including entries
  * that WERE candidates but weren't approved.

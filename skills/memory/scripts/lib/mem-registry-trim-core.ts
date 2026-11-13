@@ -72,7 +72,7 @@ export interface UnreliableHook {
 
 const DATA_ROW_RE = new RegExp(String.raw`^\|\s*(${MEM_ID_PATTERN})\s*\|`);
 
-/** Require exactly five bounded cells; escaped pipes and backslashes stay verbatim. */
+/** Accept four/five bounded cells; escaped pipes and backslashes stay verbatim. */
 function parseRegistryCells(line: string): string[] | null {
   const cells: string[] = [];
   let start = 0;
@@ -86,7 +86,7 @@ function parseRegistryCells(line: string): string[] | null {
     escaped = char === "\\" && !escaped;
   }
   cells.push(line.slice(start));
-  if (cells.length !== 7 || cells[0].trim() !== "" || cells[6].trim() !== "") return null;
+  if ((cells.length !== 6 && cells.length !== 7) || cells[0].trim() !== "" || cells[cells.length - 1].trim() !== "") return null;
   return cells;
 }
 
@@ -197,7 +197,7 @@ export function findTrimCandidates(
 
     const cells = parseRegistryCells(line);
     // An unparseable row has no verifiable body and must fail coverage.
-    const description = cells ? cells[5].trim() : "";
+    const description = cells ? cells[cells.length - 2].trim() : "";
     if (POINTER_DESC_RE.test(description)) {
       alreadyPointer++;
       continue;
@@ -264,7 +264,7 @@ export interface TrimResult {
  * Rewrite MEM_REGISTRY.md rows for exactly the given `candidates` — an
  * explicit, caller-approved list (typically a subset, or all, of what
  * `findTrimCandidates` returned). Key/Status/Created columns are never
- * touched — only Obsoleted (→ `<file>:<line>`) and Description
+ * touched — only Obsoleted, when present (→ `<file>:<line>`), and Description
  * (→ `see <file> — <hook>`) are rewritten. Rows whose key isn't in
  * `candidates` are left completely untouched, including rows that WERE
  * candidates but weren't approved.
@@ -294,7 +294,7 @@ export function applyTrimCandidates(
 
     const cells = parseRegistryCells(line);
     const key = m[1];
-    const description = cells ? cells[5].trim() : "";
+    const description = cells ? cells[cells.length - 2].trim() : "";
 
     if (POINTER_DESC_RE.test(description)) {
       alreadyPointer++;
@@ -307,12 +307,9 @@ export function applyTrimCandidates(
     if (!candidate) return line; // no approved candidate for this row — keep full narrative
 
     trimmedKeys.push(key);
-    const keyCell = cells[1];
-    const statusCell = cells[2];
-    const createdCell = cells[3];
-    const newObsoleted = ` ${candidate.file}:${candidate.line} `;
-    const newDescription = ` see ${candidate.file} — ${candidate.hook} `;
-    return `|${keyCell}|${statusCell}|${createdCell}|${newObsoleted}|${newDescription}|`;
+    if (cells.length === 7) cells[4] = ` ${candidate.file}:${candidate.line} `;
+    cells[cells.length - 2] = ` see ${candidate.file} — ${candidate.hook} `;
+    return cells.join("|");
   });
 
   const newRegistry = outLines.join("\n");
