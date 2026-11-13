@@ -1073,5 +1073,73 @@ try {
   fs.rmSync(coverageRoot, { recursive: true, force: true });
 }
 
+// #608: obtain the four-column row from the real writer, then trim a mixed registry.
+const writerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mem-registry-writer-trim-"));
+try {
+  fs.mkdirSync(path.join(writerRoot, "memory/semantic"), { recursive: true });
+  fs.writeFileSync(path.join(writerRoot, "CLAUDE.md"), "fixture");
+  const registryPath = path.join(writerRoot, "memory/MEM_REGISTRY.md");
+  const header = "| Key | Status | Created | Description |\n|---|---|---|---|\n";
+  fs.writeFileSync(registryPath, header);
+  const writerKey = "MEM-2026-11-13-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const body = "Preserve the complete original lesson and all its evidence. ".repeat(8).trim();
+  const writer = spawnSync(process.execPath,
+    [...process.execArgv, path.resolve("skills/memory/scripts/mem-write.ts"), "--id", writerKey, body],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: writerRoot } });
+  assert(writer.status === 0, `#608 writer: real mem-write succeeds: ${writer.stderr}`);
+  const written = fs.readFileSync(registryPath, "utf8");
+  assert(written === `${header}| ${writerKey} | ACTIVE | 2026-11-13 | ${body} |\n`,
+    "#608 writer: regression uses the real four-column writer output");
+  const fiveRow = `| MEM-608 | PROMOTED | 2026-11-12 | original-source | ${body} |`;
+  const untouchedRow = "| MEM-609 | ACTIVE | 2026-11-12 | Unpromoted content stays verbatim. |";
+  const mixed = `${written}${fiveRow}\n${untouchedRow}\n`;
+  const destinations = [{ file: "semantic/lesson.md", text:
+    `### Preserve the complete promoted lesson\n[${writerKey}] ${body}\n[MEM-608] ${body}` }];
+  const found = findTrimCandidates(mixed, destinations);
+  assert(found.candidates.length === 2 && found.contentCoverage.every((item) => item.status === "covered"),
+    "#608 mixed: literal copies of both four/five-column descriptions are covered");
+  const applied = applyTrimCandidates(mixed, found.candidates);
+  assert(applied.registry.includes(`| ${writerKey} | ACTIVE | 2026-11-13 | see semantic/lesson.md — Preserve the complete promoted lesson |`),
+    "#608 rewrite: writer row keeps four columns and its first three cells");
+  assert(applied.registry.includes("| MEM-608 | PROMOTED | 2026-11-12 | semantic/lesson.md:3 | see semantic/lesson.md — Preserve the complete promoted lesson |"),
+    "#608 rewrite: legacy row keeps five columns and its first three cells");
+  assert(applied.registry.endsWith(`${untouchedRow}\n`), "#608 rewrite: unapproved four-column row is byte-identical");
+  verifyTrimStats(applied.stats);
+  const repeated = findTrimCandidates(applied.registry, destinations);
+  assert(repeated.alreadyPointer === 2 && repeated.candidates.length === 0,
+    "#608 pointers: both column counts are recognised on the next scan");
+  assert(applyTrimCandidates(applied.registry, found.candidates).registry === applied.registry,
+    "#608 pointers: reapplying stale approvals is byte-identical");
+  for (const description of [String.raw`Preserve an embedded \| pipe`, String.raw`Preserve odd escapes \\\|`]) {
+    const row = `| MEM-610 | ACTIVE | 2026-11-13 | ${description} |`;
+    const destination = [{ file: "semantic/pipes.md", text: `### Preserve literal pipe content\n[MEM-610] ${description}` }];
+    assert(findTrimCandidates(row, destination).candidates.length === 1,
+      "#608 four-column coverage: escaped pipes and backslashes remain literal content");
+    assert(findTrimCandidates(row, [{ ...destination[0], text: destination[0].text.replace(/\\/g, "") }]).candidates.length === 0,
+      "#608 four-column coverage: changed escaped content still fails closed");
+  }
+  for (const malformed of [
+    `| MEM-610 | ACTIVE | ${body} |`,
+    `| MEM-610 | ACTIVE | 2026-11-13 | extra | extra | ${body} |`,
+    `| MEM-610 | ACTIVE | 2026-11-13 | ${body}`,
+  ]) {
+    const report = findTrimCandidates(malformed, [{ file: "semantic/lesson.md", text: `### Preserve the complete promoted lesson\n[MEM-610] ${body}` }]);
+    assert(report.candidates.length === 0 && report.contentCoverage[0]?.status === "rejected",
+      "#608 malformed: other column counts and missing closing delimiters fail closed");
+    assert(applyTrimCandidates(malformed, [{ ...found.candidates[0], key: "MEM-610" }]).registry === malformed,
+      "#608 malformed: stale approval cannot rewrite an unparseable row");
+  }
+
+  fs.writeFileSync(registryPath, mixed);
+  fs.writeFileSync(path.join(writerRoot, "memory/semantic/lesson.md"), destinations[0].text);
+  const cli = spawnSync(process.execPath,
+    [...process.execArgv, path.resolve("skills/memory/scripts/mem-registry-trim.ts"), "--apply", "--only", `${writerKey},MEM-608`],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: writerRoot } });
+  assert(cli.status === 0 && fs.readFileSync(registryPath, "utf8") === applied.registry,
+    `#608 CLI: mixed writer/legacy rows trim successfully: ${cli.stderr}`);
+} finally {
+  fs.rmSync(writerRoot, { recursive: true, force: true });
+}
+
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
