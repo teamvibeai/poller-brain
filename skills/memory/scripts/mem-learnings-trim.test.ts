@@ -820,8 +820,55 @@ assert(h2Found.candidates.map((c) => c.key).join(",") === "MEM-99", "h2: inner M
 const h2Applied = applyLearningsTrimCandidates(MIXED_H2_LEARNINGS, h2Found.candidates.filter((c) => c.key === "MEM-99"));
 assert(h2Applied.learnings.includes(H2_BLOCK), "h2: applying an independent top-level bullet preserves the entire heading block byte-for-byte");
 assert(findLearningsTrimCandidates(H2_BLOCK, H2_DESTINATIONS).candidates.length === 0, "h2: heading owns foreign-key bullets through EOF");
+const adjacentMultiKey = findLearningsTrimCandidates("## Incident\n- Evidence [MEM-143].\n- Related evidence [MEM-25].\n", H2_DESTINATIONS);
+assert(adjacentMultiKey.multiKeyEntries === 1 && adjacentMultiKey.candidates.length === 0,
+  "h2: without a blank line, foreign-key bullets still protect the whole multi-key heading block");
 const afterTitle = findLearningsTrimCandidates(`${H2_BLOCK}\n# Other lessons\n\n- Independent lesson [MEM-99].\n`, H2_DESTINATIONS);
 assert(afterTitle.totalEntries === 2 && afterTitle.candidates[0]?.key === "MEM-99", "h2: a higher-level title closes the block and permits independent top-level bullets");
+// #609: one heading-block entry, one MEM-19 bullet; vary only surrounding structure.
+const feedbackRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mem-feedback-609-"));
+try {
+  fs.mkdirSync(path.join(feedbackRoot, "memory/core"), { recursive: true });
+  fs.mkdirSync(path.join(feedbackRoot, "memory/semantic"));
+  fs.writeFileSync(path.join(feedbackRoot, "CLAUDE.md"), "fixture");
+  const source = path.join(feedbackRoot, "memory/core/LEARNINGS.md");
+  const destinations = [{ file: "semantic/lesson.md", text: "### Complete promoted lesson\nFull incident evidence [MEM-19]" }];
+  fs.writeFileSync(path.join(feedbackRoot, "memory/semantic/lesson.md"), destinations[0].text);
+  for (const preceding of ["", "## Earlier entry\n\n- [MEM-18] Untouched earlier detail.\n\n"]) {
+    for (const blank of ["", "\n"]) {
+      for (const suffix of ["", "\n", "\n\n## Following entry\n\n- [MEM-20] Untouched sibling detail.\n"]) {
+        const label = `#609 ${preceding ? "preceding h2" : "first entry"}, ${blank ? "blank" : "no blank"}, ${suffix.includes("Following") ? "next heading" : suffix ? "EOF newline" : "EOF"}`;
+        const original = `${preceding}## Incident lesson\n${blank}- [MEM-19] ${"Original incident evidence. ".repeat(20).trim()}${suffix}`;
+        const found = findLearningsTrimCandidates(original, destinations);
+        assert(found.candidates.length === 1 && found.candidates[0]?.format === "heading", `${label}: whole heading entry is eligible`);
+        fs.writeFileSync(source, original);
+        const cli = spawnSync(process.execPath,
+          [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts"), "--apply", "--only", "MEM-19"],
+          { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: feedbackRoot } });
+        assert(cli.status === 0, `${label}: CLI applies the single-key entry: ${cli.stderr.trim()}`);
+        if (cli.status !== 0) continue;
+        const after = fs.readFileSync(source, "utf8");
+        assert(after.startsWith(preceding) && after.endsWith(suffix), `${label}: surrounding bytes survive`);
+        assert(after === `${preceding}## [MEM-19] → see semantic/lesson.md:2 — Complete promoted lesson${suffix}`,
+          `${label}: whole entry becomes one pointer at its original heading level`);
+        verifyLearningsTrimStructure(original, after, found.candidates);
+        verifyLearningsTrimStats(applyLearningsTrimCandidates(original, found.candidates).stats);
+        assert(findLearningsTrimCandidates(after, destinations).alreadyPointer === 1,
+          `${label}: pointer is idempotent`);
+        if (preceding || suffix.includes("Following")) {
+          let refused = false;
+          try {
+            verifyLearningsTrimStructure(original, after.replace(/Untouched (earlier|sibling) detail/, "Damaged protected text"), found.candidates);
+          } catch { refused = true; }
+          assert(refused, `${label}: real non-targeted corruption is still rejected`);
+        }
+      }
+    }
+  }
+} finally {
+  fs.rmSync(feedbackRoot, { recursive: true, force: true });
+}
+
 const h2Root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-h2-learnings-"));
 try {
   fs.mkdirSync(path.join(h2Root, "memory/core"), { recursive: true });
@@ -835,17 +882,18 @@ try {
     { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: h2Root } });
   assert(cli.status === 1, `h2: --apply --only inner key refuses: ${cli.stderr}`);
   assert(fs.readFileSync(source, "utf8") === MIXED_H2_LEARNINGS, "h2: refused inner-key apply writes nothing");
-  const unsafeHierarchy = "## [MEM-200] Preserved parent\n\nDetail.\n\n## [MEM-143] Promoted sibling\n\n" + "Long original narrative. ".repeat(30) + "\n";
-  fs.writeFileSync(source, unsafeHierarchy);
-  const unsafeCli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts"), "--apply", "--only", "MEM-143"],
+  const siblingHierarchy = "## [MEM-200] Preserved parent\n\nDetail.\n\n## [MEM-143] Promoted sibling\n\n" + "Long original narrative. ".repeat(30) + "\n";
+  fs.writeFileSync(source, siblingHierarchy);
+  const siblingCli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts"), "--apply", "--only", "MEM-143"],
     { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: h2Root } });
-  assert(unsafeCli.status === 1 && unsafeCli.stderr.includes("Structural safety check failed"), "structure: CLI exits non-zero on a hierarchy-changing rewrite");
-  assert(fs.readFileSync(source, "utf8") === unsafeHierarchy, "structure: CLI leaves source bytes untouched on structural failure");
-  const ambiguous = "## [MEM-143] Ambiguous heading\n- Evidence [MEM-143].\n";
+  assert(siblingCli.status === 0, `structure: CLI preserves sibling hierarchy when writing a pointer: ${siblingCli.stderr}`);
+  assert(fs.readFileSync(source, "utf8").startsWith("## [MEM-200] Preserved parent\n\nDetail.\n\n## [MEM-143] → see "),
+    "structure: CLI keeps the earlier entry byte-identical and the target at the same heading level");
+  const ambiguous = "# Learnings\n- Evidence [MEM-143].\n";
   fs.writeFileSync(source, ambiguous);
   const skippedCli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts")],
     { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: h2Root } });
-  assert(skippedCli.status === 0 && /skipped LEARNINGS.md:1-2:.*ambiguous/.test(skippedCli.stdout), "ambiguity: CLI reports skipped span and reason");
+  assert(skippedCli.status === 0 && /skipped LEARNINGS.md:2-2:.*ambiguous/.test(skippedCli.stdout), "ambiguity: CLI reports skipped span and reason");
   assert(fs.readFileSync(source, "utf8") === ambiguous, "ambiguity: propose leaves original bytes untouched");
 } finally {
   fs.rmSync(h2Root, { recursive: true, force: true });
@@ -862,13 +910,12 @@ for (let level = 2; level <= 6; level++) {
   const candidate = found.candidates[0];
   assert(candidate?.entryEndLine === block.trimEnd().split("\n").length, `h${level}: range covers every content line`);
   const applied = applyLearningsTrimCandidates(block + sibling, found.candidates);
-  assert(applied.learnings.startsWith("### [MEM-143] → see "), `h${level}: pointer keeps the ### convention`);
+  assert(applied.learnings.startsWith(`${marker} [MEM-143] → see `), `h${level}: pointer keeps its original heading level`);
   assert(applied.learnings.endsWith(`\n\n${sibling}`), `h${level}: separator and sibling survive byte-for-byte`);
   assert(findLearningsTrimCandidates(applied.learnings, H2_DESTINATIONS).candidates.length === 0, `h${level}: rewritten block is idempotent`);
 }
 
 for (const [label, original] of [
-  ["adjacent bullet", "## [MEM-143] Ambiguous heading\n- Evidence [MEM-143].\n"],
   ["adjacent title bullet", "# Learnings\n- Evidence [MEM-143].\n"],
   ["unsupported list", "* Evidence [MEM-143].\n"],
   ["unsupported block with bullets", "####### Unsupported heading [MEM-143]\n\n- Inner evidence [MEM-143].\n"],
@@ -926,18 +973,23 @@ try { applyLearningsTrimCandidates(BULLET_LEARNINGS, [{ ...bulletMem99, hook: "I
   injectedRefused = true;
 }
 assert(injectedRefused, "structure: injected extra entries in a pointer are refused");
-const ambiguousEntry = "## [MEM-99] Ambiguous\n- Detail [MEM-99].\n";
+const ambiguousEntry = "# Learnings\n- Detail [MEM-99].\n";
 let ambiguousRefused = false;
-try { applyLearningsTrimCandidates(ambiguousEntry, [{ ...bulletMem99, format: "heading", entryStartLine: 1, entryEndLine: 2 }]); } catch {
+try { applyLearningsTrimCandidates(ambiguousEntry, [{ ...bulletMem99, entryStartLine: 2, entryEndLine: 2 }]); } catch {
   ambiguousRefused = true;
 }
 assert(ambiguousRefused, "range: manually supplied candidates cannot bypass ambiguity rejection");
 
-// A ### stub must never become nested under a preceding ## entry.
+// A heading pointer must never become nested under a preceding sibling entry.
 const absorption = "## [MEM-200] Preserved parent\n\nDetail.\n\n## [MEM-143] Promoted sibling\n\n" + "Long original narrative. ".repeat(30) + "\n";
 const absorptionFound = findLearningsTrimCandidates(absorption, H2_DESTINATIONS);
+const absorptionApplied = applyLearningsTrimCandidates(absorption, absorptionFound.candidates);
+assert(absorptionApplied.learnings.startsWith("## [MEM-200] Preserved parent\n\nDetail.\n\n## [MEM-143] → see "),
+  "structure: heading pointer remains independent of a preceding sibling");
 let absorptionRefused = false;
-try { applyLearningsTrimCandidates(absorption, absorptionFound.candidates); } catch (err) {
+try {
+  verifyLearningsTrimStructure(absorption, absorptionApplied.learnings.replace("## [MEM-143] →", "### [MEM-143] →"), absorptionFound.candidates);
+} catch (err) {
   absorptionRefused = (err as Error).message.includes("Structural safety check failed");
 }
 assert(absorptionRefused, "structure: ### stub cannot silently merge into a preceding higher-level heading");
@@ -990,7 +1042,7 @@ for (const { label, before, suffix, invalidUtf8 } of reviewFixtures) {
     const after = fs.readFileSync(source);
     if (suffix) {
       assert(cli.status === 0, `review1 ${label}: safe selection applies: ${cli.stderr}`);
-      const expected = `### [MEM-99] → see semantic/topic.md:2 — Complete promoted incident lesson${suffix}`;
+      const expected = `## [MEM-99] → see semantic/topic.md:2 — Complete promoted incident lesson${suffix}`;
       assert(after.equals(Buffer.from(expected)), `review1 ${label}: all unrelated bytes survive exactly`);
     } else {
       assert(cli.status === 1 && cli.stderr.includes("no write performed"), `review1 ${label}: explicit fail-closed refusal: ${cli.stderr}`);
