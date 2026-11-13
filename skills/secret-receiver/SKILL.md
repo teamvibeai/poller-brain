@@ -143,6 +143,18 @@ This skill only captures the value — it doesn't pick a destination. Decide tha
 
 In all cases the platform value is **write-only after save** — no list endpoint or UI surface returns the plaintext later. It only reappears in agent `process.env` via the per-spawn injection.
 
+## After rotation: respawn needed
+
+Platform secrets are injected into `process.env` once, at session spawn (snapshot). Saving a rotated value (via this skill or the UI) does **not** change the env of any session already running.
+
+- The session that performed the rotation still holds the **old** value. To use the new one in that session, consume it from the captured file before deleting it, or continue in a fresh session.
+- A session that started after the save gets the new value. Whether a follow-up message in an existing thread spawns a new process is not documented here, so only treat a session as updated once a derived check confirms it.
+- Long-lived sessions and anything that cached the old value (running background tasks) need a respawn to pick it up.
+- **Rotate in the right scope.** Precedence is channel > workspace > poller: rotating a poller-scope value changes nothing if a channel or workspace secret with the same name overrides it.
+- **Poller process.** If the secret is also read by the poller process itself (not just sessions), a session respawn is not enough. Check with whoever operates the poller whether a restart is needed.
+- **Order when the issuer revokes the old token immediately** (GitLab, GitHub, …): save the new token → verify it from a fresh session → only then revoke the old one. Otherwise running sessions and background tasks start failing until respawned.
+- Verify with a derived check (a call using the new token succeeds), never by printing the value.
+
 ## Notes
 
 - **No interstitial:** Unlike localtunnel, a `trycloudflare.com` Quick Tunnel has no "Friendly Reminder" / IP-gate page — the form loads on first visit.
