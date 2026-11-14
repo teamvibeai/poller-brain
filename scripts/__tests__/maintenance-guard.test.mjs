@@ -2,7 +2,7 @@
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, copyFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,14 +22,14 @@ function dateAgo(days) {
   return date.toISOString().slice(0, 10)
 }
 
-function brain(t, { today, newestDaysAgo = 3, promoted = false } = {}) {
+function brain(t, { today, newestDaysAgo = 3, promoted = false, coverage = zeroPromotion } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'maintenance-guard-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   mkdirSync(join(dir, 'reports'))
   for (const days of [newestDaysAgo + 1, newestDaysAgo]) {
     const report = promoted && days === newestDaysAgo
       ? zeroPromotion.replace('No new content — confirmed ✅', 'Updated core/PREFERENCES.md with MEM-12 ✅')
-      : zeroPromotion
+      : coverage
     writeFileSync(join(dir, 'reports', `${dateAgo(days)}-memory-consolidation.md`), report)
   }
   if (today !== undefined) {
@@ -111,8 +111,9 @@ test('T4: 40 KB of routine logs override the idle streak', (t) => {
   assert.match(result.stdout, /idle streak ignored: \d+ bytes in TODAY\.md/)
 })
 
-test('T5: missing TODAY.md still idle-skips', (t) => {
-  const result = guard(brain(t))
+test('T5: missing TODAY.md and four English no-new-content lines still idle-skip', (t) => {
+  const coverage = zeroPromotion.replace(/No (?:significant events|new workflows)/g, 'No new content')
+  const result = guard(brain(t, { coverage }))
   assert.equal(result.status, 1, result.stdout)
   assert.match(result.stdout, /idle-skip/)
 })
@@ -132,6 +133,144 @@ test('T7: a promoted tier still breaks the report-based idle streak', (t) => {
   assert.match(result.stdout, /overdue/)
   assert.doesNotMatch(result.stdout, /idle streak ignored/)
 })
+
+const czechPromotion = zeroPromotion.replace('No new content — confirmed ✅', 'Aktualizováno `core/x.md` (MEM-135) ✅')
+
+for (const [name, coverage] of [
+  ['Czech promotions in both reports', czechPromotion],
+  ['a markdown file reference without an English update or MEM key', zeroPromotion.replace('No new content — confirmed ✅', 'Aktualizováno `core/x.md` ✅')],
+  ['a MEM key without a markdown file reference', zeroPromotion.replace('No new content — confirmed ✅', 'Aktualizováno MEM-135 ✅')],
+  ['a malformed block with only three tier lines', zeroPromotion.split('\n').filter(line => !line.startsWith('- procedural/')).join('\n')],
+]) {
+  test(`Tier Coverage: ${name} prevents maintenance idle-skip`, t => {
+    // Both reports are 72h+ old, below the idle fallback, with no TODAY override.
+    const result = guard(brain(t, { coverage }))
+    assert.equal(result.status, 0, result.stdout)
+    assert.match(result.stdout, /consolidation_needed: true \(overdue/)
+    assert.doesNotMatch(result.stdout, /idle-skip|idle streak ignored/)
+  })
+}
+
+test('Tier Coverage: Czech promotions prevent reflection idle-skip', t => {
+  const dir = brain(t, { coverage: czechPromotion })
+  mkdirSync(join(dir, 'memory', 'episodic'), { recursive: true })
+  writeFileSync(join(dir, 'memory', 'episodic', `reflection-${dateAgo(4)}.md`), '# Reflection\n')
+  const result = spawnSync('bash', [join(repoRoot, 'scripts/reflection-guard.sh'), dir], {
+    cwd: repoRoot, encoding: 'utf8',
+    env: {
+      ...process.env, TZ: 'UTC',
+      REFLECTION_OVERDUE_THRESHOLD_DAYS: '3', REFLECTION_IDLE_FALLBACK_DAYS: '7',
+      CONSOLIDATION_IDLE_FALLBACK_HOURS: '168',
+    },
+  })
+  assert.ifError(result.error)
+  assert.equal(result.stderr, '')
+  assert.equal(result.status, 0, result.stdout)
+  assert.match(result.stdout, /reflection_needed: true/)
+  const status = JSON.parse(result.stdout.split('REFLECTION_STATUS_JSON: ')[1])
+  assert.equal(status.isOverdue, true)
+  assert.equal(status.idleSkipped, false)
+})
+
+// Exercise the shared classifier through both callers, including reflection JSON.
+function tierGuard(kind, dir, script = join(repoRoot, `scripts/${kind}-guard.sh`)) {
+  mkdirSync(join(dir, 'memory', 'episodic'), { recursive: true })
+  writeFileSync(join(dir, 'memory', 'episodic', `reflection-${dateAgo(4)}.md`), '# Reflection\n')
+  const result = spawnSync('bash', [script, dir], {
+    cwd: repoRoot, encoding: 'utf8',
+    env: {
+      ...process.env, TZ: 'UTC',
+      CONSOLIDATION_WINDOW_START: '24', CONSOLIDATION_WINDOW_END: '25',
+      CONSOLIDATION_IDLE_STREAK_MIN: '2', CONSOLIDATION_IDLE_FALLBACK_HOURS: '168',
+      CONSOLIDATION_ACTIVITY_MEM_MIN: '1', CONSOLIDATION_ACTIVITY_BYTES_MIN: '32768',
+      REFLECTION_OVERDUE_THRESHOLD_DAYS: '3', REFLECTION_IDLE_FALLBACK_DAYS: '7',
+    },
+  })
+  assert.ifError(result.error)
+  return result
+}
+
+function assertTierDecision(kind, result, idle) {
+  assert.equal(result.status, idle ? 1 : 0, result.stdout + result.stderr)
+  assert.match(result.stdout, new RegExp(`${kind === 'maintenance' ? 'consolidation' : 'reflection'}_needed: ${!idle}`))
+  if (idle) assert.match(result.stdout, /idle-skip/)
+  else assert.doesNotMatch(result.stdout, /idle-skip|consolidation_inspect/)
+  if (kind === 'reflection') {
+    const status = JSON.parse(result.stdout.split('REFLECTION_STATUS_JSON: ')[1])
+    assert.equal(status.isOverdue, !idle)
+    assert.equal(status.idleSkipped, idle)
+  }
+}
+
+const coverageCases = [
+  ['canonical mixed confirmations', zeroPromotion, true],
+  ['CRLF', zeroPromotion.replace(/\n/g, '\r\n'), true],
+  ['leading spaces', zeroPromotion.replace(/^- /gm, '  - '), true],
+  ['leading tabs and tab separators with CRLF', zeroPromotion.replace(/^- /gm, '\t-\t').replace(/\n/g, '\r\n'), true],
+  ['memory-prefixed tier names', zeroPromotion.replace(/^- /gm, '- memory/'), true],
+  ['unknown tier name', zeroPromotion.replace('semantic/', 'unknown/'), false],
+  ['duplicate tier replacing a missing tier', zeroPromotion.replace('semantic/', 'core/'), false],
+  ['unconfirmed no-change status', zeroPromotion.replace(' — confirmed ✅', ''), false],
+  ['unknown extra status line', zeroPromotion + '- semantic/: Stav neznámý\n', false],
+  ...['memory/semantic/foo', 'memory/semantic/', 'semantic/x'].map(path => [
+    `extensionless/directory mention ${path}`,
+    zeroPromotion.replace('No new content — confirmed ✅', `Aktualizováno ${path}`), false,
+  ]),
+  ...['core', 'semantic', 'episodic', 'procedural'].map(tier => [
+    `unknown status for ${tier}`,
+    zeroPromotion.replace(new RegExp(`(^- ${tier}/[^:]+: ).+$`, 'm'), '$1Stav neznámý'), false,
+  ]),
+]
+
+for (const kind of ['maintenance', 'reflection']) {
+  for (const [name, coverage, idle] of coverageCases) {
+    test(`Tier Coverage regression: ${kind}: ${name}`, t => {
+      const result = tierGuard(kind, brain(t, { coverage }))
+      assertTierDecision(kind, result, idle)
+      assert.equal(result.stderr, '')
+    })
+  }
+
+  function copiedScripts(t, helper) {
+    const dir = mkdtempSync(join(tmpdir(), 'tier guard scripts '))
+    t.after(() => rmSync(dir, { recursive: true, force: true }))
+    mkdirSync(join(dir, 'lib'))
+    for (const file of [`${kind}-guard.sh`, 'consolidation-state.sh', 'consolidation-marker.sh']) {
+      copyFileSync(join(repoRoot, 'scripts', file), join(dir, file))
+    }
+    if (helper !== undefined) writeFileSync(join(dir, 'lib', 'tier-coverage.sh'), helper)
+    return dir
+  }
+
+  for (const [name, helper] of [
+    ['missing helper', undefined],
+    ['source failure', 'return 1\n'],
+    ['undefined classifier after successful source', ':\n'],
+    ['source failure after defining classifier', 'tier_coverage_promoted() { return 1; }\nreturn 1\n'],
+    ['unexpected classifier exit 2', 'tier_coverage_promoted() { return 2; }\n'],
+    ['unexpected classifier exit 127', 'tier_coverage_promoted() { return 127; }\n'],
+  ]) {
+    test(`Tier Coverage regression: ${kind}: ${name} falls through to cadence`, t => {
+      const scripts = copiedScripts(t, helper)
+      const dir = brain(t, { promoted: true })
+      assertTierDecision(kind, tierGuard(kind, dir, join(scripts, `${kind}-guard.sh`)), false)
+    })
+  }
+
+  for (const idle of [true, false]) {
+    test(`Tier Coverage regression: ${kind}: relative symlink chain resolves ${idle ? 'idle' : 'productive'} helper`, t => {
+      const scripts = copiedScripts(t, readFileSync(join(repoRoot, 'scripts/lib/tier-coverage.sh'), 'utf8'))
+      const links = join(scripts, 'links')
+      mkdirSync(links)
+      symlinkSync(`../${kind}-guard.sh`, join(links, 'first.sh'))
+      symlinkSync('first.sh', join(links, 'guard.sh'))
+      const dir = brain(t, { promoted: !idle })
+      const result = tierGuard(kind, dir, join(links, 'guard.sh'))
+      assertTierDecision(kind, result, idle)
+      assert.equal(result.stderr, '')
+    })
+  }
+}
 
 for (const count of [2, 3]) {
   test(`T8: MEM minimum of 3 with ${count} MEM lines`, (t) => {
