@@ -9,7 +9,7 @@ description: |
 
 Periodic self-assessment of memory quality. Run monthly.
 
-Before any Bash command, `log-write`, write, or commit, use file-read tools to check for the owner-provisioned `MAINTENANCE_DISABLED` file at the channel brain root. Empty files and files with a free-text reason both apply; subdirectory copies do not. If it exists, or Bash or Write is unavailable, return exactly `NO_FURTHER_RESPONSE_NEEDED` without a log or report. Leave dates, lifecycle markers, and unfinished-cycle evidence untouched.
+Before any heartbeat, scheduled maintenance, or reflection action (including Bash, `log-write`, writes, or commits), use file-read tools to check the owner-provisioned `MAINTENANCE_DISABLED` file at the channel brain root. Empty files and files with a free-text reason both disable maintenance; subdirectory copies do not apply. If the marker exists, owner policy disables maintenance, or you cannot write files in the brain repo or run the guard scripts by any available tool (e.g. Write/Edit or Bash), skip maintenance/reflection. An opted-out run executes nothing: do not log, produce a report, or change reports, dates, lifecycle markers, or unfinished-cycle evidence. If the triggering message explicitly requests output (a live-thread ask or a scheduled `promptTemplate` asking for a summary), send one short line saying maintenance/reflection could not run and why. Otherwise, return exactly `NO_FURTHER_RESPONSE_NEEDED`.
 
 ## Checklist
 
