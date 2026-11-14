@@ -47,6 +47,9 @@
 # (see the staleness check below); it must not be conflated with
 # consolidation being stalled/broken entirely.
 
+# shellcheck source=scripts/lib/tier-coverage.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/tier-coverage.sh"
+
 BRAIN_DIR="${1:-.}"
 REFLECTION_DIR="$BRAIN_DIR/memory/episodic"
 REPORTS_DIR="$BRAIN_DIR/reports"
@@ -140,7 +143,7 @@ is_idle_since_last_reflection() {
     [ -r "$report" ] || return 1
     section=$(awk '/^## Tier Coverage/{flag=1; print; next} /^## /{if(flag) exit} flag' "$report")
     [ -z "$section" ] && return 1
-    if echo "$section" | grep -qi 'Updated'; then
+    if tier_coverage_promoted "$section"; then
       return 1
     fi
   done
