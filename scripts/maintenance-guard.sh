@@ -47,6 +47,9 @@
 # does not imply promotable content; the byte cap bounds context size.
 # A non-numeric or `0` threshold disables the idle-skip (fail-open by design).
 
+# shellcheck source=scripts/lib/tier-coverage.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/tier-coverage.sh"
+
 BRAIN_DIR="${1:-.}"
 REPORTS_DIR="$BRAIN_DIR/reports"
 INTERVAL_HOURS=24
@@ -173,14 +176,10 @@ is_idle_since_last_run() {
     section=$(awk '/^## Tier Coverage/{flag=1; print; next} /^## /{if(flag) exit} flag' "$report")
     [ -z "$section" ] && return 1
 
-    # Any tier line saying "Updated ..." means this report promoted
-    # something -> streak broken. Matching "Updated" too loosely elsewhere
-    # in the report would only risk a false "not idle" (an unnecessary run,
-    # never a wrongful skip) since the search is confined to the Tier
-    # Coverage block, which is exactly what the "safe failure direction"
-    # principle calls for.
-    if echo "$section" | grep -qi 'Updated'; then
-      return 1   # this report promoted something -> streak broken, not idle
+    # Promotion evidence in any language or an incomplete tier checklist
+    # breaks the streak; only complete zero-promotion blocks count as idle.
+    if tier_coverage_promoted "$section"; then
+      return 1
     fi
   done <<< "$reports"
 

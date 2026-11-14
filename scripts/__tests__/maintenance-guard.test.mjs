@@ -22,14 +22,14 @@ function dateAgo(days) {
   return date.toISOString().slice(0, 10)
 }
 
-function brain(t, { today, newestDaysAgo = 3, promoted = false } = {}) {
+function brain(t, { today, newestDaysAgo = 3, promoted = false, coverage = zeroPromotion } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'maintenance-guard-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   mkdirSync(join(dir, 'reports'))
   for (const days of [newestDaysAgo + 1, newestDaysAgo]) {
     const report = promoted && days === newestDaysAgo
       ? zeroPromotion.replace('No new content — confirmed ✅', 'Updated core/PREFERENCES.md with MEM-12 ✅')
-      : zeroPromotion
+      : coverage
     writeFileSync(join(dir, 'reports', `${dateAgo(days)}-memory-consolidation.md`), report)
   }
   if (today !== undefined) {
@@ -111,8 +111,9 @@ test('T4: 40 KB of routine logs override the idle streak', (t) => {
   assert.match(result.stdout, /idle streak ignored: \d+ bytes in TODAY\.md/)
 })
 
-test('T5: missing TODAY.md still idle-skips', (t) => {
-  const result = guard(brain(t))
+test('T5: missing TODAY.md and four English no-new-content lines still idle-skip', (t) => {
+  const coverage = zeroPromotion.replace(/No (?:significant events|new workflows)/g, 'No new content')
+  const result = guard(brain(t, { coverage }))
   assert.equal(result.status, 1, result.stdout)
   assert.match(result.stdout, /idle-skip/)
 })
@@ -131,6 +132,44 @@ test('T7: a promoted tier still breaks the report-based idle streak', (t) => {
   assert.equal(result.status, 0, result.stdout)
   assert.match(result.stdout, /overdue/)
   assert.doesNotMatch(result.stdout, /idle streak ignored/)
+})
+
+const czechPromotion = zeroPromotion.replace('No new content — confirmed ✅', 'Aktualizováno `core/x.md` (MEM-135) ✅')
+
+for (const [name, coverage] of [
+  ['Czech promotions in both reports', czechPromotion],
+  ['a markdown file reference without an English update or MEM key', zeroPromotion.replace('No new content — confirmed ✅', 'Aktualizováno `core/x.md` ✅')],
+  ['a MEM key without a markdown file reference', zeroPromotion.replace('No new content — confirmed ✅', 'Aktualizováno MEM-135 ✅')],
+  ['a malformed block with only three tier lines', zeroPromotion.split('\n').filter(line => !line.startsWith('- procedural/')).join('\n')],
+]) {
+  test(`Tier Coverage: ${name} prevents maintenance idle-skip`, t => {
+    // Both reports are 72h+ old, below the idle fallback, with no TODAY override.
+    const result = guard(brain(t, { coverage }))
+    assert.equal(result.status, 0, result.stdout)
+    assert.match(result.stdout, /consolidation_needed: true \(overdue/)
+    assert.doesNotMatch(result.stdout, /idle-skip|idle streak ignored/)
+  })
+}
+
+test('Tier Coverage: Czech promotions prevent reflection idle-skip', t => {
+  const dir = brain(t, { coverage: czechPromotion })
+  mkdirSync(join(dir, 'memory', 'episodic'), { recursive: true })
+  writeFileSync(join(dir, 'memory', 'episodic', `reflection-${dateAgo(4)}.md`), '# Reflection\n')
+  const result = spawnSync('bash', [join(repoRoot, 'scripts/reflection-guard.sh'), dir], {
+    cwd: repoRoot, encoding: 'utf8',
+    env: {
+      ...process.env, TZ: 'UTC',
+      REFLECTION_OVERDUE_THRESHOLD_DAYS: '3', REFLECTION_IDLE_FALLBACK_DAYS: '7',
+      CONSOLIDATION_IDLE_FALLBACK_HOURS: '168',
+    },
+  })
+  assert.ifError(result.error)
+  assert.equal(result.stderr, '')
+  assert.equal(result.status, 0, result.stdout)
+  assert.match(result.stdout, /reflection_needed: true/)
+  const status = JSON.parse(result.stdout.split('REFLECTION_STATUS_JSON: ')[1])
+  assert.equal(status.isOverdue, true)
+  assert.equal(status.idleSkipped, false)
 })
 
 for (const count of [2, 3]) {
