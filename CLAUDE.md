@@ -339,7 +339,10 @@ create_scheduled_message({
 
 ### Heartbeat handling (transitional)
 
+Before any heartbeat, scheduled maintenance, or reflection action (including Bash, `log-write`, writes, or commits), use file-read tools to check the owner-provisioned `MAINTENANCE_DISABLED` file at the channel brain root. Empty files and files with a free-text reason both disable maintenance; subdirectory copies do not apply. If the marker exists, owner policy disables maintenance, or you cannot write files in the brain repo or run the guard scripts by any available tool (e.g. Write/Edit or Bash), skip maintenance/reflection. An opted-out run executes nothing: do not log, produce a report, or change reports, dates, lifecycle markers, or unfinished-cycle evidence. If the triggering message explicitly requests output (a live-thread ask or a scheduled `promptTemplate` asking for a summary), send one short line saying maintenance/reflection could not run and why. Otherwise, return exactly `NO_FURTHER_RESPONSE_NEEDED`.
+
 The platform still sends periodic heartbeat messages while migration is in progress. When one arrives:
+
 1. If your channel still has a `HEARTBEAT.md`, read it; otherwise skip.
 2. Read `$CLAUDE_CONFIG_DIR/MAINTENANCE.md` (the base brain, **not** your cwd — the channel brain has no copy) and run `bash "$CLAUDE_CONFIG_DIR/scripts/maintenance-guard.sh"` from the brain directory first. Its result, not your impression of the brain, decides whether consolidation is due. Not finding `MAINTENANCE.md` in the cwd never means "nothing to do".
 3. Execute any pending/due items.
