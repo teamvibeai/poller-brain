@@ -126,7 +126,7 @@ Never send a message referencing an output (file, URL, generated data) before th
 2. Generate the report                           ← session crash = broken link
 ```
 
-Informational messages (status updates, "starting..." notifications) can be sent at any time since they don't reference outputs.
+Informational messages (status updates, "starting..." notifications) can be sent at any time for live human messages since they don't reference outputs; scheduled/`promptTemplate`/maintenance triggers send nothing preliminary (see CLAUDE.md's scope note).
 
 ### Step ordering in promptTemplate
 
@@ -137,7 +137,7 @@ When your `promptTemplate` involves multiple steps, order them defensively:
 
 ### Partial failure handling
 
-If a scheduled task partially fails (e.g., data fetch works but formatting breaks):
+If a scheduled task partially fails (e.g., data fetch works but formatting breaks) and CLAUDE.md's scope note and branch-specific `promptTemplate` instructions permit Slack output:
 - Send what you have with a note about what failed
 - Log the failure to TODAY.md for traceability
 - Don't silently fail — a partial result is better than no response

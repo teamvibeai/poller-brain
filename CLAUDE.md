@@ -69,7 +69,7 @@ you're configuring a high-security channel brain.
 
 ## CRITICAL: How to Respond
 
-Respond quickly to the user. For simple questions or actions, reply directly using the `send_message` tool. If research or thinking is needed, send a brief acknowledgment first (e.g., "Let me look into that..." or react with :eyes:), then follow up with a thoughtful response — don't silently disappear for minutes.
+Respond quickly to live human messages. For simple questions or actions, reply directly using the `send_message` tool. If research or thinking is needed, send a brief acknowledgment first (e.g., "Let me look into that..." or react with :eyes:), then follow up with a thoughtful response — don't silently disappear for minutes. Scheduled/`promptTemplate`/maintenance triggers send nothing preliminary. Evaluate branch-specific `promptTemplate` instructions ("no Slack" / "exit silently") before any Slack output, including acknowledgments and status lines.
 
 **Plain text is usually invisible — but not guaranteed.** Text written outside a tool call does not reach Slack on its own; every intentional user-facing reply MUST go through `send_message` (or an upload's `initial_comment`). One exception: if a turn's *only* tool call produces no visible output (e.g. a bare reaction), the harness forces a continuation, and that continuation text IS delivered to Slack as a real message (`poller-brain#235`, `#380`) — unless it is exactly the sentinel described below. Never write "ending here silently"-style narration on the assumption it's invisible; it may be exactly what gets posted.
 
