@@ -47,8 +47,20 @@
 # (see the staleness check below); it must not be conflated with
 # consolidation being stalled/broken entirely.
 
+# Locate dependencies beside the real script, including relative symlink chains.
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd) || break
+  SCRIPT_PATH=$(readlink "$SCRIPT_PATH") || break
+  [[ "$SCRIPT_PATH" = /* ]] || SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)
+TIER_COVERAGE_AVAILABLE=0
 # shellcheck source=scripts/lib/tier-coverage.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/tier-coverage.sh"
+if source "$SCRIPT_DIR/lib/tier-coverage.sh" 2>/dev/null &&
+   declare -F tier_coverage_promoted >/dev/null; then
+  TIER_COVERAGE_AVAILABLE=1
+fi
 
 BRAIN_DIR="${1:-.}"
 REFLECTION_DIR="$BRAIN_DIR/memory/episodic"
@@ -109,6 +121,7 @@ _epoch_of() {
 # a failed check must never cause a silent skip; it falls through to the
 # existing threshold-only policy.
 is_idle_since_last_reflection() {
+  [ "$TIER_COVERAGE_AVAILABLE" -eq 1 ] || return 1
   local since_date="$1" since_epoch report report_date report_epoch section
   local newest_report newest_date newest_epoch fallback_seconds
   # Not part of this function's inputs -- defaults to "now" so a future
@@ -145,6 +158,9 @@ is_idle_since_last_reflection() {
     [ -z "$section" ] && return 1
     if tier_coverage_promoted "$section"; then
       return 1
+    else
+      # Only exit 1 confirms idle; errors must not suppress overdue status.
+      [ "$?" -eq 1 ] || return 1
     fi
   done
 

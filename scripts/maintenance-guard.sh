@@ -47,8 +47,20 @@
 # does not imply promotable content; the byte cap bounds context size.
 # A non-numeric or `0` threshold disables the idle-skip (fail-open by design).
 
+# Locate dependencies beside the real script, including relative symlink chains.
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd) || break
+  SCRIPT_PATH=$(readlink "$SCRIPT_PATH") || break
+  [[ "$SCRIPT_PATH" = /* ]] || SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)
+TIER_COVERAGE_AVAILABLE=0
 # shellcheck source=scripts/lib/tier-coverage.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/tier-coverage.sh"
+if source "$SCRIPT_DIR/lib/tier-coverage.sh" 2>/dev/null &&
+   declare -F tier_coverage_promoted >/dev/null; then
+  TIER_COVERAGE_AVAILABLE=1
+fi
 
 BRAIN_DIR="${1:-.}"
 REPORTS_DIR="$BRAIN_DIR/reports"
@@ -63,7 +75,7 @@ ACTIVITY_BYTES_MIN="${CONSOLIDATION_ACTIVITY_BYTES_MIN:-32768}"
 
 # Durable start markers and checkpoints precede cadence, idle-skip, and a report merely on disk.
 # Check across UTC midnight too: an unfinished cycle still blocks a fresh start.
-STATE_OUTPUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/consolidation-state.sh" "$BRAIN_DIR")
+STATE_OUTPUT=$(bash "$SCRIPT_DIR/consolidation-state.sh" "$BRAIN_DIR")
 STATE_STATUS=$?
 if [ "$STATE_STATUS" -ne 0 ]; then
   echo "consolidation_inspect: true (state check exit $STATE_STATUS; ${STATE_OUTPUT:-unknown state check error}; inspect existing work, start marker and history/reports; do not start a fresh cycle before state is verified)"
@@ -155,6 +167,7 @@ has_new_activity() {
 # a failed check must never cause a silent skip; it falls through to the
 # existing time-only policy instead.
 is_idle_since_last_run() {
+  [ "$TIER_COVERAGE_AVAILABLE" -eq 1 ] || return 1
   [ -d "$REPORTS_DIR" ] || return 1
 
   local reports
@@ -176,10 +189,12 @@ is_idle_since_last_run() {
     section=$(awk '/^## Tier Coverage/{flag=1; print; next} /^## /{if(flag) exit} flag' "$report")
     [ -z "$section" ] && return 1
 
-    # Promotion evidence in any language or an incomplete tier checklist
-    # breaks the streak; only complete zero-promotion blocks count as idle.
+    # Only exit 1 confirms idle; promotions, ambiguity and classifier errors
+    # all fall through to the normal cadence checks.
     if tier_coverage_promoted "$section"; then
       return 1
+    else
+      [ "$?" -eq 1 ] || return 1
     fi
   done <<< "$reports"
 
