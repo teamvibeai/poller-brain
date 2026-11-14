@@ -47,6 +47,11 @@
 # does not imply promotable content; the byte cap bounds context size.
 # A non-numeric or `0` threshold disables the idle-skip (fail-open by design).
 
+# Owner-provisioned policy applies only at the channel brain root.
+BRAIN_DIR="${1:-.}"
+MAINTENANCE_DISABLED=false
+[ -f "$BRAIN_DIR/MAINTENANCE_DISABLED" ] && MAINTENANCE_DISABLED=true
+
 # Locate dependencies beside the real script, including relative symlink chains.
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -62,7 +67,6 @@ if source "$SCRIPT_DIR/lib/tier-coverage.sh" 2>/dev/null &&
   TIER_COVERAGE_AVAILABLE=1
 fi
 
-BRAIN_DIR="${1:-.}"
 REPORTS_DIR="$BRAIN_DIR/reports"
 INTERVAL_HOURS=24
 FALLBACK_HOURS=48
@@ -77,6 +81,14 @@ ACTIVITY_BYTES_MIN="${CONSOLIDATION_ACTIVITY_BYTES_MIN:-32768}"
 # Check across UTC midnight too: an unfinished cycle still blocks a fresh start.
 STATE_OUTPUT=$(bash "$SCRIPT_DIR/consolidation-state.sh" "$BRAIN_DIR")
 STATE_STATUS=$?
+if [ "$MAINTENANCE_DISABLED" = true ]; then
+  INSPECTION_NOTE=""
+  if [ "$STATE_STATUS" -ne 0 ]; then
+    INSPECTION_NOTE="; consolidation_inspect: true (state check exit $STATE_STATUS; ${STATE_OUTPUT:-unknown state check error})"
+  fi
+  echo "consolidation_needed: false (maintenance_disabled${INSPECTION_NOTE})"
+  exit 1
+fi
 if [ "$STATE_STATUS" -ne 0 ]; then
   echo "consolidation_inspect: true (state check exit $STATE_STATUS; ${STATE_OUTPUT:-unknown state check error}; inspect existing work, start marker and history/reports; do not start a fresh cycle before state is verified)"
   exit 1

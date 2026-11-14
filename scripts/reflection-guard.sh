@@ -1,6 +1,6 @@
 #!/bin/bash
 # Checks if memory reflection should run, and reports reflection cadence status.
-# Exit 0 = reflection needed, exit 1 = skip (recent enough).
+# Exit 0 = reflection needed, exit 1 = skip (disabled, recent enough or idle).
 # Usage: bash "$CLAUDE_CONFIG_DIR/scripts/reflection-guard.sh" [brain_dir]
 #
 # brain_dir defaults to current working directory.
@@ -14,8 +14,7 @@
 # also emits the fields needed for the consolidation report's
 # `reflectionStatus` JSON schema field.
 #
-# Unlike maintenance-guard.sh, there is no separate marker file: the source
-# of truth is the newest memory/episodic/reflection-*.md filename itself,
+# The cadence source of truth is the newest memory/episodic/reflection-*.md filename itself,
 # which is self-verifying (can't drift out of sync with a marker).
 #
 # Policy:
@@ -47,6 +46,11 @@
 # (see the staleness check below); it must not be conflated with
 # consolidation being stalled/broken entirely.
 
+# Owner-provisioned policy applies only at the channel brain root.
+BRAIN_DIR="${1:-.}"
+MAINTENANCE_DISABLED=false
+[ -f "$BRAIN_DIR/MAINTENANCE_DISABLED" ] && MAINTENANCE_DISABLED=true
+
 # Locate dependencies beside the real script, including relative symlink chains.
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -62,7 +66,6 @@ if source "$SCRIPT_DIR/lib/tier-coverage.sh" 2>/dev/null &&
   TIER_COVERAGE_AVAILABLE=1
 fi
 
-BRAIN_DIR="${1:-.}"
 REFLECTION_DIR="$BRAIN_DIR/memory/episodic"
 REPORTS_DIR="$BRAIN_DIR/reports"
 OVERDUE_THRESHOLD_DAYS="${REFLECTION_OVERDUE_THRESHOLD_DAYS:-3}"
@@ -168,15 +171,30 @@ is_idle_since_last_reflection() {
 }
 
 emit_status() {
-  # $1=lastDate(or empty) $2=daysSince(or empty) $3=isOverdue(true/false) $4=nonConformingCount(default 0) $5=idleSkipped(true/false, default false)
+  # $1=lastDate(or empty) $2=daysSince(or empty) $3=isOverdue(true/false) $4=nonConformingCount(default 0) $5=idleSkipped(true/false, default false) $6=optional reason
   local last_date_json="null"
   local days_since_json="null"
   local nonconforming="${4:-0}"
   local idle_skipped="${5:-false}"
+  local reason_json=""
+  [ -n "${6:-}" ] && reason_json=",\"reason\":\"$6\""
   [ -n "$1" ] && last_date_json="\"$1\""
   [ -n "$2" ] && days_since_json="$2"
-  echo "REFLECTION_STATUS_JSON: {\"lastReflectionDate\":${last_date_json},\"daysSinceReflection\":${days_since_json},\"overdueThresholdDays\":${OVERDUE_THRESHOLD_DAYS},\"isOverdue\":$3,\"nonConformingReflectionFiles\":${nonconforming},\"idleSkipped\":${idle_skipped}}"
+  echo "REFLECTION_STATUS_JSON: {\"lastReflectionDate\":${last_date_json},\"daysSinceReflection\":${days_since_json},\"overdueThresholdDays\":${OVERDUE_THRESHOLD_DAYS},\"isOverdue\":$3,\"nonConformingReflectionFiles\":${nonconforming},\"idleSkipped\":${idle_skipped}${reason_json}}"
 }
+
+if [ "$MAINTENANCE_DISABLED" = true ]; then
+  # Inspect read-only: opting out never clears or repairs unfinished work.
+  STATE_OUTPUT=$(bash "$SCRIPT_DIR/consolidation-state.sh" "$BRAIN_DIR")
+  STATE_STATUS=$?
+  INSPECTION_NOTE=""
+  if [ "$STATE_STATUS" -ne 0 ]; then
+    INSPECTION_NOTE="; consolidation_inspect: true (state check exit $STATE_STATUS; ${STATE_OUTPUT:-unknown state check error})"
+  fi
+  echo "reflection_needed: false (maintenance_disabled${INSPECTION_NOTE})"
+  emit_status "" "" "false" "0" "false" "maintenance_disabled"
+  exit 1
+fi
 
 ALL_REFLECTION_FILES=$(ls "$REFLECTION_DIR"/reflection-*.md 2>/dev/null)
 # Filter to the strict reflection-YYYY-MM-DD.md shape BEFORE sort|tail --

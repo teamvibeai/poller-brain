@@ -9,6 +9,8 @@ description: |
 
 Periodic self-assessment of memory quality. Run monthly.
 
+Before any Bash command, `log-write`, write, or commit, use file-read tools to check for the owner-provisioned `MAINTENANCE_DISABLED` file at the channel brain root. Empty files and files with a free-text reason both apply; subdirectory copies do not. If it exists, or Bash or Write is unavailable, return exactly `NO_FURTHER_RESPONSE_NEEDED` without a log or report. Leave dates, lifecycle markers, and unfinished-cycle evidence untouched.
+
 ## Checklist
 
 ### 0. Previous Recommendations Review

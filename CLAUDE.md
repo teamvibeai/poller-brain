@@ -339,7 +339,10 @@ create_scheduled_message({
 
 ### Heartbeat handling (transitional)
 
+Before any heartbeat or scheduled maintenance action (including Bash, `log-write`, writes, or commits), use file-read tools to check the owner-provisioned `MAINTENANCE_DISABLED` file at the channel brain root. Empty files and files with a free-text reason both disable maintenance; subdirectory copies do not apply. If it exists, or Bash or Write is unavailable, return exactly `NO_FURTHER_RESPONSE_NEEDED` without a log or report. Leave dates, lifecycle markers, and unfinished-cycle evidence untouched.
+
 The platform still sends periodic heartbeat messages while migration is in progress. When one arrives:
+
 1. If your channel still has a `HEARTBEAT.md`, read it; otherwise skip.
 2. Read `$CLAUDE_CONFIG_DIR/MAINTENANCE.md` (the base brain, **not** your cwd — the channel brain has no copy) and run `bash "$CLAUDE_CONFIG_DIR/scripts/maintenance-guard.sh"` from the brain directory first. Its result, not your impression of the brain, decides whether consolidation is due. Not finding `MAINTENANCE.md` in the cwd never means "nothing to do".
 3. Execute any pending/due items.

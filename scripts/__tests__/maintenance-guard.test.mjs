@@ -2,7 +2,7 @@
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, copyFileSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, copyFileSync, symlinkSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1064,3 +1064,107 @@ test('maintenance and direct skill entry require marker before initial log/archi
   assert.ok(skill.indexOf('consolidation-marker.sh" start .') < skill.indexOf('### 0. Archive TODAY.md'))
   assert.ok(skill.indexOf('consolidation-marker.sh" clear .') > skill.indexOf('consolidation-commit.sh" . YYYY-MM-DD final'))
 })
+
+// #613: owner-provisioned policy precedes first-run and cadence decisions.
+function freshBrain(t, gitHistory = true) {
+  const dir = mkdtempSync(join(tmpdir(), 'maintenance-disabled-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  if (gitHistory) {
+    for (const args of [
+      ['init', '-q'],
+      ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'new brain'],
+    ]) {
+      const result = spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: {
+        ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+      } })
+      assert.equal(result.status, 0, result.stderr)
+    }
+  }
+  return dir
+}
+
+// Include dates, index, history and lifecycle metadata, not just report contents.
+function brainSnapshot(dir, prefix = '') {
+  return readdirSync(join(dir, prefix)).sort().flatMap(name => {
+    const path = join(prefix, name)
+    const stat = lstatSync(join(dir, path))
+    const entry = { path, mode: stat.mode, mtimeMs: stat.mtimeMs }
+    return stat.isDirectory()
+      ? [entry, ...brainSnapshot(dir, path)]
+      : [{ ...entry, bytes: readFileSync(join(dir, path)) }]
+  })
+}
+
+function policyGuard(kind, dir, useCwd = false) {
+  const result = spawnSync('bash', [join(repoRoot, `scripts/${kind}-guard.sh`), ...(useCwd ? [] : [dir])], {
+    cwd: useCwd ? dir : repoRoot, encoding: 'utf8',
+    env: { ...process.env, TZ: 'UTC', REFLECTION_OVERDUE_THRESHOLD_DAYS: '3' },
+  })
+  assert.ifError(result.error)
+  assert.equal(result.stderr, '')
+  assert.equal(result.stdout.trim().split('\n').length, kind === 'maintenance' ? 1 : 2)
+  return result
+}
+
+function assertDisabled(kind, result) {
+  assert.equal(result.status, 1, result.stdout)
+  assert.match(result.stdout, new RegExp(`^${kind === 'maintenance' ? 'consolidation' : 'reflection'}_needed: false \\(maintenance_disabled`))
+  if (kind === 'reflection') {
+    const status = JSON.parse(result.stdout.split('REFLECTION_STATUS_JSON: ')[1])
+    assert.equal(status.reason, 'maintenance_disabled')
+    assert.equal(status.isOverdue, false)
+    assert.equal(status.idleSkipped, false)
+    assert.equal(status.lastReflectionDate, null)
+    assert.equal(status.daysSinceReflection, null)
+  }
+}
+
+for (const kind of ['maintenance', 'reflection']) {
+  for (const gitHistory of [true, false]) {
+    for (const content of ['', 'Owner policy: Bash and Write are restricted.\nNo maintenance reports.\n']) {
+      test(`MAINTENANCE_DISABLED: ${kind}: first run, ${content ? 'reason' : 'empty'} marker, ${gitHistory ? 'git history' : 'no git history'}`, t => {
+        const dir = freshBrain(t, gitHistory)
+        writeFileSync(join(dir, 'MAINTENANCE_DISABLED'), content)
+        const before = brainSnapshot(dir)
+        // Exercise explicit brain_dir and the default current working directory.
+        assertDisabled(kind, policyGuard(kind, dir))
+        assertDisabled(kind, policyGuard(kind, dir, true))
+        assert.deepEqual(brainSnapshot(dir), before)
+      })
+    }
+  }
+
+  for (const markerState of ['unfinished', 'malformed', 'checkpoint']) {
+    test(`MAINTENANCE_DISABLED: ${kind}: ${markerState} evidence is reported and preserved`, t => {
+      const { dir, checkpoint } = history(t, { today: '# Original log\n', newestDaysAgo: 0 })
+      if (markerState === 'unfinished') assert.equal(markerStart(dir).status, 0)
+      if (markerState === 'malformed') writeFileSync(markerPath(dir), 'truncated\n')
+      if (markerState === 'checkpoint') checkpoint()
+      writeFileSync(join(dir, 'memory', '.last_consolidation'), 'original date\n')
+      writeFileSync(join(dir, 'MAINTENANCE_DISABLED'), '')
+      const stateBefore = state(dir)
+      assert.notEqual(stateBefore.status, 0)
+      const before = brainSnapshot(dir)
+      const result = policyGuard(kind, dir)
+      assertDisabled(kind, result)
+      assert.match(result.stdout, /consolidation_inspect: true/)
+      assert.ok(result.stdout.includes(stateBefore.stdout.trim()), result.stdout)
+      assert.deepEqual(brainSnapshot(dir), before)
+      const stateAfter = state(dir)
+      for (const field of ['status', 'stdout', 'stderr']) assert.equal(stateAfter[field], stateBefore[field])
+    })
+  }
+
+  test(`MAINTENANCE_DISABLED: ${kind}: absent or subdirectory marker keeps first-run behavior`, t => {
+    const dir = freshBrain(t)
+    const absent = policyGuard(kind, dir)
+    assert.equal(absent.status, 0, absent.stdout)
+    assert.match(absent.stdout, kind === 'maintenance'
+      ? /^consolidation_needed: true \(no consolidation report found\)\n$/
+      : /^reflection_needed: true \(no prior reflection-\*\.md found\)\nREFLECTION_STATUS_JSON: /)
+    mkdirSync(join(dir, 'memory'))
+    writeFileSync(join(dir, 'memory', 'MAINTENANCE_DISABLED'), 'Subdirectory markers do not apply.\n')
+    const nested = policyGuard(kind, dir)
+    for (const field of ['status', 'stdout', 'stderr']) assert.equal(nested[field], absent[field])
+  })
+}
