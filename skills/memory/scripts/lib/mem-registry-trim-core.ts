@@ -73,7 +73,7 @@ export interface UnreliableHook {
 const DATA_ROW_RE = new RegExp(String.raw`^\|\s*(${MEM_ID_PATTERN})\s*\|`);
 
 /** Accept four/five bounded cells; escaped pipes and backslashes stay verbatim. */
-function parseRegistryCells(line: string): string[] | null {
+export function parseRegistryCells(line: string): string[] | null {
   const cells: string[] = [];
   let start = 0;
   let escaped = false;
