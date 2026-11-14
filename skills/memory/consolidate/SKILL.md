@@ -570,7 +570,14 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-scaled-threshold.ts" --mod
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-scaled-threshold.ts" --mode learnings
 ```
 
-Each prints size, row/entry count, and `threshold = max(5000, overhead + count × per-item bytes)` — the `max(5000, …)` keeps the original floor for small/young brains, so a file with few rows/entries doesn't get an artificially tight threshold. Use the printed `threshold` (not a flat 5000) everywhere this skill compares LEARNINGS.md/MEM_REGISTRY.md against "the cap" (this table, Step 5c preflight, Step 5d/9d/9e triggers). See `lib/mem-scaled-threshold-core.ts` for the exact constants and their derivation.
+Each prints UTF-8 size, row/entry count, threshold and a final JSON result. A file warns only when `sizeBytes > threshold`; equality is OK. The 5000B floor keeps small/young brains from receiving an artificially tight cap.
+
+- **LEARNINGS.md:** `threshold = max(5000, 300 + entries × 150)` (unchanged).
+- **MEM_REGISTRY.md** (`teamvibeai/poller-brain#536`): `threshold = max(5000, 300 + Σ rowBudget)`. Each row gets `max(150, pointerRowBytes)` for a recognized trim pointer, otherwise 150B. Pointer bytes include the complete ID (legacy `MEM-<n>` or dated `MEM-YYYY-MM-DD-HHMMSS-<uuid>`), preserved Status/Created cells, separators/newline, path, line digits where emitted, and hook label. Four-column rows have `see <file>.md — <hook>` in Description; five-column rows also have the **same** `<file>.md:<line>` in Obsoleted, so both path occurrences count. Parsing shares the trim writer's escaped-pipe handling; Unicode paths/labels are measured in UTF-8 bytes. Legacy ` - ` pointers are also recognized. The CLI reports `pointerRows`, `nonPointerRows`, `rowBudgetBytes`, `structuralExtraBytes` above 150B/row, and line-numbered `diagnostics` for malformed rows/pointers that receive only 150B.
+
+The registry budget covers the current trim writer's full pointer output, including long paths and heading hooks. **Hooks currently have no length limit**, so a fixed healthy-hook allowance cannot guarantee that valid trim output fits. Consequently pointer-label verbosity is not a warning signal under this policy; non-pointer narrative rows still get only 150B, and non-row prose gets only the fixed 300B overhead allowance. Large policy sections or a verbose untrimmed remainder can therefore still warn even after a successful trim. A fixed hook allowance would need a separate bounded-hook policy in the writer; no hook condensation or registry migration is required here.
+
+Use this CLI's printed `threshold` and `overCap` everywhere this skill compares LEARNINGS.md/MEM_REGISTRY.md against "the cap" (this table, Step 5c preflight, Step 5d/9d/9e triggers). Do not reconstruct the old `300 + rows × 150` registry cap. Rerun after Step 9d/9e and record pre/post size and threshold: removing rows can lower the threshold faster than file size. See `lib/mem-scaled-threshold-core.ts` for the shared evaluator and constants. PREFERENCES.md and MISTAKES.md retain their flat 5000B policies.
 
 #### 9c. CLAUDE.md Gradual Reduction
 

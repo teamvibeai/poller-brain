@@ -1,6 +1,6 @@
 /**
- * Row/entry-count-scaled byte thresholds for LEARNINGS.md and
- * MEM_REGISTRY.md (poller-brain#324, poller-brain#300).
+ * Scaled byte thresholds for LEARNINGS.md and MEM_REGISTRY.md
+ * (poller-brain#324, poller-brain#300, poller-brain#536).
  *
  * Both files are lifecycle-append-only in practice: MEM_REGISTRY.md never
  * deletes a REMOVED row in place (Step 1c / Step 9d relocate, never
@@ -24,6 +24,14 @@
  * small/young brains, so a brain with few rows/entries doesn't get an
  * artificially tight threshold that trips on completely normal content.
  *
+ * #536 adds evaluateRegistry(): recognized trim pointers receive at least
+ * their complete emitted byte footprint, while other rows keep 150B. This
+ * accounts for dated IDs, both pointer paths in five-column rows, and the
+ * current writer's unbounded heading hooks. Large pointer labels therefore
+ * do not warn; narrative rows and excess non-row prose still do. A fixed
+ * hook allowance would require a separate change to the trim writer's
+ * hook contract to guarantee that every valid trim output fits.
+ *
  * PREFERENCES.md deliberately has no scaled-threshold path here: unlike
  * LEARNINGS.md/MEM_REGISTRY.md it has no enforced entry format and no
  * existing parser (no reduction step has ever been built for it — see
@@ -34,6 +42,7 @@
  */
 
 import { MEM_ID_PATTERN } from "./mem-id.js";
+import { parseRegistryCells } from "./mem-registry-trim-core.js";
 
 export const BASE_FLOOR_BYTES = 5000;
 
@@ -42,9 +51,10 @@ export const BASE_FLOOR_BYTES = 5000;
  * flag as over-threshold; this overhead constant only accounts for the table header/
  * divider or a short file preamble, matching poller-brain#324's measured 231B. */
 export const REGISTRY_OVERHEAD_BYTES = 300;
-/** Healthy post-trim row target: sits above the measured 85B absolute-minimum pointer
+/** Minimum row allowance: sits above the measured 85B absolute-minimum pointer
  * row and below the 300B write-time cap (poller-brain#284), close to the 127B measured
- * median pointer length (poller-brain#324). */
+ * median pointer length (poller-brain#324). #536 budgets recognized trim pointers
+ * separately, since IDs, paths and the writer's unbounded hooks can exceed 150B. */
 export const REGISTRY_PER_ROW_BYTES = 150;
 
 export const LEARNINGS_OVERHEAD_BYTES = 300;
@@ -64,6 +74,7 @@ export const LEARNINGS_PER_ENTRY_BYTES = 150;
 // (lastIndex) if ever called with .test() instead. Keep call sites on .match()/matchAll();
 // don't add a .test() use of this constant without dropping /g first.
 const REGISTRY_ROW_RE = new RegExp(String.raw`^\|\s*${MEM_ID_PATTERN}\s*\|`, "gm");
+const REGISTRY_DATA_ROW_RE = new RegExp(String.raw`^\|\s*${MEM_ID_PATTERN}\s*\|`);
 
 /** Count live data rows in a MEM_REGISTRY.md-shaped table (any status — ACTIVE, OBSOLETE,
  * or a REMOVED row not yet relocated by Step 9d this cycle). Matches poller-brain#324's
@@ -96,6 +107,72 @@ export interface ScaledThresholdResult {
   entryCount: number;
   threshold: number;
   overCap: boolean;
+}
+
+export interface RegistryThresholdResult extends ScaledThresholdResult {
+  /** Complete, escape-aware four/five-column pointers matching the trim writer. */
+  pointerRows: number;
+  /** Includes ordinary narrative rows and malformed key-bearing rows. */
+  nonPointerRows: number;
+  /** Sum of max(150, pointer row bytes including its newline), or 150 for other rows. */
+  rowBudgetBytes: number;
+  /** Additional allowance above the old 150B/row policy. */
+  structuralExtraBytes: number;
+  diagnostics: { line: number; reason: string }[];
+}
+
+/** Recognize the actual trim encoding, rather than rewarding arbitrary long cells.
+ * Five-column rows must repeat the same path in Obsoleted and Description. Four-
+ * column rows carry the path only in Description. The trim writer does not cap hook
+ * length or constrain preserved Status/Created cells, so the complete recognized
+ * pointer row is budgeted, including its label and original formatting. This makes
+ * every valid emitted pointer fit without teaching the metric to excuse narrative
+ * descriptions or non-row prose. It deliberately does not measure pointer verbosity.
+ */
+function isTrimPointer(cells: string[]): boolean {
+  const description = cells[cells.length - 2].trim();
+  if (cells.length === 7) {
+    const pointer = /^(.+\.md):[1-9]\d*$/.exec(cells[4].trim());
+    return pointer !== null && [" — ", " - "].some((separator) =>
+      description.startsWith(`see ${pointer[1]}${separator}`) &&
+      description.length > `see ${pointer[1]}${separator}`.length);
+  }
+  return /^see .+\.md (?:—|-) .+$/u.test(description);
+}
+
+/** Registry-specific structural budget (#536). Non-row overhead stays fixed:
+ * title/table headers fit within 300B; large embedded prose can still exceed it.
+ * Removing rows can lower the threshold faster than file size (as before).
+ * Keep generic evaluate()/scaledThreshold() unchanged for LEARNINGS consumers.
+ */
+export function evaluateRegistry(text: string): RegistryThresholdResult {
+  let entryCount = 0;
+  let pointerRows = 0;
+  let rowBudgetBytes = 0;
+  const diagnostics: RegistryThresholdResult["diagnostics"] = [];
+  const lines = text.split("\n");
+  for (const [index, line] of lines.entries()) {
+    if (!REGISTRY_DATA_ROW_RE.test(line)) continue;
+    entryCount++;
+    const cells = parseRegistryCells(line);
+    let rowBytes = REGISTRY_PER_ROW_BYTES;
+    if (cells && isTrimPointer(cells)) {
+      pointerRows++;
+      // Preserve byte accounting for UTF-8, escaped delimiters, CRLF, original
+      // padding and an absent final newline. Never scale by whole-file size.
+      rowBytes = Buffer.byteLength(line, "utf-8") + (index < lines.length - 1 ? 1 : 0);
+    } else if (!cells || cells[cells.length - 2].trim().startsWith("see ")) {
+      diagnostics.push({ line: index + 1, reason: cells
+        ? "unrecognized pointer encoding; using 150B row allowance"
+        : "expected four or five bounded cells; using 150B row allowance" });
+    }
+    rowBudgetBytes += Math.max(REGISTRY_PER_ROW_BYTES, rowBytes);
+  }
+  const sizeBytes = Buffer.byteLength(text, "utf-8");
+  const threshold = Math.max(BASE_FLOOR_BYTES, REGISTRY_OVERHEAD_BYTES + rowBudgetBytes);
+  return { sizeBytes, entryCount, threshold, overCap: sizeBytes > threshold,
+    pointerRows, nonPointerRows: entryCount - pointerRows, rowBudgetBytes,
+    structuralExtraBytes: rowBudgetBytes - entryCount * REGISTRY_PER_ROW_BYTES, diagnostics };
 }
 
 export function evaluate(
