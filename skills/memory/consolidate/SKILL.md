@@ -505,6 +505,7 @@ Key sections:
 - **Preferences** — actionable preferences from PREFERENCES.md with pointer to source file
 - **Active Projects** — from recent episodic/ entries
 - **Deep Memory Index** — pointers to all memory tiers with topic summaries
+- **Memory Catalog** — exact per-file links, or declared links to full catalog pages, following the memory skill's per-file catalog contract. Preserve existing declarations during regeneration; a directory/topic summary alone does not establish file coverage. Review catalog repairs through the existing scoped write/checkpoint workflow and track every changed page in `filesChanged`.
 
 The "How this memory works" block MUST be the first section in SUMMARY.md. It is static content — do not rephrase or compress it, copy it from the template.
 
@@ -590,9 +591,9 @@ Heartbeat is being deprecated (`teamvibeai/teamvibe.ai#102`). Channel brain repo
 
    Goal state: `present: false`. The eval pipeline aggregates this across all reports to know when platform-side heartbeat code can be removed (`teamvibe.ai#101`).
 
-### 9. MEM Audit & Memory Metrics
+### 9. MEM Audit, Memory Catalog Audit & Memory Metrics
 
-Run integrity checks on the MEM registry and collect memory size metrics.
+Run integrity checks on the MEM registry, independently audit file discoverability, and collect memory size metrics.
 
 #### 9a. MEM Integrity Check
 
@@ -618,6 +619,26 @@ Populate JSON report `selfAssessment`:
 - `mem-integrity-check` — `true` if all ACTIVE keys in either format are present and the legacy-only sequence is clean, `false` otherwise
 
 If `memory/MEM_REGISTRY.md` doesn't exist (pre-migration brains), skip and set `mem-integrity-check` to `true` (no keys to check).
+
+#### 9a-catalog. Memory Catalog Audit
+
+**Run on every authorized consolidation after Step 6**, outside Step 9a's registry-exists conditional: zero promotions, no tier writes, a missing MEM registry, reduction-search deferral, or a previous zero never skip this audit. The existing whole-run scheduling and interrupted-cycle guards still apply.
+
+From the brain root, run the deterministic read-only helper:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-catalog-audit.ts"
+# If the brain explicitly uses memory/index.md (or another local catalog):
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-catalog-audit.ts" --catalog index.md
+```
+
+SUMMARY is always the entry point. `--catalog` asserts that the given memory-relative path is declared reachable from SUMMARY; it cannot bypass linkage. The memory skill's **Per-file catalog contract** defines the supported section/link syntax, recursive tier inventory, exact normalized path matching and exclusions. Follow only declared catalog pages with cycle detection, never arbitrary content links.
+
+Copy the helper's freshly measured `## Memory Catalog Audit` block into the markdown report: attempted index path(s), UTC measurement time, total, catalogued, uncatalogued count (`0/N` included), and sorted missing paths. A confirmed empty inventory may report `0/0`. Missing/unreadable pages, unsupported syntax or scan failures yield `incomplete`, error details and an unknown uncatalogued count (exit 1), never a green zero. Preserve those errors; do not substitute a previous report's count. Exit 0 can still contain a discoverability warning for omissions.
+
+For missing paths or an incomplete audit, record a visible discoverability warning in existing `observations` and a concrete repair recommendation in `processImprovements` (e.g. add exact links to the declared catalog, link the intended catalog from SUMMARY, or resolve the reported read/format/scan error). These findings alone do not assert data loss, change `mem-integrity-check`, or create an integrity alarm blocking checkpoints. Actual preservation failures still follow existing stop rules. Keep this block **separate from `## Tier Coverage`**, whose path parser treats Markdown paths as promotion evidence; do not count catalog omissions or audit output as tier promotions. Add no report-schema or fleet fields.
+
+The helper never repairs files. If consolidation reviews and repairs catalog entries, preserve unrelated content, use its existing scoped write/checkpoint workflow and record changed paths in `filesChanged`. Keep the initial measured result and rerun for a separately labelled final measurement. Recheck after **any subsequent change to a scoped tier file or catalog page**, including Step 9 trims and Step 10 backfills, before Step 12 reports the final state. Prior reports are comparison history only.
 
 #### 9b. Memory File Size Metrics
 
@@ -648,7 +669,7 @@ For `LEARNINGS.md` and `MEM_REGISTRY.md`, don't compare the size against a flat 
 - `SUMMARY.md` > 9000 — risk: context bloat
 - `LEARNINGS.md` — risk: too many rules to follow (reduction paths: Step 5c archival, Step 5d promoted-bullet trim)
 - `MEM_REGISTRY.md` — risk: registry too large (archive REMOVED entries, trim promoted ACTIVE rows)
-- `PREFERENCES.md` > 5000 — risk: preference set too large to track reliably. Same 5000B convention originally shared with LEARNINGS.md/MEM_REGISTRY.md, added `teamvibeai/poller-brain#300` — previously untracked, meaning a brain could accumulate an unbounded PREFERENCES.md with no signal in this report. **Tracking only for now**: flag :warning: when exceeded, but there is no dedicated reduction step yet (no Step 9f) — a brain that trips this threshold should be flagged in `processImprovements` (Step 11) rather than silently reported. A reduction mechanism can reuse the same citation-based trim pattern as Step 5d/9e once real over-threshold data justifies building it. **Deliberately stays on the flat 5000B cap** (not scaled like its two siblings below) — PREFERENCES.md has no enforced entry format and no existing parser, so there's nothing reliable to scale against yet; revisit once a reduction mechanism exists.
+- `PREFERENCES.md` > 5000 — risk: preference set too large to track reliably. Same 5000B convention originally shared with LEARNINGS.md/MEM_REGISTRY.md, added `teamvibeai/poller-brain#300` — previously untracked, meaning a brain could accumulate an unbounded PREFERENCES.md with no signal in this report. **Tracking only for now**: flag :warning: when exceeded, but there is no dedicated preferences reduction step yet (Step 9f handles MISTAKES.md). Measure the overage and flag this base-brain capability gap in `processImprovements` (Step 11) for review; preserve live preferences when no safe action exists. A preferences reducer remains a separate follow-up. **Deliberately stays on the flat 5000B cap** (not scaled like its two siblings below) — PREFERENCES.md has no enforced entry format and no existing parser, so there's nothing reliable to scale against yet; revisit once a reduction mechanism exists.
 - `MISTAKES.md` > 5000 — risk: staging area grows unbounded and stops being a scannable to-do list. Added `teamvibeai/poller-brain#328` — the existing consolidate Step 5 ("Promote Mistakes") was meant to cover this via a `status:` lifecycle but never fires on any brain, so this file had no reduction path at all before now (Step 5's dead trigger is tracked separately, not fixed here). Reduction path: Step 9f, but 9f only reaches entries that demonstrably cite a promotion elsewhere — a brain over cap with no such citations stays over cap with no further action available; flag it in `processImprovements` (Step 11) rather than treat the :warning: as self-resolving. **Stays on the flat 5000B cap** (not scaled like LEARNINGS.md/MEM_REGISTRY.md below) — Step 9f actively archives/points resolved entries out rather than only ever growing, so the lifecycle-append-only argument for scaling doesn't apply here.
 
 **Scaled thresholds for `LEARNINGS.md` / `MEM_REGISTRY.md`** (`teamvibeai/poller-brain#324`, `teamvibeai/poller-brain#300`): both files are lifecycle-append-only in practice — a mature, `ACTIVE`-heavy brain's row/entry count only grows, since the reduction gates (Step 5c/5d/9d/9e) only ever touch `OBSOLETE`/`REMOVED`-keyed or demonstrably-duplicated content, never live `ACTIVE` narrative. A flat 5000B cap on such a file isn't a "trim harder" signal, it's mathematically unreachable past a certain row/entry count — verified on `teamvibeai/poller-brain#324`: 58 registry rows × 85B (shortest real row) + 231B overhead = 5161B, already over cap with every row at its practical minimum. Run:
@@ -888,9 +909,11 @@ cannot be confirmed. Do not automatically resolve rescue refs.
 - `memory/daily/YYYY-MM-DD.md` — the archived daily log (Step 0); add it now if missing (omit only when TODAY.md did not exist prior to this run)
 - `memory/MEM_REGISTRY.md` — if any `[MEM-NNN]` entries were processed or lifecycle changes made in steps 1b/1c; add it now if missing
 
+Before reporting the final catalog result, rerun Step 9a-catalog if scoped tier files or catalog pages changed after its measurement, including any new tier archive files. Keep initial and final measurements distinct.
+
 Create both reports, carrying forward Step 10a's ledger fields without dropping compliance, recovery, or cumulative file tracking. Once both reports are verified, remove the in-progress ledger (its content is now in the reports) before Step 12a:
 
-- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the per-file retry block and truthful reduction statuses from the retry contract, plus `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, and `## Memory Metrics` from Step 9b)
+- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the per-file retry block and truthful reduction statuses from the retry contract, plus `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, `## Memory Catalog Audit` from Step 9a-catalog, and `## Memory Metrics` from Step 9b)
 - **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` and `mem-integrity-check` keys in `selfAssessment`, and the `[self-critique]` entry from Step 11 in `processImprovements`)
 
 **Post-write existence check (required, added per pb#257):** After writing the JSON report, run `ls reports/YYYY-MM-DD-memory-consolidation.json` and confirm it exists on disk. This step is easy to drop silently on unusually busy sessions (many interleaved threads) — and when it's dropped, the poller's guard-file hook (`teamvibe.ai#128`) has nothing to POST, so `.last_consolidation` never updates even though real consolidation content landed. The next `maintenance-guard.sh` run then reports a false-overdue signal despite consolidation having actually happened. Verify the pair before Step 12a commits it. After that checkpoint, the platform may consume/delete JSON; use its committed copy as evidence and never recreate an already consumed report. If no committed report evidence exists and the check fails, stop and finish the report before closing the session.
