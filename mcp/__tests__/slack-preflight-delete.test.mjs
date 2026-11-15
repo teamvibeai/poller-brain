@@ -14,7 +14,8 @@ const TS = '1000.000002'
 const OWN = { ts: TS, user: 'UOWN', bot_id: 'BOWN' }
 
 function assertDeleteAudit(result, outcome, { authenticated = true } = {}) {
-  const { audit } = result
+  const audit = result.audit_details
+  assertCompactDeleteAudit(result)
   assert.ok(audit, 'MCP tool result must carry the deletion audit')
   assert.equal(audit.event, 'slack.delete_message')
   assert.equal(audit.channel, 'CTARGET')
@@ -30,6 +31,22 @@ function assertDeleteAudit(result, outcome, { authenticated = true } = {}) {
     'event', 'channel', 'ts', 'actor_user_id', 'actor_bot_id', 'outcome', 'reason', 'at',
     ...(audit.slack_error ? ['slack_error'] : []),
   ].sort(), 'audit must contain metadata only')
+}
+
+function assertCompactDeleteAudit(result) {
+  assert.equal(Object.keys(result)[0], 'audit', 'audit must be the first result key')
+  assert.equal(typeof result.audit, 'string', 'audit must be a compact string')
+  const audit = result.audit_details
+  assert.equal(result.audit, [
+    'del', audit.outcome, audit.reason, audit.at, audit.channel, audit.ts,
+    audit.actor_user_id, audit.actor_bot_id,
+  ].map(value => value ?? '-').join('|'))
+  assert.ok(
+    JSON.stringify(result).slice(0, 200).includes(JSON.stringify(result.audit)),
+    'the session log must retain the complete quoted audit string',
+  )
+  assert.equal(audit.at.length, 24)
+  assert.equal(new Date(audit.at).toISOString(), audit.at)
 }
 
 async function fixture(run, { env = {}, responses = {} } = {}) {
@@ -225,7 +242,7 @@ for (const [label, message] of [
     assert.ok(['permission_denied', 'ownership_unverified'].includes(result.error))
     assert.ok(!calls.some(c => c.method === 'chat.delete'))
     assertDeleteAudit(result, result.error)
-    if (label === 'foreign user') assert.equal(result.audit.reason, 'author_mismatch')
+    if (label === 'foreign user') assert.equal(result.audit_details.reason, 'author_mismatch')
   }, { responses: { 'conversations.history': { ok: true, messages: [message] } } }))
 }
 
@@ -269,10 +286,11 @@ test('delete requires explicit channel/ts and forbids caller ownership or broade
   ]) {
     const { result, envelope } = await call('delete_message', args)
     assert.equal(envelope.isError, true)
-    assert.equal(result.audit.outcome, 'invalid_arguments')
-    assert.equal(result.audit.reason, 'invalid_arguments')
-    assert.equal(result.audit.actor_user_id, null)
-    assert.equal(result.audit.actor_bot_id, null)
+    assertCompactDeleteAudit(result)
+    assert.equal(result.audit_details.outcome, 'invalid_arguments')
+    assert.equal(result.audit_details.reason, 'invalid_arguments')
+    assert.equal(result.audit_details.actor_user_id, null)
+    assert.equal(result.audit_details.actor_bot_id, null)
   }
   assert.deepEqual(calls, [])
 }))
@@ -281,7 +299,7 @@ test('delete audit excludes message content and unrecognized remote errors', () 
   const { result, envelope } = await call('delete_message', { channel: 'CTARGET', ts: TS })
   assert.equal(envelope.isError, true)
   assertDeleteAudit(result, 'delete_failed')
-  assert.equal(result.audit.reason, 'delete_failed')
+  assert.equal(result.audit_details.reason, 'delete_failed')
   assert.ok(!JSON.stringify(result).includes('PRIVATE_MESSAGE_CONTENT'))
 }, { responses: {
   'conversations.history': { ok: true, messages: [{ ...OWN, text: 'PRIVATE_MESSAGE_CONTENT' }] },
@@ -291,28 +309,112 @@ test('delete audit excludes message content and unrecognized remote errors', () 
 test('delete audit bounds invalid destinations without API calls', () => fixture(async ({ call, calls }) => {
   for (const args of [
     { channel: 'C' + 'A'.repeat(64), ts: TS },
+    { channel: 'C' + 'A'.repeat(21), ts: TS },
+    { channel: 'Cbad', ts: TS },
+    { channel: 'C|BAD', ts: TS },
+    { channel: 'CTARGET\n', ts: TS },
     { channel: 'CTARGET', ts: '1'.repeat(26) + '.000001' },
+    { channel: 'CTARGET', ts: '1'.repeat(13) + '.000001' },
+    { channel: 'CTARGET', ts: '1.0000001' },
+    { channel: 'CTARGET', ts: '1.' },
+    { channel: 'CTARGET', ts: '.1' },
+    { channel: 'CTARGET', ts: TS + '\n' },
     { channel: 'xoxb-mock', ts: 'PRIVATE_MESSAGE_CONTENT' },
     null,
   ]) {
     const { result, envelope } = await call('delete_message', args)
     assert.equal(envelope.isError, true)
-    assert.equal(result.audit.outcome, 'invalid_arguments')
-    assert.equal(result.audit.actor_user_id, null)
-    assert.equal(result.audit.actor_bot_id, null)
-    assert.ok(JSON.stringify(result.audit).length < 1024)
-    assert.ok(!JSON.stringify(result.audit).includes('xoxb-mock'))
-    assert.ok(!JSON.stringify(result.audit).includes('PRIVATE_MESSAGE_CONTENT'))
-    assert.equal(result.audit.channel, args?.channel === 'CTARGET' ? 'CTARGET' : null)
-    assert.equal(result.audit.ts, args?.ts === TS ? TS : null)
+    assertCompactDeleteAudit(result)
+    assert.equal(result.audit_details.outcome, 'invalid_arguments')
+    assert.equal(result.audit_details.actor_user_id, null)
+    assert.equal(result.audit_details.actor_bot_id, null)
+    assert.ok(JSON.stringify(result.audit_details).length < 1024)
+    assert.ok(!JSON.stringify(result.audit_details).includes('xoxb-mock'))
+    assert.ok(!JSON.stringify(result.audit_details).includes('PRIVATE_MESSAGE_CONTENT'))
+    assert.equal(result.audit_details.channel, args?.channel === 'CTARGET' ? 'CTARGET' : null)
+    assert.equal(result.audit_details.ts, args?.ts === TS ? TS : null)
   }
   assert.deepEqual(calls, [])
 }))
 
-test('delete rejects oversized authenticated IDs without copying them to audit', () => fixture(async ({ call, calls }) => {
-  const { result, envelope } = await call('delete_message', { channel: 'CTARGET', ts: TS })
+test('delete rejects invalid authenticated IDs without copying them to audit', async () => {
+  for (const field of ['user_id', 'bot_id']) {
+    for (const value of ['A'.repeat(22), 'A'.repeat(65), 'lowercase', 'A|B', 'A\n', '']) {
+      await fixture(async ({ call, calls }) => {
+        const { result, envelope } = await call('delete_message', { channel: 'CTARGET', ts: TS })
+        assert.equal(envelope.isError, true)
+        assertDeleteAudit(result, 'ownership_unverified', { authenticated: false })
+        assert.equal(result.audit_details.reason, 'identity_incomplete')
+        assert.deepEqual(calls.map(c => c.method), ['auth.test'])
+      }, { responses: { 'auth.test': { ok: true, user_id: 'UOWN', bot_id: 'BOWN', [field]: value } } })
+    }
+  }
+})
+
+test('delete accepts the minimum ID and timestamp lengths', () => fixture(async ({ call, calls }) => {
+  const { result, envelope } = await call('delete_message', { channel: '0', ts: '0.0' })
+  assert.ok(!envelope.isError)
+  assert.equal(result.ok, true)
+  assertCompactDeleteAudit(result)
+  assert.equal(result.audit_details.channel, '0')
+  assert.equal(result.audit_details.ts, '0.0')
+  assert.equal(result.audit_details.actor_user_id, '0')
+  assert.equal(result.audit_details.actor_bot_id, '9')
+  assert.deepEqual(calls.map(c => c.method), ['auth.test', 'conversations.history', 'chat.delete'])
+}, { responses: {
+  'auth.test': { ok: true, user_id: '0', bot_id: '9' },
+  'conversations.history': { ok: true, messages: [{ ts: '0.0', user: '0', bot_id: '9' }] },
+} }))
+
+// Exercise the real MCP handler with every destination/actor at the new limit.
+const MAX_CHANNEL = 'C' + 'A'.repeat(20)
+const MAX_USER = 'U' + 'A'.repeat(20)
+const MAX_BOT = 'B' + 'A'.repeat(20)
+const MAX_TS = '9'.repeat(12) + '.' + '9'.repeat(6)
+const MAX_MESSAGE = { ts: MAX_TS, user: MAX_USER, bot_id: MAX_BOT }
+
+for (const [label, responses, outcome, reason] of [
+  ['success', {}, 'deleted', null],
+  ['ownership reject', { 'conversations.history': { ok: true, messages: [{ ...MAX_MESSAGE, user: 'UOTHER' }] } }, 'permission_denied', 'author_mismatch'],
+  ['longest ownership reason', { 'conversations.history': { ok: true, messages: [{ ...MAX_MESSAGE, subtype: 'message_deleted' }] } }, 'ownership_unverified', 'unsupported_message_type'],
+  ['longest delete reason', { 'chat.delete': { ok: true } }, 'delete_failed', 'delete_response_uncertain'],
+  ['API error', { 'chat.delete': { ok: false, error: 'missing_scope' } }, 'permission_denied', 'slack_api_error'],
+  ['auth error', { 'auth.test': new Error('offline') }, 'ownership_unverified', 'identity_failed'],
+]) {
+  test(`delete audit prefix survives 200 characters at maximum lengths: ${label}`, t => fixture(async ({ call }) => {
+    const { result, envelope } = await call('delete_message', { channel: MAX_CHANNEL, ts: MAX_TS })
+    assert.equal(Boolean(envelope.isError), outcome !== 'deleted')
+    // Assert on the actual result BEFORE inspecting its structured companion.
+    assert.ok(JSON.stringify(result).slice(0, 200).includes(JSON.stringify(result.audit)),
+      'the session log must retain the complete audit at maximum field lengths')
+    assert.equal(typeof result.audit, 'string', 'audit must be a compact string')
+    assertCompactDeleteAudit(result)
+    assert.equal(result.audit_details.outcome, outcome)
+    assert.equal(result.audit_details.reason, reason)
+    assert.equal(result.audit_details.channel, MAX_CHANNEL)
+    assert.equal(result.audit_details.ts, MAX_TS)
+    assert.equal(result.audit_details.actor_user_id, label === 'auth error' ? null : MAX_USER)
+    assert.equal(result.audit_details.actor_bot_id, label === 'auth error' ? null : MAX_BOT)
+    t.diagnostic(`audit=${result.audit.length} chars; prefix through closing quote=${JSON.stringify({ audit: result.audit }).length - 1} chars`)
+  }, { responses: {
+    'auth.test': { ok: true, user_id: MAX_USER, bot_id: MAX_BOT },
+    'conversations.history': { ok: true, messages: [MAX_MESSAGE] },
+    ...responses,
+  } }))
+}
+
+test('delete audit prefix survives rejected arguments with a long validation error', () => fixture(async ({ call, calls }) => {
+  const { result, envelope } = await call('delete_message', {
+    channel: MAX_CHANNEL, ts: MAX_TS, ['unknown'.repeat(100)]: true,
+  })
   assert.equal(envelope.isError, true)
-  assertDeleteAudit(result, 'ownership_unverified', { authenticated: false })
-  assert.equal(result.audit.reason, 'identity_incomplete')
-  assert.deepEqual(calls.map(c => c.method), ['auth.test'])
-}, { responses: { 'auth.test': { ok: true, user_id: 'U' + 'A'.repeat(64), bot_id: 'BOWN' } } }))
+  assert.ok(result.error.length > 200)
+  assertCompactDeleteAudit(result)
+  assert.equal(result.audit_details.outcome, 'invalid_arguments')
+  assert.equal(result.audit_details.reason, 'invalid_arguments')
+  assert.equal(result.audit_details.channel, MAX_CHANNEL)
+  assert.equal(result.audit_details.ts, MAX_TS)
+  assert.equal(result.audit_details.actor_user_id, null)
+  assert.equal(result.audit_details.actor_bot_id, null)
+  assert.deepEqual(calls, [])
+}))

@@ -666,21 +666,43 @@ function buildSendPreflight(args, body, { thread_ts, hasModals, transformed }) {
   return response
 }
 
-// Keep the audit below 1 KiB, including when arguments/auth/error data are
-// malformed. Null actor IDs mean no complete identity was authenticated.
+const DELETE_ID_PATTERN = /^[A-Z0-9]{1,21}$/
+const DELETE_TS_PATTERN = /^\d{1,12}\.\d{1,6}$/
+const DELETE_AUDIT_REASONS = new Set([
+  'invalid_arguments', 'identity_incomplete', 'identity_failed',
+  'lookup_incomplete', 'lookup_truncated', 'lookup_ambiguous', 'lookup_failed',
+  'exact_message_not_found', 'unsupported_message_type', 'author_unknown',
+  'author_mismatch', 'delete_response_uncertain', 'delete_failed', 'slack_api_error',
+])
+
+function deleteAuditValue(value, pattern) {
+  // Comparing the whole match also excludes the final newline allowed by `$`.
+  return typeof value === 'string' && pattern.exec(value)?.[0] === value ? value : null
+}
+
+// Null actor IDs mean no complete identity was authenticated.
 function createDeleteAudit(args, outcome = 'ownership_unverified') {
-  const identifier = (value, pattern, max) =>
-    typeof value === 'string' && value.length <= max && pattern.test(value) ? value : null
   return {
     event: 'slack.delete_message',
-    channel: identifier(args?.channel, /^[CDG][A-Z0-9]+$/, 64),
-    ts: identifier(args?.ts, /^[0-9]+\.[0-9]{6}$/, 32),
+    channel: deleteAuditValue(args?.channel, DELETE_ID_PATTERN),
+    ts: deleteAuditValue(args?.ts, DELETE_TS_PATTERN),
     actor_user_id: null,
     actor_bot_id: null,
     outcome,
     reason: outcome === 'invalid_arguments' ? 'invalid_arguments' : null,
     at: new Date().toISOString(),
   }
+}
+
+// The first key must survive the poller's 200-character tool_result limit.
+// Bounded ASCII fields, fixed outcomes/reasons and toISOString() keep the
+// entire quoted audit prefix within 172 characters, even at all field maxima.
+function buildDeleteResponse(audit, result) {
+  const compact = [
+    'del', audit.outcome, DELETE_AUDIT_REASONS.has(audit.reason) ? audit.reason : null,
+    audit.at, audit.channel, audit.ts, audit.actor_user_id, audit.actor_bot_id,
+  ].map(value => value ?? '-').join('|')
+  return { audit: compact, ...result, audit_details: audit }
 }
 
 // Do not use resolveSelfIds(): that best-effort warning helper permits env
@@ -693,9 +715,13 @@ async function deleteOwnMessage(channel, ts) {
   }
   let stage = 'identity'
   try {
+    if (audit.channel !== channel || audit.ts !== ts) {
+      audit.outcome = 'invalid_arguments'
+      reject('invalid_arguments')
+    }
     const self = await slackApi('auth.test', {})
-    if (self.ok !== true || typeof self.user_id !== 'string' || !/^[UW][A-Z0-9]{1,63}$/.test(self.user_id) ||
-        typeof self.bot_id !== 'string' || !/^B[A-Z0-9]{1,63}$/.test(self.bot_id)) {
+    if (self.ok !== true || !deleteAuditValue(self.user_id, DELETE_ID_PATTERN) ||
+        !deleteAuditValue(self.bot_id, DELETE_ID_PATTERN)) {
       reject('identity_incomplete')
     }
     audit.actor_user_id = self.user_id
@@ -740,7 +766,7 @@ async function deleteOwnMessage(channel, ts) {
       reject('delete_response_uncertain')
     }
     audit.outcome = 'deleted'
-    return { ok: true, channel, ts, audit }
+    return buildDeleteResponse(audit, { ok: true, channel, ts })
   } catch (error) {
     const permissionErrors = ['missing_scope', 'not_in_channel', 'cant_delete_message', 'no_permission',
       'access_denied', 'restricted_action', 'not_authed', 'invalid_auth', 'token_revoked',
@@ -758,7 +784,7 @@ async function deleteOwnMessage(channel, ts) {
         audit.outcome = 'permission_denied'
       }
     }
-    audit.reason ||= `${stage}_failed`
+    audit.reason ||= { identity: 'identity_failed', lookup: 'lookup_failed', delete: 'delete_failed' }[stage]
     if (stage === 'delete' && audit.outcome === 'ownership_unverified') audit.outcome = 'delete_failed'
     const failure = new Error(`delete_message: ${audit.outcome}${slackError ? ` (${slackError})` : ''}`)
     failure.slackDeleteCode = audit.outcome
@@ -831,13 +857,13 @@ const TOOLS = [
   },
   {
     name: 'delete_message',
-    description: 'Delete exactly one message authored by the authenticated bot. Verifies fresh auth.test identity against the exact message user/bot_id; fails closed on unknown, conflicting or unreadable ownership. Requires explicit channel and ts. Never recursively deletes replies. Returns bounded audit metadata on success and failure (event, destination, verified actor IDs or null, outcome, reason, UTC time). Cannot retract notifications or undo sessions already started.',
+    description: 'Delete exactly one message authored by the authenticated bot. Verifies fresh auth.test identity against the exact message user/bot_id; fails closed on unknown, conflicting or unreadable ownership. Requires explicit channel and ts. Never recursively deletes replies. Returns audit first as del|outcome|reason|UTC time|channel|ts|actor user|actor bot (missing values: -), followed by structured audit_details. Cannot retract notifications or undo sessions already started.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        channel: { type: 'string', maxLength: 64, pattern: '^[CDG][A-Z0-9]+$', description: 'Explicit Slack conversation ID containing the message; no session default.' },
-        ts: { type: 'string', maxLength: 32, pattern: '^[0-9]+\\.[0-9]{6}$', description: 'Exact timestamp of the message to delete (not its parent unless deleting the parent itself).' },
+        channel: { type: 'string', maxLength: 21, pattern: DELETE_ID_PATTERN.source, description: 'Explicit Slack conversation ID containing the message; no session default.' },
+        ts: { type: 'string', maxLength: 19, pattern: DELETE_TS_PATTERN.source, description: 'Exact timestamp of the message to delete (not its parent unless deleting the parent itself).' },
       },
       required: ['channel', 'ts'],
     },
@@ -1747,13 +1773,16 @@ async function handleRequest(req) {
           content: [{ type: 'text', text: JSON.stringify(result) }],
         })
       } catch (e) {
+        const failure = {
+          ok: false,
+          error: e.slackDeleteCode || e.message,
+          ...(e.slackDeleteCode ? { detail: e.message } : {}),
+        }
+        const result = name === 'delete_message'
+          ? buildDeleteResponse(e.slackDeleteAudit || createDeleteAudit(args, 'invalid_arguments'), failure)
+          : failure
         return jsonrpcResponse(id, {
-          content: [{ type: 'text', text: JSON.stringify({
-            ok: false,
-            error: e.slackDeleteCode || e.message,
-            ...(e.slackDeleteCode ? { detail: e.message } : {}),
-            ...(name === 'delete_message' ? { audit: e.slackDeleteAudit || createDeleteAudit(args, 'invalid_arguments') } : {}),
-          }) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
           isError: true,
         })
       }
