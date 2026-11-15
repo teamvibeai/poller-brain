@@ -254,5 +254,42 @@ try {
   check(guarded.candidates.length === 0 && guarded.contentCoverage[0].missingTokens[0] === "no-literal-match", "#505 literal-match rejection unchanged");
   check(findLearningsTrimCandidates(source.replace("[MEM-124]", "[MEM-124][MEM-607]"), incidental).candidates.length === 0, "multi-key false-positive stays rejected");
   check(findLearningsTrimCandidates(source, [{ file: "semantic/index.md", text: "### Index heading\n- [MEM-124] → see semantic/other.md — lookup\n" }]).candidates.length === 0, "index pointer false-positive stays rejected");
+
+  // The last span/row must keep its CR or Markdown hard-break spaces when
+  // historical ownership is checked, just as reviewItems hashes them today.
+  for (const [ending, suffix, changedSuffix] of [["CRLF", "\r\n", "\n"], ["trailing spaces", "  \n", " \n"], ["LF", "\n", " \n"]]) {
+    const byteSources = [
+      ["learnings", learning, `- **Preserve deployment evidence** — ${body} [MEM-124]${suffix}`],
+      ["registry", registry, `| Key | Status | Created | Description |${suffix}|---|---|---|---|${suffix}| MEM-125 | ACTIVE | 2026-09-01 | ${body} |${suffix}`],
+    ];
+    write(REVIEW_STATE_PATH, JSON.stringify({ version: 1, rejections: [] }));
+    for (const [kind, file, text] of byteSources) {
+      write(file, text);
+      const proposed = refs(cached(kind, 0));
+      check(proposed.length === 1, `${kind} ${ending}: final item is reviewable`);
+      check(cli(kind, "--reject", proposed[0], "--reason", "Retain exact source bytes").status === 0,
+        `${kind} ${ending}: rejection recorded`);
+    }
+    complete();
+    for (let repeat = 0; repeat < 2; repeat++) {
+      for (const [kind, file, text] of byteSources) {
+        check(fs.readFileSync(path.join(root, file)).equals(Buffer.from(text)), `${kind} ${ending}: source bytes unchanged`);
+        check(refs(cached(kind, 1)).length === 0, `${kind} ${ending}: completed unchanged rejection stays a hit`);
+      }
+      if (repeat === 0) complete();
+    }
+    for (const [kind, file, text] of byteSources) {
+      // Change only the final item's whitespace, preserving its trim candidacy.
+      write(file, text.slice(0, -suffix.length) + changedSuffix);
+      check(refs(cached(kind, 0)).length === 1, `${kind} ${ending}: changed source bytes require review`);
+    }
+    complete();
+    for (const [kind, file, text] of byteSources) write(file, text);
+    complete();
+    for (const [kind] of byteSources) {
+      check(refs(cached(kind, 0)).length === 1, `${kind} ${ending}: committed byte change breaks continuous ownership after restore`);
+    }
+    console.log(`${ending}: learnings + registry unchanged hits, byte-change misses, restored-history misses`);
+  }
   console.log(`${checks} review-ledger checks passed, 0 failed`);
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

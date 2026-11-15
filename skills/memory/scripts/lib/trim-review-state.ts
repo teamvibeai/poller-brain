@@ -110,7 +110,12 @@ function statePath(root: string): string {
 }
 function git(root: string, ...args: string[]): string {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, stdio: ["ignore", "pipe", "pipe"] }).trimEnd();
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+}
+// Only command metadata may be trimmed. Blob contents must retain the exact
+// source text (including CRLF and trailing spaces) used by reviewItems.
+function gitMetadata(root: string, ...args: string[]): string {
+  return git(root, ...args).trimEnd();
 }
 // A record must have one continuous, unambiguous owner since it was saved.
 // Checking just today's multiplicity would resurrect a unique-span verdict
@@ -120,8 +125,8 @@ function git(root: string, ...args: string[]): string {
 function continuousOwners(root: string, at: string, final: string, records: Rejection[]): Rejection[] {
   const active = new Map(records.map(e => [e.id, e]));
   const invalid = new Set<string>();
-  const afterFinal = new Set(git(root, "rev-list", "--first-parent", `${final}..${at}`).split("\n"));
-  const history = git(root, "log", "--first-parent", "--format=%H %P", at, "--", REVIEW_STATE_PATH, ...sources).split("\n");
+  const afterFinal = new Set(gitMetadata(root, "rev-list", "--first-parent", `${final}..${at}`).split("\n"));
+  const history = gitMetadata(root, "log", "--first-parent", "--format=%H %P", at, "--", REVIEW_STATE_PATH, ...sources).split("\n");
   for (const line of history) {
     if (!active.size) break;
     const [commit, ...parents] = line.split(" ");
@@ -176,12 +181,12 @@ export function completedRejections(root: string, completedAt?: string): { recor
       throw new Error("interrupted review-state write");
     } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; }
     if (process.env.GIT_DIR || process.env.GIT_WORK_TREE || process.env.GIT_INDEX_FILE ||
-        git(root, "rev-parse", "--show-toplevel") !== fs.realpathSync(root)) throw new Error("uncertain brain Git root");
+        gitMetadata(root, "rev-parse", "--show-toplevel") !== fs.realpathSync(root)) throw new Error("uncertain brain Git root");
     // Missing/corrupt working state fails open even if history has a valid copy.
     const working = parseLedger(fs.readFileSync(file, "utf8"));
-    const at = completedAt ?? git(root, "rev-parse", "HEAD");
+    const at = completedAt ?? gitMetadata(root, "rev-parse", "HEAD");
     const report = completedReport(root, at);
-    const entry = git(root, "ls-tree", report.final, "--", REVIEW_STATE_PATH);
+    const entry = gitMetadata(root, "ls-tree", report.final, "--", REVIEW_STATE_PATH);
     if (!/^100644 blob |^100755 blob /.test(entry)) throw new Error("completed review state unavailable");
     const completed = parseLedger(git(root, "show", `${report.final}:${REVIEW_STATE_PATH}`));
     // A working deletion/reconsideration cannot resurrect a historic record.
