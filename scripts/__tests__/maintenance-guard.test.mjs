@@ -118,6 +118,24 @@ test('T5: missing TODAY.md and four English no-new-content lines still idle-skip
   assert.match(result.stdout, /idle-skip/)
 })
 
+test('Memory Catalog Audit paths outside Tier Coverage preserve maintenance idle classification', t => {
+  const audit = `## Memory Catalog Audit
+- Status: warning (discoverability warning)
+- Measured at: 2026-11-15T01:00:00.000Z
+- Index paths (memory-relative, attempted): "SUMMARY.md", "index.md"
+- Total tier files: 2
+- Catalogued files (observed): 1
+- Uncatalogued: 1/2
+- Missing paths:
+  - "semantic/new.md"
+`
+  for (const coverage of [audit + '\n' + zeroPromotion, zeroPromotion + '\n' + audit]) {
+    const result = guard(brain(t, { coverage }))
+    assert.equal(result.status, 1, result.stdout)
+    assert.match(result.stdout, /idle-skip/)
+  }
+})
+
 test('T6: activity never overrides the recent-run rule', (t) => {
   const result = guard(brain(t, { today: memLines(10), newestDaysAgo: 0 }))
   assert.equal(result.status, 1, result.stdout)
