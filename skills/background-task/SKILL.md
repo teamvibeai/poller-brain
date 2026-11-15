@@ -122,6 +122,26 @@ landed, and `child_rc=` keeps the exit code the command chose if it trapped SIGT
 exited by itself. A command that catches SIGTERM dies by no signal at all — nothing
 should name one for it.
 
+Completion waits for cleanup of the workload's own process group, even when the direct
+command exits normally. If group members remain, the runner sends SIGTERM, allows a
+five-second grace, then sends SIGKILL if the group still exists before recording the
+terminal result. A timeout's pending escalation keeps its original deadline when the
+leader exits. The runner signals only the group created for that workload at spawn;
+the launcher still detaches the runner so it survives the launching session ending.
+
+`status` records `workload_pgid=`, `residual_descendants=found` when members remain after
+leader exit, and `residual_cleanup_signals=` with the signals delivered to the group.
+The terminal drop also reports residual cleanup. These fields describe group cleanup
+separately from the leader's exit code and signal; no descendant count is collected.
+An already-gone group (`ESRCH`) needs no signal. Permission failures (`EPERM`) and other
+cleanup errors are recorded as `group_cleanup_error=` and included in the residual
+cleanup report, rather than claiming the descendants were killed.
+
+Descendants that start a new session (for example via `setsid`) escape process-group
+cleanup. The runner also cannot reap orphaned zombies; that requires the container's
+init/subreaper. Group signals are cleanup attempts, not proof that every process was
+reaped. Runner/container death remains subject to the best-effort limits below.
+
 Report the real outcome. A failed build is a failed build — don't retry blindly and don't
 describe a timeout as a success.
 
@@ -422,6 +442,8 @@ guess.
 ```bash
 cd "$CLAUDE_CONFIG_DIR/skills/background-task/scripts"
 node bg-task.test.mjs                       # fast cases, ~5 s, no network
+node bg-task-runner.test.mjs                # runner/launcher and inbox regressions
+node __tests__/process-group-cleanup.test.mjs # fast process-group cleanup and TTL cases
 BG_TASK_TEST_SLOW=1 node bg-task.test.mjs   # + real TTL-kill case, ~35 s
 ```
 
