@@ -1101,7 +1101,7 @@ const TOOLS = [
   },
   {
     name: 'set_status',
-    description: 'Set the typing indicator text (e.g., "Searching...", "Analyzing..."). Use empty string to clear.',
+    description: 'Set the typing indicator text (e.g., "Searching...", "Analyzing..."). Use empty string to clear. The harness auto-updates this indicator on each subsequent tool call; custom text avoids a later tool-call overwrite only when set_status is the final tool call of the turn. This does not guarantee persistence after the turn ends.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

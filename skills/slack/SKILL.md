@@ -93,6 +93,12 @@ Returns file content as text.
 - `channel`: Override channel
 - `thread_ts`: Override thread
 
+The harness auto-updates this indicator on each subsequent tool call; custom text
+avoids a later tool-call overwrite only when `set_status` is the final tool call of
+the turn. This does not guarantee persistence after the turn ends, during idle
+periods, or across later turns. The indicator represents transient agent activity,
+not durable job progress. A later tool call can also overwrite an empty-string clear.
+
 ## Formatting
 
 For plain text in the `text` field, Slack uses a custom markdown dialect:
