@@ -62,13 +62,13 @@ for (const key of ["MEM-12", A, UPPER]) {
   assert(!isReliableHook(`Never embed ${key} inside a hook`), "embedded complete key makes hook unreliable");
 }
 const scan = firstCitations([{ file: "semantic/a.md", text: [
-  "### Preserve complete dated identities",
+  `### Preserve complete dated identities [${A}]`,
   `Unowned mixed citation ${A} ${B}`,
   `- [${A}:obsolete] Subject narrative mentioning [${B}]`,
-  `Dedicated second memo [${B}]`,
+  `### Dedicated second memo [${B}]`,
   `Later first memo [${A}]`,
 ].join("\n") }]);
-assert(scan.citations.size === 2 && scan.citations.get(A)?.line === 3 && scan.citations.get(B)?.line === 4,
+assert(scan.citations.size === 2 && scan.citations.get(A)?.line === 1 && scan.citations.get(B)?.line === 4,
   "first-citation lookup and subject tags preserve distinct IDs and first evidence");
 const indexes = firstCitations([{ file: "semantic/a.md", text: [
   "### Index shape rejection",

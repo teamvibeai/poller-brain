@@ -5,6 +5,10 @@
  * reuse the exact same hard-won heuristic instead of re-deriving it and
  * re-discovering the same false-positive shapes.
  *
+ * Destination ownership is required: the nearest visible heading must name
+ * exactly the cited key, with no obsolete owner. Generic/unkeyed nested
+ * headings do not inherit ownership. Fenced code and HTML comments are ignored.
+ *
  * Detection is content-based, not status-based: a citation is only trusted
  * as evidence if its line cites EXACTLY ONE distinct MEM-N key, OR cites 2+
  * keys but exactly one of them sits in the line's leading SUBJECT position
@@ -54,6 +58,21 @@ export interface Citation {
   heading: string | null;
 }
 
+/** Accepted evidence includes only visible text in its nearest heading's section. */
+export interface OwnedCitation extends Citation {
+  sectionText: string;
+}
+
+export interface OwnershipRejection {
+  key: string;
+  file: string;
+  line: number;
+  lineText: string;
+  heading: string | null;
+  owners: string[];
+  reason: "missing-heading" | "missing-key" | "multi-key" | "foreign-key" | "obsolete-owner";
+}
+
 /** A single-key destination line skipped because it looks like an index/pointer row, not narrative. */
 export interface IndexRejection {
   key: string;
@@ -63,7 +82,8 @@ export interface IndexRejection {
 }
 
 export interface CitationScan {
-  citations: Map<string, Citation>;
+  citations: Map<string, OwnedCitation>;
+  ownershipRejections: OwnershipRejection[];
   /**
    * Single-key lines that were skipped for being index-shaped, reported so
    * a caller never silently loses coverage (DevGuru catch, poller-brain#300
@@ -152,60 +172,117 @@ export function distinctCitedKeysInLine(line: string): string[] {
   return [...keys];
 }
 
-const HEADING_LINE_RE = /^#{1,6}\s+(.+?)\s*$/;
-
 /**
- * Nearest heading text governing `lineIdx` (0-indexed) in `lines`, `#`
- * markers stripped — null if none precedes it anywhere in the file. A
- * heading governs everything below it up to the next heading (or end of
- * file) — plain markdown section scoping, not a heuristic — so blank
- * lines/paragraph breaks in between do NOT end its reach (poller-brain#300
- * review round 4: the correct boundary is the next heading, not a blank
- * line; bounding on blank lines rejected the governing heading for the
- * routine `### Title` / blank / `**Rule:**` / blank / `**How to
- * apply:**` shape). Trade-off accepted deliberately: a stray unrelated
- * paragraph inside a heading's section (no heading of its own) inherits
- * that heading as its hook too — imprecise but never garbage, which is the
- * property this function optimizes for.
+ * Strip HTML comments and fenced code before interpreting headings or citations.
+ * Preserve line count and spaces where comments occur, so hidden text cannot
+ * supply ownership, coverage, or join two visible tokens into a new MEM ID.
  */
-function nearestHeading(lines: string[], lineIdx: number): string | null {
-  for (let i = lineIdx; i >= 0; i--) {
-    const m = HEADING_LINE_RE.exec(lines[i]);
-    if (m) return m[1].trim();
-  }
-  return null;
+function visibleLines(text: string): string[] {
+  let comment = false;
+  let fence: { marker: string; length: number } | undefined;
+  return text.split(/\r\n|[\n\r]/u).map((line) => {
+    if (fence) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      if (close && close[1][0] === fence.marker && close[1].length >= fence.length) fence = undefined;
+      return "";
+    }
+    // A fence's contents are literal, including apparent comment delimiters.
+    const open = !comment && /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (open && (open[1][0] !== "`" || !open[2].includes("`"))) {
+      fence = { marker: open[1][0], length: open[1].length };
+      return "";
+    }
+    let visible = "";
+    let pos = 0;
+    while (pos < line.length) {
+      if (comment) {
+        const end = line.indexOf("-->", pos);
+        if (end < 0) break;
+        visible += " ".repeat(end + 3 - pos);
+        pos = end + 3;
+        comment = false;
+      } else {
+        const start = line.indexOf("<!--", pos);
+        if (start < 0) { visible += line.slice(pos); break; }
+        visible += line.slice(pos, start);
+        pos = start;
+        comment = true;
+      }
+    }
+    return visible;
+  });
+}
+
+const OBSOLETE_OWNER_RE = new RegExp(String.raw`\b${MEM_CITATION_PATTERN}:obsolete\b`);
+
+/** ATX headings, including empty boundaries, optional indentation/closing hashes. */
+function headingText(line: string): string | null {
+  const m = /^ {0,3}#{1,6}(?:[ \t]+(.*)|$)/.exec(line.replace(/^\ufeff/, ""));
+  return m ? (m[1] ?? "").replace(/(?:^|[ \t]+)#+[ \t]*$/, "").trim() : null;
 }
 
 /**
- * First citation location for every MEM-N key found across `destinations`,
- * scanned in file-path order then line order — deterministic so repeated
- * runs pick the same citation (idempotence). A single-key line always
- * counts as evidence; a 2+-key line counts ONLY for whichever key (if any)
- * sits in leading subject position — see `subjectPositionKey` and the
- * module doc (poller-brain#334). Index-shaped lines are excluded from
- * `citations` but reported in `indexRejections`, never silently dropped.
+ * First eligible citation per key in file/line order. A line must pass the
+ * single-key/leading-subject and index rules AND its nearest visible heading
+ * must name exactly that key. Headings can themselves cite their own key.
+ * Unkeyed nested headings do not inherit ownership from an ancestor.
+ * Rejections never consume the key: a later correctly owned section can win.
  */
 export function firstCitations(destinations: DestinationFile[]): CitationScan {
-  const found = new Map<string, Citation>();
+  const found = new Map<string, OwnedCitation>();
   const indexRejections: IndexRejection[] = [];
+  const ownershipRejections: OwnershipRejection[] = [];
   const sorted = [...destinations].sort((a, b) => a.file.localeCompare(b.file));
   for (const { file, text } of sorted) {
-    const lines = text.split("\n");
-    lines.forEach((lineText, idx) => {
-      const keysOnLine = distinctCitedKeysInLine(lineText);
-      if (keysOnLine.length === 0) return; // no citation at all
-      const key = keysOnLine.length === 1 ? keysOnLine[0] : subjectPositionKey(lineText);
-      if (key === null) return; // 2+ keys, no unambiguous subject — ambiguous cross-reference
-      if (isIndexShapedLine(lineText)) {
+    const lines = visibleLines(text);
+    const rawLines = text.split(/\r\n|[\n\r]/u);
+    let heading: string | null = null;
+    let sectionStart = 0;
+    const sections = lines.map(headingText);
+    // Precompute each section's end once; hidden headings never split a section.
+    const sectionEnds = new Map<number, number>();
+    for (let i = 0; i < lines.length; i++) {
+      if (sections[i] !== null) {
+        sectionEnds.set(sectionStart, i);
+        sectionStart = i;
+      }
+    }
+    sectionEnds.set(sectionStart, lines.length);
+    sectionStart = 0;
+    lines.forEach((visible, idx) => {
+      if (sections[idx] !== null) { heading = sections[idx]; sectionStart = idx; }
+      const keysOnLine = distinctCitedKeysInLine(visible);
+      if (keysOnLine.length === 0) return;
+      const key = keysOnLine.length === 1 ? keysOnLine[0] : subjectPositionKey(visible);
+      if (key === null) return; // ambiguous cross-reference, no sole subject
+      const lineText = rawLines[idx];
+      if (isIndexShapedLine(visible)) {
         indexRejections.push({ key, file, line: idx + 1, lineText });
         return;
       }
+      const owners = distinctCitedKeysInLine(heading ?? "");
+      const reason = heading === null ? "missing-heading"
+        : owners.length === 0 ? "missing-key"
+        : owners.length > 1 ? "multi-key"
+        : owners[0] !== key ? "foreign-key"
+        : OBSOLETE_OWNER_RE.test(heading) ? "obsolete-owner"
+        : null;
+      if (reason) {
+        ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners, reason });
+        return;
+      }
       if (!found.has(key)) {
-        found.set(key, { file, line: idx + 1, lineText, heading: nearestHeading(lines, idx) });
+        found.set(key, { file, line: idx + 1, lineText, heading,
+          sectionText: lines.slice(sectionStart, sectionEnds.get(sectionStart)).join("\n") });
       }
     });
   }
-  return { citations: found, indexRejections };
+  return { citations: found, indexRejections, ownershipRejections };
+}
+
+/** Always emitted by trim CLIs, including when the stricter ownership gate rejects nothing. */
+export function printOwnershipRejections(rejections: OwnershipRejection[]): void {
+  console.log(`ownershipRejections: ${JSON.stringify(rejections)}`);
 }
 
 /**

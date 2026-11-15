@@ -32,7 +32,8 @@ import { MEM_ID_PATTERN, compareMemIds } from "./mem-id.js";
 
 import {
   type DestinationFile,
-  type Citation,
+  type OwnedCitation,
+  type OwnershipRejection,
   type IndexRejection,
   firstCitations,
   extractHook,
@@ -122,11 +123,11 @@ function normalizeCoverageText(text: string): string {
     .replace(/^(?:[-*+]|[0-9]+\.) /u, "");
 }
 
-function checkCoverage(key: string, description: string, destination: string, citation: Citation): ContentCoverage {
+function checkCoverage(key: string, description: string, citation: OwnedCitation): ContentCoverage {
   const body = normalizeCoverageText(description);
   // Empty bodies are not evidence. Never join lines or strip Markdown,
   // punctuation or a trailing citation to manufacture a match.
-  const covered = body.length > 0 && destination.split(/\r\n|[\n\r]/u).some((line) => {
+  const covered = body.length > 0 && citation.sectionText.split(/\r\n|[\n\r]/u).some((line) => {
     const text = normalizeCoverageText(line);
     if (body === text) return true;
     for (const prefix of [`[${key}]`, `${key}:`]) {
@@ -157,6 +158,7 @@ export interface FindCandidatesResult {
   alreadyPointer: number;
   /** Destination lines skipped as index/pointer-shaped, not narrative evidence — surfaced so coverage loss is never silent. */
   indexRejections: IndexRejection[];
+  ownershipRejections: OwnershipRejection[];
   /** Keys with a genuine citation but an unreliable extracted hook — excluded from `candidates`, surfaced so coverage loss is never silent. */
   unreliableHooks: UnreliableHook[];
   /** Additive machine-readable guard report; rejected rows are never candidates. */
@@ -166,7 +168,7 @@ export interface FindCandidatesResult {
 /**
  * Find rows that are NOT yet a pointer and have a genuine single-key
  * citation somewhere in `destinations` and whose complete normalized
- * Description equals a complete normalized line in that citation's file,
+ * Description equals a complete normalized line in that citation's owned section,
  * optionally after removing one leading prefix for this key. Any failure
  * retains the full registry row.
  * Read-only — never mutates
@@ -179,11 +181,10 @@ export function findTrimCandidates(
   registry: string,
   destinations: DestinationFile[]
 ): FindCandidatesResult {
-  const { citations, indexRejections } = firstCitations(destinations);
+  const { citations, indexRejections, ownershipRejections } = firstCitations(destinations);
   const candidates: TrimCandidate[] = [];
   const unreliableHooks: UnreliableHook[] = [];
   const contentCoverage: ContentCoverage[] = [];
-  const destinationText = new Map(destinations.map(({ file, text }) => [file, text]));
   const lines = registry.split("\n");
   const duplicateKeys = findDuplicateKeys(lines);
   let alreadyPointer = 0;
@@ -207,7 +208,7 @@ export function findTrimCandidates(
     const citation = citations.get(key);
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
 
-    const coverage = checkCoverage(key, description, destinationText.get(citation.file) ?? "", citation);
+    const coverage = checkCoverage(key, description, citation);
     contentCoverage.push(coverage);
     if (coverage.status !== "covered") continue;
 
@@ -233,7 +234,7 @@ export function findTrimCandidates(
   }
 
   return { candidates: sortCandidates(candidates), duplicateKeys: sortKeys([...duplicateKeys]),
-    totalDataRows, alreadyPointer, indexRejections, unreliableHooks,
+    totalDataRows, alreadyPointer, indexRejections, ownershipRejections, unreliableHooks,
     contentCoverage: [...contentCoverage].sort((a, b) => compareMemIds(a.key, b.key)) };
 }
 

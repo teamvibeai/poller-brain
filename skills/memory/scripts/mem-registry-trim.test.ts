@@ -1,57 +1,17 @@
 #!/usr/bin/env npx tsx
 /**
- * Fixture-based self-test for the MEM_REGISTRY promoted-row trim logic.
- *
- * Runs the count-verify conditions against string fixtures (no fs):
- *   - findTrimCandidates is read-only and never mutates the registry
- *   - promotion gate: a candidate is proposed only if its key has a
- *     genuine single-key citation in a destination file
- *   - multi-key-line rejection: a line citing 2+ distinct MEM-N keys is
- *     never proposed as evidence for ANY of them UNLESS one of them sits in
- *     leading subject position (poller-brain#334) — a bare compact cluster
- *     (`MEM-93/94/122`) or a line whose leading text isn't a MEM-N tag at
- *     all stays rejected for every key it mentions
- *   - subject-position acceptance (poller-brain#334): a line like
- *     `[MEM-172] ... ([MEM-166])` DOES count as evidence for the leading
- *     key (MEM-172), even though MEM-166 is also mentioned — MEM-166 itself
- *     still gets no evidence from that line, since it isn't the subject
- *   - scan-past-rejection: if a key has no leading-subject citation on the
- *     first line it appears on, but has a genuine single-key (or subject-
- *     position) citation elsewhere, that later citation is still found
- *   - priority-order (DevGuru catch, poller-brain#334 review round 1):
- *     `firstCitations` keeps the FIRST non-ambiguous evidence in scan order,
- *     full stop — it does not prefer a single-key line over a subject-
- *     position line. So when a key has BOTH an earlier subject-position
- *     line (2-key, now newly-qualified by #334) AND a later dedicated
- *     single-key line, resolution now points at the EARLIER subject-
- *     position line, even though pre-#334 code would have resolved to the
- *     later dedicated line (the earlier line used to be skipped outright).
- *     This is the SAME "first found wins" invariant scan-past-rejection
- *     already relies on — not a new rule, just #334 extending which lines
- *     count as non-ambiguous — but it does mean already-correctly-trimming
- *     keys can silently point at different destination text after this
- *     ships. Verified deliberately, not accidentally, below.
- *   - each candidate carries the FULL citing line, not just the hook —
- *     DevGuru's practical note: a reviewer shouldn't have to open the
- *     destination file to judge a proposal
- *   - applyTrimCandidates only rewrites rows for keys explicitly present
- *     in the given candidate list — a row that WAS a valid candidate but
- *     wasn't included in what's passed to applyTrimCandidates is left
- *     completely untouched (this is the propose/apply split itself: a
- *     candidate the caller doesn't pass through is never written)
- *   - idempotence: a row already rewritten to a pointer is never
- *     re-proposed, and a second consecutive full apply is a byte-identical
- *     no-op
- *   - Key/Status/Created columns are never rewritten, only Obsoleted +
- *     Description
- *   - a row never cited anywhere (or only ever cited ambiguously) stays
- *     untouched
- *   - size never grows
+ * Fixture-based self-test for registry proposal, coverage and apply safety.
+ * Keyed destination headings can themselves provide the first citation (#447).
+ * The shared ownership matrix separately exercises sole-subject/index rules,
+ * ambiguous citations, rejected ownership and scan-past-rejection ordering.
+ * Registry-specific checks retain literal coverage, exact selection, duplicate
+ * rejection, idempotence, column preservation and count/size invariants.
  *
  * Run: npx tsx skills/memory/scripts/mem-registry-trim.test.ts
  * Exits non-zero if any assertion fails.
  */
 
+import { runTrimOwnershipTests } from "./test-support/trim-ownership.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -109,7 +69,7 @@ const DESTINATIONS: DestinationFile[] = [
   {
     file: "core/LEARNINGS.md",
     text: [
-      "### NIKDY žádný krok způsobující ztrátu dat",
+      "### NIKDY žádný krok způsobující ztrátu dat [MEM-99]",
       "",
       "- **NIKDY žádný krok způsobující ztrátu dat** — data-loss-step rule text. [MEM-99]",
       "",
@@ -117,17 +77,17 @@ const DESTINATIONS: DestinationFile[] = [
       "",
       "- **bounded-field rule** — cap every new field you add. [MEM-93/94/122]",
       "",
-      "### Correction lesson",
+      "### Correction lesson [MEM-172]",
       "",
       "- **[MEM-172] correction:** the suspicious thing was a false positive ([MEM-166]).",
       "- **[MEM-172] dedicated recap:** the monitoring pipeline is confirmed working end-to-end.",
       "",
-      "### Scan-past-still-needed lesson",
+      "### Scan-past-still-needed lesson [MEM-210]",
       "",
       "- **Investigation notes:** flagged per MEM-210 and MEM-211 jointly, cause still unclear.",
       "- **[MEM-210] confirmed root cause:** isolated and fixed.",
       "",
-      "### Priority-order check (earlier subject-position line vs later dedicated line)",
+      "### Priority-order check (earlier subject-position line vs later dedicated line) [MEM-230]",
       "",
       "- **[MEM-230] shared context:** touches on MEM-231 in passing, but MEM-230 is the subject.",
       "- **[MEM-230] dedicated recap:** a later, fully single-key restatement of the same lesson.",
@@ -136,7 +96,7 @@ const DESTINATIONS: DestinationFile[] = [
       "",
       "- [MEM-240] [MEM-241] [MEM-242] — three co-equal subjects mentioned together, none is the sole subject.",
       "",
-      "### Run-of-tags dedicated recap (only reachable via scan-past)",
+      "### Run-of-tags dedicated recap (only reachable via scan-past) [MEM-240]",
       "",
       "- **[MEM-240] dedicated:** own single-key line, found via scan-past.",
       "",
@@ -144,14 +104,14 @@ const DESTINATIONS: DestinationFile[] = [
       "",
       "- [MEM-250] [[iam-quota-strategy]] · [MEM-251] (this mechanism) · [[poller-error-reporting]]",
       "",
-      "### Wikilink dedicated recap (only reachable via scan-past, since the wikilink line is index-shaped)",
+      "### Wikilink dedicated recap (only reachable via scan-past, since the wikilink line is index-shaped) [MEM-250]",
       "",
       "- **[MEM-250] dedicated:** own single-key line, found via scan-past past the wikilink line.",
-      // Citation-selection fixtures preserve each complete entry on its own line.
-      ...REGISTRY.split("\n").filter((line) =>
-        /^\| MEM-(?:99|172|210|230|240|250) \|/.test(line))
-        .map((line) => line.split("|").slice(5, -1).join("|").trim()),
-    ].join("\n"),
+    ].map((line, idx, lines) => {
+      const key = lines[idx - 1]?.match(/\[(MEM-\d+)\]$/)?.[1];
+      const row = key && REGISTRY.split("\n").find((row) => row.startsWith(`| ${key} |`));
+      return line === "" && row ? row.split("|")[5].trim() : line;
+    }).join("\n"),
   },
 ];
 
@@ -170,7 +130,7 @@ assert(
 );
 
 const mem99 = found.candidates.find((c) => c.key === "MEM-99")!;
-assert(mem99.file === "core/LEARNINGS.md" && mem99.line === 3, "MEM-99 candidate points at the right file:line");
+assert(mem99.file === "core/LEARNINGS.md" && mem99.line === 1, "MEM-99 candidate points at the right file:line");
 assert(
   mem99.lineText.includes("NIKDY žádný krok způsobující ztrátu dat"),
   "MEM-99 candidate carries the FULL citing line, not just the hook — reviewer shouldn't need to open the destination file"
@@ -182,31 +142,24 @@ assert(
 
 const mem172 = found.candidates.find((c) => c.key === "MEM-172")!;
 assert(
-  mem172.line === 11 && mem172.lineText.includes("correction"),
-  "MEM-172 candidate uses the FIRST line it's the subject of (line 11), even though that line also mentions MEM-166 — subject-position acceptance (poller-brain#334)"
+  mem172.line === 9 && mem172.lineText.includes("Correction"),
+  "MEM-172 points to its owned heading before the body citation"
 );
 assert(mem172.hook === "Correction lesson", "MEM-172 hook extracted from its governing heading");
 
 const mem210 = found.candidates.find((c) => c.key === "MEM-210")!;
 assert(
-  mem210.line === 17 && mem210.lineText.includes("confirmed root cause"),
-  "MEM-210 candidate uses its OWN dedicated single-key line (line 17), not the earlier ambiguous no-subject line (line 16) — scan-past-rejection still works alongside subject-position"
+  mem210.line === 14 && mem210.lineText.includes("Scan-past"),
+  "MEM-210 points to its owned heading"
 );
 assert(mem210.hook === "Scan-past-still-needed lesson", "MEM-210 hook extracted from its governing heading");
 
-// DevGuru catch (poller-brain#334 review round 1): MEM-230 has BOTH an
-// earlier 2-key subject-position line (line 21, newly-qualified by #334)
-// AND a later dedicated single-key line (line 22). `firstCitations` keeps
-// the FIRST non-ambiguous evidence in scan order — so resolution now points
-// at the EARLIER subject-position line, not the later dedicated one. Before
-// #334, the earlier line was skipped outright (2 keys, no subject-position
-// concept existed), so the later dedicated line would have won instead —
-// this selection change for an already-correctly-trimming key is real,
-// verified here deliberately rather than left as a silent side effect.
+// The first eligible citation is now the owned heading; subject-line priority
+// is exercised independently in test-support/trim-ownership.ts.
 const mem230 = found.candidates.find((c) => c.key === "MEM-230")!;
 assert(
-  mem230.line === 21 && mem230.lineText.includes("shared context"),
-  "MEM-230 candidate uses the EARLIER subject-position line (line 21), superseding the LATER dedicated single-key line (line 22) — priority-order is 'first found in scan order', not 'prefer single-key over subject-position' (DevGuru, poller-brain#334)"
+  mem230.line === 19 && mem230.lineText.includes("Priority-order"),
+  "MEM-230 points to the first eligible citation, its owned heading"
 );
 assert(mem230.hook === "Priority-order check (earlier subject-position line vs later dedicated line)", "MEM-230 hook extracted from its governing heading");
 
@@ -222,8 +175,8 @@ assert(mem230.hook === "Priority-order check (earlier subject-position line vs l
 // a run AND its own dedicated line elsewhere is still found via scan-past.
 const mem240 = found.candidates.find((c) => c.key === "MEM-240")!;
 assert(
-  mem240.line === 30 && mem240.lineText.includes("dedicated"),
-  "MEM-240 candidate uses its OWN dedicated single-key line (line 30), NOT the earlier leading-run-of-3-tags line (line 26) — the run stays ambiguous, scan-past still works (DevGuru, poller-brain#334 blocking 1)"
+  mem240.line === 28 && mem240.lineText.includes("dedicated"),
+  "MEM-240 skips the earlier ambiguous tag run and points to its owned heading"
 );
 assert(mem240.hook === "Run-of-tags dedicated recap (only reachable via scan-past)", "MEM-240 hook extracted from its governing heading");
 assert(
@@ -240,8 +193,8 @@ assert(
 // is still found via its own dedicated line elsewhere (scan-past).
 const mem250 = found.candidates.find((c) => c.key === "MEM-250")!;
 assert(
-  mem250.line === 38 && mem250.lineText.includes("dedicated"),
-  "MEM-250 candidate uses its OWN dedicated single-key line (line 38), NOT the earlier wikilink cross-ref line (line 34, index-shaped) — scan-past still works past a wikilink line (DevGuru, poller-brain#334 to-fix 2)"
+  mem250.line === 36 && mem250.lineText.includes("dedicated"),
+  "MEM-250 skips the earlier index line and points to its owned heading"
 );
 assert(
   found.indexRejections.some((r) => r.key === "MEM-250" && r.line === 34 && r.lineText.includes("iam-quota-strategy")),
@@ -304,40 +257,40 @@ assert(
 );
 // Pointer rows carry file:line in Obsoleted, "see file — hook" in Description.
 assert(
-  /\| MEM-99 \| ACTIVE \| 2026-07-28 \| core\/LEARNINGS\.md:3 \| see core\/LEARNINGS\.md — NIKDY žádný krok způsobující ztrátu dat \|/.test(
+  /\| MEM-99 \| ACTIVE \| 2026-07-28 \| core\/LEARNINGS\.md:1 \| see core\/LEARNINGS\.md — NIKDY žádný krok způsobující ztrátu dat \|/.test(
     r1.registry
   ),
   "MEM-99 rewritten to a pointer with correct file:line and hook"
 );
 assert(
-  /\| MEM-172 \| ACTIVE \| 2026-07-30 \| core\/LEARNINGS\.md:11 \| see core\/LEARNINGS\.md — Correction lesson \|/.test(
+  /\| MEM-172 \| ACTIVE \| 2026-07-30 \| core\/LEARNINGS\.md:9 \| see core\/LEARNINGS\.md — Correction lesson \|/.test(
     r1.registry
   ),
-  "MEM-172 trimmed using its subject-position line (line 11), the first line it's the subject of"
+  "MEM-172 trimmed using its owned heading at line 9"
 );
 assert(
-  /\| MEM-210 \| ACTIVE \| 2026-08-19 \| core\/LEARNINGS\.md:17 \| see core\/LEARNINGS\.md — Scan-past-still-needed lesson \|/.test(
+  /\| MEM-210 \| ACTIVE \| 2026-08-19 \| core\/LEARNINGS\.md:14 \| see core\/LEARNINGS\.md — Scan-past-still-needed lesson \|/.test(
     r1.registry
   ),
-  "MEM-210 trimmed using its OWN dedicated single-key line (line 17), found via scan-past-rejection"
+  "MEM-210 trimmed using its owned heading at line 14"
 );
 assert(
-  /\| MEM-230 \| ACTIVE \| 2026-08-20 \| core\/LEARNINGS\.md:21 \| see core\/LEARNINGS\.md — Priority-order check \(earlier subject-position line vs later dedicated line\) \|/.test(
+  /\| MEM-230 \| ACTIVE \| 2026-08-20 \| core\/LEARNINGS\.md:19 \| see core\/LEARNINGS\.md — Priority-order check \(earlier subject-position line vs later dedicated line\) \|/.test(
     r1.registry
   ),
-  "MEM-230 trimmed using its EARLIER subject-position line (line 21), not the later dedicated line (line 22) — priority-order (DevGuru, poller-brain#334)"
+  "MEM-230 trimmed using its owned heading at line 19"
 );
 assert(
-  /\| MEM-240 \| ACTIVE \| 2026-08-20 \| core\/LEARNINGS\.md:30 \| see core\/LEARNINGS\.md — Run-of-tags dedicated recap \(only reachable via scan-past\) \|/.test(
+  /\| MEM-240 \| ACTIVE \| 2026-08-20 \| core\/LEARNINGS\.md:28 \| see core\/LEARNINGS\.md — Run-of-tags dedicated recap \(only reachable via scan-past\) \|/.test(
     r1.registry
   ),
-  "MEM-240 trimmed using its dedicated line (line 30), found via scan-past past the ambiguous leading-run-of-tags line"
+  "MEM-240 trimmed using its owned heading after the ambiguous tag run"
 );
 assert(
-  /\| MEM-250 \| ACTIVE \| 2026-08-20 \| core\/LEARNINGS\.md:38 \| see core\/LEARNINGS\.md — Wikilink dedicated recap \(only reachable via scan-past, since the wikilink line is index-shaped\) \|/.test(
+  /\| MEM-250 \| ACTIVE \| 2026-08-20 \| core\/LEARNINGS\.md:36 \| see core\/LEARNINGS\.md — Wikilink dedicated recap \(only reachable via scan-past, since the wikilink line is index-shaped\) \|/.test(
     r1.registry
   ),
-  "MEM-250 trimmed using its dedicated line (line 38), found via scan-past past the wikilink cross-ref line"
+  "MEM-250 trimmed using its owned heading after the index line"
 );
 // Key/Status/Created are byte-identical — only Obsoleted+Description change.
 assert(/\| MEM-99 \| ACTIVE \| 2026-07-28 \|/.test(r1.registry), "MEM-99 Key/Status/Created untouched");
@@ -447,7 +400,7 @@ assert(
 // against real data — label bolds (`**How to apply:**`), then orphaned
 // `**` markers, mid-sentence fragments, and bare citation parentheses. A
 // heading is trustworthy by construction (it's the entry's own title) or
-// it's absent, in which case the key is excluded via `unreliableHooks`
+// it's absent, in which case the key is excluded via `ownershipRejections`
 // rather than guessed at from prose.
 const HOOK_REGISTRY = `# MEM Registry
 
@@ -455,13 +408,13 @@ const HOOK_REGISTRY = `# MEM Registry
 |-----|--------|---------|-----------|-------------|
 | MEM-501 | ACTIVE | 2026-08-12 | — | Rule/Why/How-to-apply block, blank-line-separated from its heading — must still resolve to the heading, not "How to apply:" |
 | MEM-502 | ACTIVE | 2026-08-12 | — | no heading anywhere above it in its destination file — must be excluded, not proposed with a garbage hook |
-| MEM-503 | ACTIVE | 2026-08-12 | — | unrelated paragraph inside MEM-501's heading section, no heading of its own — inherits that heading (accepted trade-off: imprecise, never garbage) |
+| MEM-503 | ACTIVE | 2026-08-12 | — | unrelated paragraph inside MEM-501's heading section — foreign ownership must be rejected |
 `;
 const HOOK_DESTINATIONS: DestinationFile[] = [
   {
     file: "semantic/hook-shapes.md",
     text: [
-      "### Tag PR author at review end",
+      "### Tag PR author at review end [MEM-501]",
       "",
       "**Rule:** always tag the PR author when review concludes.",
       "",
@@ -493,8 +446,8 @@ assert(
 
 const mem503 = hookFound.candidates.find((c) => c.key === "MEM-503");
 assert(
-  mem503?.hook === "Tag PR author at review end",
-  "MEM-503 (unrelated paragraph, no heading of its own) inherits the nearest heading above it — accepted trade-off, never garbage"
+  mem503 === undefined && hookFound.ownershipRejections.some((r) => r.key === "MEM-503" && r.reason === "foreign-key"),
+  "MEM-503 under MEM-501's heading is rejected as foreign ownership"
 );
 
 assert(
@@ -502,10 +455,8 @@ assert(
   "MEM-502 (no heading anywhere in its file) is NOT proposed — no fallback to prose"
 );
 assert(
-  hookFound.unreliableHooks.length === 1 &&
-    hookFound.unreliableHooks[0].key === "MEM-502" &&
-    hookFound.unreliableHooks[0].hook === "(no governing heading)",
-  "MEM-502's exclusion is reported via unreliableHooks (not silently dropped)"
+  hookFound.ownershipRejections.some((r) => r.key === "MEM-502" && r.reason === "missing-heading"),
+  "MEM-502's missing-heading exclusion is reported"
 );
 
 // isReliableHook: each check below traces to a real garbage hook DevGuru
@@ -533,10 +484,10 @@ const DATED_B = "MEM-2026-11-07-203001-aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
 const mixedRegistry = [DATED_B, "MEM-12", DATED_A].map((key) =>
   `| ${key} | ACTIVE | 2026-11-07 | — | ${"Full narrative retained until explicitly approved. ".repeat(12)} |`).join("\n");
 const mixedDest = [{ file: "semantic/mixed.md", text: [
-  `### [${DATED_A}] Keep dated identities intact [${DATED_A}:obsolete]`,
-  `Full condensed narrative for the first memo. [${DATED_A}]`,
+  `### [${DATED_A}] Keep dated identities intact [${DATED_A}]`,
+  "Full narrative retained until explicitly approved. ".repeat(12),
   `### Preserve the second memo separately [${DATED_B}]`,
-  `Full condensed narrative for the second memo. [${DATED_B}]`,
+  "Full narrative retained until explicitly approved. ".repeat(12),
   "### Preserve the existing legacy memo [MEM-12]",
   "Full condensed narrative for the legacy memo. [MEM-12]",
   "Full narrative retained until explicitly approved. ".repeat(12),
@@ -544,7 +495,7 @@ const mixedDest = [{ file: "semantic/mixed.md", text: [
 const mixedFound = findTrimCandidates(mixedRegistry, mixedDest);
 assert(mixedFound.totalDataRows === 3, "registry parser counts mixed formats");
 assert(mixedFound.candidates.map((c) => c.key).join(",") === ["MEM-12", DATED_A, DATED_B].join(","), "dated candidates remain distinct and sorted");
-assert(mixedFound.candidates.find((c) => c.key === DATED_A)?.hook === "Keep dated identities intact", "dated leading/trailing lifecycle tags strip completely");
+assert(mixedFound.candidates.find((c) => c.key === DATED_A)?.hook === "Keep dated identities intact", "dated leading/trailing tags strip completely");
 const mixedApplied = applyTrimCandidates(mixedRegistry, mixedFound.candidates.filter((c) => c.key === DATED_B));
 assert(mixedApplied.stats.trimmedKeys.join(",") === DATED_B, "exact dated key selects one rewrite");
 assert(mixedApplied.registry.includes(`| ${DATED_A} | ACTIVE | 2026-11-07 | — | Full narrative`), "unselected same-year dated row stays untouched");
@@ -572,10 +523,10 @@ const coverageRegistry = [
   "| MEM-603 | ACTIVE | 2026-11-12 | — | Always preserve the original facts before condensing the prose. |",
 ].join("\n");
 const coverageDestinations: DestinationFile[] = [
-  { file: "semantic/equal.md", text: "### Preserve complete entries\n[MEM-609] Preserve this complete entry before trimming the registry. Preserve every URL, filename, amount and identifier exactly as written." },
-  { file: "semantic/missing.md", text: "### Official question procedure\nThe procedure is documented here. [MEM-601]" },
-  { file: "semantic/covered.md", text: "### Official question procedure\nRead https://example.org/Questions2017 and questions.xlsx before answering. [MEM-602]" },
-  { file: "semantic/plain.md", text: "### Preserve original facts\nPreserve the facts before condensing. [MEM-603]" },
+  { file: "semantic/equal.md", text: "### Preserve complete entries [MEM-609]\n[MEM-609] Preserve this complete entry before trimming the registry. Preserve every URL, filename, amount and identifier exactly as written." },
+  { file: "semantic/missing.md", text: "### Official question procedure [MEM-601]\nThe procedure is documented here. [MEM-601]" },
+  { file: "semantic/covered.md", text: "### Official question procedure [MEM-602]\nRead https://example.org/Questions2017 and questions.xlsx before answering. [MEM-602]" },
+  { file: "semantic/plain.md", text: "### Preserve original facts [MEM-603]\nPreserve the facts before condensing. [MEM-603]" },
 ];
 const coverageFound = findTrimCandidates(coverageRegistry, coverageDestinations);
 assert(!coverageFound.candidates.some((c) => c.key === "MEM-601"), "#505: missing URL/filename rejects the row instead of proposing a pointer");
@@ -598,7 +549,7 @@ assert(noTokens?.status === "rejected" && noTokens.tokens.length === 0 && noToke
 function inspectCoverage(description: string, destination: string) {
   return findTrimCandidates(`| MEM-604 | ACTIVE | 2026-11-12 | — | ${description} |`, [{
     file: "semantic/details.md",
-    text: `### Verified literal content coverage\nCondensed lesson. [MEM-604]\n${destination}`,
+    text: `### Verified literal content coverage [MEM-604]\nCondensed lesson. [MEM-604]\n${destination}`,
   }]).contentCoverage[0];
 }
 
@@ -606,7 +557,7 @@ function inspectCoverage(description: string, destination: string) {
 const escapedPipeBody = String.raw`Preserve this escaped trailing pipe \|`;
 const escapedPipeDestinations = [{
   file: "semantic/escaped-pipe.md",
-  text: `### Preserve literal pipe content\n[MEM-610] ${escapedPipeBody.slice(0, -1)}`,
+  text: `### Preserve literal pipe content [MEM-610]\n[MEM-610] ${escapedPipeBody.slice(0, -1)}`,
 }];
 for (const suffix of ["", " ", "\r"]) {
   const registry = `| MEM-610 | ACTIVE | 2026-11-12 | — | ${escapedPipeBody}${suffix}`;
@@ -626,7 +577,7 @@ assert(inspectCoverage("Ambiguous | extra cell", "Ambiguous | extra cell").statu
   "#505 escaped pipe: extra unescaped cell delimiters fail closed");
 const malformedPipeRegistry = `| MEM-610 | ACTIVE | 2026-11-12 | — | ${escapedPipeBody}`;
 const validPipeCandidates = findTrimCandidates(`${malformedPipeRegistry} |`, [{
-  file: "semantic/escaped-pipe.md", text: `### Preserve literal pipe content\n[MEM-610] ${escapedPipeBody}`,
+  file: "semantic/escaped-pipe.md", text: `### Preserve literal pipe content [MEM-610]\n[MEM-610] ${escapedPipeBody}`,
 }]).candidates;
 assert(validPipeCandidates.length === 1, "#505 escaped pipe: an intact escaped trailing pipe can be covered");
 assert(applyTrimCandidates(malformedPipeRegistry, validPipeCandidates).registry === malformedPipeRegistry,
@@ -639,7 +590,7 @@ const duplicateRejectedRow = "| MEM-611 | ACTIVE | 2026-11-12 | — | Unpromoted
 const duplicateUniqueRow = `| MEM-612 | ACTIVE | 2026-11-12 | — | ${duplicateBody} |`;
 const duplicateDestinations = [{
   file: "semantic/duplicates.md",
-  text: `### Preserve complete registry entries\n[MEM-611] ${duplicateBody}\n[MEM-612] ${duplicateBody}`,
+  text: `### Preserve complete registry entries [MEM-611]\n[MEM-611] ${duplicateBody}\n### Preserve complete registry entries [MEM-612]\n[MEM-612] ${duplicateBody}`,
 }];
 const staleDuplicateCandidate = findTrimCandidates(duplicateCoveredRow, duplicateDestinations).candidates;
 assert(staleDuplicateCandidate.length === 1, "#505 duplicate key: the isolated covered row is eligible");
@@ -691,7 +642,7 @@ assert(inspectCoverage("API", "API/h; (API)\nAPI").status === "covered", "#505: 
 assert(inspectCoverage("API", "Prefix API suffix").status === "rejected", "#505: extra prose prevents whole-line equality");
 assert(inspectCoverage("API", "Unrelated\rAPI\r\nOther").status === "covered", "#505: CR and CRLF separate destination lines");
 const datedPrefixCoverage = findTrimCandidates(`| ${DATED_A} | ACTIVE | 2026-11-12 | — | Preserve this dated entry. |`, [{
-  file: "semantic/dated-prefix.md", text: `### Preserve dated entries\n[${DATED_A}] Preserve this dated entry.`,
+  file: "semantic/dated-prefix.md", text: `### Preserve dated entries [${DATED_A}]\n[${DATED_A}] Preserve this dated entry.`,
 }]);
 assert(datedPrefixCoverage.contentCoverage[0]?.status === "covered", "#505: a complete dated key prefix folds");
 const richDescription = "Read [source](https://example.org/Case_(2017)?q=Yes). Keep src/parser.ts, C:\\data\\facts.csv, /tmp, questions.xlsx, .xls, .xlsx, `parseRecord`, `queue   Job`, 2015, 1.25, 42ms, 2 GB, BIFF and TASK_ID-7. Keep small counts 12 and 7.";
@@ -964,7 +915,7 @@ for (const [group, label, source, destination, forward, reverse = forward] of co
   for (const [description, target, expected] of [[source, destination, forward], [destination, source, reverse]] as const) {
     const before = failed;
     const report = findTrimCandidates(`| MEM-604 | ACTIVE | 2026-11-12 | — | ${description} |`, [{
-      file: "semantic/details.md", text: `### Verified literal content coverage\nCondensed lesson. [MEM-604]\n${target}`,
+      file: "semantic/details.md", text: `### Verified literal content coverage [MEM-604]\nCondensed lesson. [MEM-604]\n${target}`,
     }]);
     const coverage = report.contentCoverage[0];
     assert(coverage.status === expected, `#505 table ${group}: ${label}: ${JSON.stringify(description)} -> ${JSON.stringify(target)} expected ${expected}; got ${JSON.stringify(coverage)}`);
@@ -1094,7 +1045,7 @@ try {
   const untouchedRow = "| MEM-609 | ACTIVE | 2026-11-12 | Unpromoted content stays verbatim. |";
   const mixed = `${written}${fiveRow}\n${untouchedRow}\n`;
   const destinations = [{ file: "semantic/lesson.md", text:
-    `### Preserve the complete promoted lesson\n[${writerKey}] ${body}\n[MEM-608] ${body}` }];
+    `### Preserve the complete promoted lesson [${writerKey}]\n[${writerKey}] ${body}\n### Preserve the complete promoted lesson [MEM-608]\n[MEM-608] ${body}` }];
   const found = findTrimCandidates(mixed, destinations);
   assert(found.candidates.length === 2 && found.contentCoverage.every((item) => item.status === "covered"),
     "#608 mixed: literal copies of both four/five-column descriptions are covered");
@@ -1112,7 +1063,7 @@ try {
     "#608 pointers: reapplying stale approvals is byte-identical");
   for (const description of [String.raw`Preserve an embedded \| pipe`, String.raw`Preserve odd escapes \\\|`]) {
     const row = `| MEM-610 | ACTIVE | 2026-11-13 | ${description} |`;
-    const destination = [{ file: "semantic/pipes.md", text: `### Preserve literal pipe content\n[MEM-610] ${description}` }];
+    const destination = [{ file: "semantic/pipes.md", text: `### Preserve literal pipe content [MEM-610]\n[MEM-610] ${description}` }];
     assert(findTrimCandidates(row, destination).candidates.length === 1,
       "#608 four-column coverage: escaped pipes and backslashes remain literal content");
     assert(findTrimCandidates(row, [{ ...destination[0], text: destination[0].text.replace(/\\/g, "") }]).candidates.length === 0,
@@ -1123,7 +1074,7 @@ try {
     `| MEM-610 | ACTIVE | 2026-11-13 | extra | extra | ${body} |`,
     `| MEM-610 | ACTIVE | 2026-11-13 | ${body}`,
   ]) {
-    const report = findTrimCandidates(malformed, [{ file: "semantic/lesson.md", text: `### Preserve the complete promoted lesson\n[MEM-610] ${body}` }]);
+    const report = findTrimCandidates(malformed, [{ file: "semantic/lesson.md", text: `### Preserve the complete promoted lesson [MEM-610]\n[MEM-610] ${body}` }]);
     assert(report.candidates.length === 0 && report.contentCoverage[0]?.status === "rejected",
       "#608 malformed: other column counts and missing closing delimiters fail closed");
     assert(applyTrimCandidates(malformed, [{ ...found.candidates[0], key: "MEM-610" }]).registry === malformed,
@@ -1140,6 +1091,8 @@ try {
 } finally {
   fs.rmSync(writerRoot, { recursive: true, force: true });
 }
+
+runTrimOwnershipTests("registry", assert);
 
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

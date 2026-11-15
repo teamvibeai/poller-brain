@@ -42,6 +42,7 @@
  *   npx tsx mem-learnings-trim.ts --apply --only MEM-25@67    # apply MEM-25's candidate at entryStartLine 67 specifically
  */
 
+import { printOwnershipRejections } from "./lib/citation-detect.js";
 import { MEM_ID_PATTERN } from "./lib/mem-id.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -248,7 +249,7 @@ function main(): void {
     throw new Error("Cannot preserve source bytes: LEARNINGS.md is not valid UTF-8. Aborting, no write performed.");
   }
   const destinations = collectDestinations();
-  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, unreliableHooks, skippedEntries } =
+  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, ownershipRejections, unreliableHooks, skippedEntries } =
     findLearningsTrimCandidates(learningsBefore, destinations);
 
   for (const entry of skippedEntries) {
@@ -257,6 +258,7 @@ function main(): void {
 
   if (!apply) {
     printParseSummary({ totalEntries, multiKeyEntries, alreadyPointer, candidates });
+    printOwnershipRejections(ownershipRejections);
     printIndexRejections(indexRejections);
     printUnreliableHooks(unreliableHooks);
 

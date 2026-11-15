@@ -58,6 +58,7 @@
  * Exits non-zero if any assertion fails.
  */
 
+import { runTrimOwnershipTests } from "./test-support/trim-ownership.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -103,7 +104,7 @@ const BULLET_DESTINATIONS: DestinationFile[] = [
   {
     file: "semantic/topic.md",
     text: [
-      "### NIKDY žádný krok způsobující ztrátu dat",
+      "### NIKDY žádný krok způsobující ztrátu dat [MEM-99]",
       "",
       "- **NIKDY žádný krok způsobující ztrátu dat** — full incident writeup. [MEM-99]",
       "",
@@ -111,7 +112,7 @@ const BULLET_DESTINATIONS: DestinationFile[] = [
       "",
       "- **bounded-field rule** — sibling family listed for cleanup. [MEM-93][MEM-94][MEM-122]",
       "",
-      "### Correction lesson",
+      "### Correction lesson [MEM-172]",
       "",
       "- **[MEM-172] correction:** the suspicious thing was a false positive ([MEM-166]).",
       "- **[MEM-172] dedicated recap:** the monitoring pipeline is confirmed working end-to-end.",
@@ -139,9 +140,9 @@ assert(
   bulletMem99.entryStartLine === 3 && bulletMem99.entryEndLine === 3,
   "bullet: MEM-99 candidate points at the right single-line LEARNINGS.md entry span"
 );
-assert(bulletMem99.file === "semantic/topic.md" && bulletMem99.line === 3, "bullet: MEM-99 candidate points at the right destination file:line");
+assert(bulletMem99.file === "semantic/topic.md" && bulletMem99.line === 1, "bullet: MEM-99 candidate points at the right destination file:line");
 assert(
-  bulletMem99.lineText.includes("full incident writeup"),
+  bulletMem99.lineText.includes("[MEM-99]"),
   "bullet: MEM-99 candidate carries the FULL citing line, not just the hook"
 );
 assert(
@@ -151,8 +152,8 @@ assert(
 
 const bulletMem172 = bulletFound.candidates.find((c) => c.key === "MEM-172")!;
 assert(
-  bulletMem172.entryStartLine === 5 && bulletMem172.line === 11 && bulletMem172.lineText.includes("correction"),
-  "bullet: MEM-172 candidate uses the FIRST line it's the subject of (line 11), even though that line also mentions MEM-166 — subject-position acceptance (poller-brain#334; scan-past-rejection for the no-subject-tag case is covered in mem-registry-trim.test.ts, same shared citation-detect.ts)"
+  bulletMem172.entryStartLine === 5 && bulletMem172.line === 9 && bulletMem172.lineText.includes("Correction"),
+  "bullet: MEM-172 points at its owned heading before any body citations"
 );
 assert(bulletMem172.hook === "Correction lesson", "bullet: MEM-172 hook extracted from its governing heading");
 
@@ -173,12 +174,12 @@ const bulletR1 = applyLearningsTrimCandidates(BULLET_LEARNINGS, bulletFound.cand
 verifyLearningsTrimStats(bulletR1.stats);
 assert(bulletR1.stats.trimmedEntries === 2, "bullet: both proposed candidates applied when both are approved");
 assert(
-  bulletR1.learnings.includes("- [MEM-99] → see semantic/topic.md:3 — NIKDY žádný krok způsobující ztrátu dat (Source: Jakub, 2026-07-28)"),
+  bulletR1.learnings.includes("- [MEM-99] → see semantic/topic.md:1 — NIKDY žádný krok způsobující ztrátu dat (Source: Jakub, 2026-07-28)"),
   "bullet: MEM-99 entry rewritten to a `-` pointer with correct file:line, hook, and preserved provenance"
 );
 assert(
-  bulletR1.learnings.includes("- [MEM-172] → see semantic/topic.md:11 — Correction lesson (Source: X)"),
-  "bullet: MEM-172 entry trimmed using its subject-position destination line (line 11), provenance preserved"
+  bulletR1.learnings.includes("- [MEM-172] → see semantic/topic.md:9 — Correction lesson (Source: X)"),
+  "bullet: MEM-172 entry trimmed using its owned heading, provenance preserved"
 );
 assert(
   bulletR1.learnings.includes("**Bounded-field rule** — cap every new field you add. (Source: DevGuru, [MEM-93][MEM-94][MEM-122])"),
@@ -240,7 +241,7 @@ const HEADING_DESTINATIONS: DestinationFile[] = [
   {
     file: "semantic/topic.md",
     text: [
-      "### CI green discipline",
+      "### CI green discipline [MEM-163]",
       "",
       "- **CI green discipline** — full incident writeup, PR#254 postmortem. [MEM-163]",
       "",
@@ -276,7 +277,7 @@ const headingR1 = applyLearningsTrimCandidates(HEADING_LEARNINGS, headingFound.c
 verifyLearningsTrimStats(headingR1.stats);
 assert(headingR1.stats.trimmedEntries === 1, "heading: exactly one entry trimmed");
 assert(
-  headingR1.learnings.includes("### [MEM-163] → see semantic/topic.md:3 — CI green discipline (Source: Jakub, 2026-07-29)"),
+  headingR1.learnings.includes("### [MEM-163] → see semantic/topic.md:1 — CI green discipline (Source: Jakub, 2026-07-29)"),
   "heading: entry rewritten to a `###` pointer (matching its own entry format), with provenance preserved"
 );
 assert(
@@ -448,18 +449,9 @@ const MULTIKEY_HEADING_DESTINATIONS: DestinationFile[] = [
 ];
 
 const multikeyFound = findLearningsTrimCandidates(MULTIKEY_HEADING_LEARNINGS, MULTIKEY_HEADING_DESTINATIONS);
-assert(
-  multikeyFound.candidates.length === 1 && multikeyFound.candidates[0].key === "MEM-213",
-  "multi-key heading: MEM-213 is still proposed despite its governing heading also tagging MEM-214"
-);
-assert(
-  !multikeyFound.candidates[0].hook.includes("MEM-214") && !multikeyFound.candidates[0].hook.includes("MEM-213"),
-  "multi-key heading: extracted hook has BOTH the foreign key (MEM-214) and the redundant self-citation (MEM-213) stripped"
-);
-assert(
-  multikeyFound.candidates[0].hook === "Slack reactions are per-adding-user, not shared",
-  "multi-key heading: stripped hook keeps the descriptive prose intact"
-);
+assert(multikeyFound.candidates.length === 0, "multi-key heading: shared ownership is not proposed");
+assert(multikeyFound.ownershipRejections.some((r) => r.key === "MEM-213" && r.reason === "multi-key"),
+  "multi-key heading: ambiguity is reported with the rejected key");
 
 const multikeyR1 = applyLearningsTrimCandidates(MULTIKEY_HEADING_LEARNINGS, multikeyFound.candidates);
 verifyLearningsTrimStats(multikeyR1.stats); // must NOT throw — this is the exact pb#343 abort reproduction
@@ -537,14 +529,8 @@ assert(
   embeddedFound.candidates.length === 0,
   "embedded mid-heading key: MEM-500's governing heading cites a DIFFERENT key (MEM-47) mid-sentence, not a safe tag position — MEM-500 is NOT proposed"
 );
-assert(
-  embeddedFound.unreliableHooks.length === 1 && embeddedFound.unreliableHooks[0].key === "MEM-500",
-  "embedded mid-heading key: MEM-500 is routed to unreliableHooks instead of silently dropped"
-);
-assert(
-  embeddedFound.unreliableHooks[0].hook.includes("MEM-47"),
-  'embedded mid-heading key: the reported hook shows the real heading text (foreign MEM-47 visible), not a false "(no governing heading)" label'
-);
+assert(embeddedFound.ownershipRejections.some((r) => r.key === "MEM-500" && r.reason === "foreign-key" && r.heading?.includes("MEM-47")),
+  "embedded foreign heading: report the key, reason and real heading");
 
 // --- poller-brain#343 round 2 (DevGuru catch): a heading-wide punctuation
 // cleanup pass must never touch text that has nothing to do with the
@@ -740,7 +726,7 @@ const mixedLearnings = [
 const mixedPointers = findLearningsTrimCandidates(mixedLearnings, []);
 assert(mixedPointers.alreadyPointer === 3, "LEARNINGS recognises legacy and dated pointers in both formats");
 const datedLearning = `- **Important dated lesson** — ${"Original detail worth preserving. ".repeat(12)} (Source: incident, [${DATED_A}])\n`;
-const datedDest = [{ file: "semantic/lesson.md", text: `### Stable dated lesson heading\nCondensed lesson [${DATED_A}]` }];
+const datedDest = [{ file: "semantic/lesson.md", text: `### Stable dated lesson heading [${DATED_A}]\nCondensed lesson [${DATED_A}]` }];
 const datedFound = findLearningsTrimCandidates(datedLearning, datedDest);
 assert(datedFound.candidates[0]?.key === DATED_A, "LEARNINGS extracts the whole dated identity");
 const datedApplied = applyLearningsTrimCandidates(datedLearning, datedFound.candidates);
@@ -811,7 +797,7 @@ Sibling narrative survives unchanged.
 `;
 const H2_DESTINATIONS: DestinationFile[] = [{
   file: "semantic/topic.md",
-  text: "### Complete promoted incident lesson\nEvidence [MEM-25]\nEvidence [MEM-26]\nEvidence [MEM-99]\nEvidence [MEM-143]",
+  text: [25, 26, 99, 143].map((n) => `### Complete promoted incident lesson [MEM-${n}]\nEvidence [MEM-${n}]`).join("\n"),
 }];
 const h2Found = findLearningsTrimCandidates(MIXED_H2_LEARNINGS, H2_DESTINATIONS);
 assert(h2Found.totalEntries === 3, "h2: parent block, sibling and top-level bullet are the only entries");
@@ -832,7 +818,7 @@ try {
   fs.mkdirSync(path.join(feedbackRoot, "memory/semantic"));
   fs.writeFileSync(path.join(feedbackRoot, "CLAUDE.md"), "fixture");
   const source = path.join(feedbackRoot, "memory/core/LEARNINGS.md");
-  const destinations = [{ file: "semantic/lesson.md", text: "### Complete promoted lesson\nFull incident evidence [MEM-19]" }];
+  const destinations = [{ file: "semantic/lesson.md", text: "### Complete promoted lesson [MEM-19]\nFull incident evidence [MEM-19]" }];
   fs.writeFileSync(path.join(feedbackRoot, "memory/semantic/lesson.md"), destinations[0].text);
   for (const preceding of ["", "## Earlier entry\n\n- [MEM-18] Untouched earlier detail.\n\n"]) {
     for (const blank of ["", "\n"]) {
@@ -849,7 +835,7 @@ try {
         if (cli.status !== 0) continue;
         const after = fs.readFileSync(source, "utf8");
         assert(after.startsWith(preceding) && after.endsWith(suffix), `${label}: surrounding bytes survive`);
-        assert(after === `${preceding}## [MEM-19] → see semantic/lesson.md:2 — Complete promoted lesson${suffix}`,
+        assert(after === `${preceding}## [MEM-19] → see semantic/lesson.md:1 — Complete promoted lesson${suffix}`,
           `${label}: whole entry becomes one pointer at its original heading level`);
         verifyLearningsTrimStructure(original, after, found.candidates);
         verifyLearningsTrimStats(applyLearningsTrimCandidates(original, found.candidates).stats);
@@ -1036,13 +1022,13 @@ for (const { label, before, suffix, invalidUtf8 } of reviewFixtures) {
     const source = path.join(root, "memory/core/LEARNINGS.md");
     const originalBytes = invalidUtf8 ? Buffer.concat([Buffer.from(before), Buffer.from([0xff])]) : Buffer.from(before);
     fs.writeFileSync(source, originalBytes);
-    fs.writeFileSync(path.join(root, "memory/semantic/topic.md"), "### Complete promoted incident lesson\nEvidence [MEM-99]\n");
+    fs.writeFileSync(path.join(root, "memory/semantic/topic.md"), "### Complete promoted incident lesson [MEM-99]\nEvidence [MEM-99]\n");
     const cli = spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-learnings-trim.ts"), "--apply", "--only", "MEM-99"],
       { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: root } });
     const after = fs.readFileSync(source);
     if (suffix) {
       assert(cli.status === 0, `review1 ${label}: safe selection applies: ${cli.stderr}`);
-      const expected = `## [MEM-99] → see semantic/topic.md:2 — Complete promoted incident lesson${suffix}`;
+      const expected = `## [MEM-99] → see semantic/topic.md:1 — Complete promoted incident lesson${suffix}`;
       assert(after.equals(Buffer.from(expected)), `review1 ${label}: all unrelated bytes survive exactly`);
     } else {
       assert(cli.status === 1 && cli.stderr.includes("no write performed"), `review1 ${label}: explicit fail-closed refusal: ${cli.stderr}`);
@@ -1100,6 +1086,8 @@ for (const [before, candidate] of [
   try { verifyLearningsTrimByteRanges(before, after, [candidate]); } catch { refused = true; }
   assert(refused, "byte ranges: independently refuses swallowed boundaries and protected descendants with forged parser ranges");
 }
+
+runTrimOwnershipTests("learnings", assert);
 
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

@@ -19,6 +19,7 @@
  * Exits non-zero if any assertion fails.
  */
 
+import { runTrimOwnershipTests } from "./test-support/trim-ownership.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -78,7 +79,7 @@ const HASH2_DESTINATIONS: DestinationFile[] = [
   {
     file: "core/LEARNINGS.md",
     text: [
-      "### Communication style",
+      "### Communication style [MEM-902]",
       "",
       "- **Communication style** — never use a loanword when a native term exists. [MEM-902]",
     ].join("\n"),
@@ -112,7 +113,7 @@ const hash2Applied = applyMistakesTrimCandidates(
 const hash2Checks = verifyMistakesTrimStats(hash2Applied.stats);
 assert(hash2Applied.stats.trimmedEntries === 1, "##: exactly one entry trimmed");
 assert(
-  hash2Applied.mistakes.includes("## [MEM-902] → see core/LEARNINGS.md:3 — Communication style"),
+  hash2Applied.mistakes.includes("## [MEM-902] → see core/LEARNINGS.md:1 — Communication style"),
   "##: entry rewritten to a `##` pointer — SAME heading level as the original entry, never forced to `###`"
 );
 assert(
@@ -163,7 +164,7 @@ const HASH3_DESTINATIONS: DestinationFile[] = [
   {
     file: "semantic/measurement-discipline.md",
     text: [
-      "## Measure the right artifact",
+      "## Measure the right artifact [MEM-950]",
       "",
       "- Before declaring a propagation broken, diff the target against the source in the version it was actually sent, not the version at head. [MEM-950]",
     ].join("\n"),
@@ -188,7 +189,7 @@ const hash3Applied = applyMistakesTrimCandidates(
 verifyMistakesTrimStats(hash3Applied.stats);
 assert(
   hash3Applied.mistakes.includes(
-    "### [MEM-950] → see semantic/measurement-discipline.md:3 — Measure the right artifact"
+    "### [MEM-950] → see semantic/measurement-discipline.md:1 — Measure the right artifact"
   ),
   "###: entry rewritten to a `###` pointer matching its own entry format, never downgraded to `##`"
 );
@@ -225,7 +226,7 @@ const BULLET_DESTINATIONS: DestinationFile[] = [
   {
     file: "core/LEARNINGS.md",
     text: [
-      "### CI green discipline",
+      "### CI green discipline [MEM-154]",
       "",
       "- **CI green discipline** — CI status and manual review are separate signals, never merge them. [MEM-154]",
     ].join("\n"),
@@ -244,7 +245,7 @@ assert(
 
 const bulletMem154 = bulletFound.candidates[0];
 assert(bulletMem154.format === "bullet" && bulletMem154.marker === "-", "bullet: MEM-154 candidate recorded as bullet-format");
-assert(bulletMem154.file === "core/LEARNINGS.md" && bulletMem154.line === 3, "bullet: candidate points at core/LEARNINGS.md:3");
+assert(bulletMem154.file === "core/LEARNINGS.md" && bulletMem154.line === 1, "bullet: candidate points at core/LEARNINGS.md:1");
 assert(bulletMem154.hook === "CI green discipline", "bullet: hook extracted from governing heading");
 assert(
   bulletMem154.originalText.includes("Assumed CI green means merged"),
@@ -262,7 +263,7 @@ const bulletChecks = verifyMistakesTrimStats(bulletApplied.stats);
 assert(bulletApplied.stats.trimmedEntries === 1, "bullet: exactly one entry trimmed");
 assert(
   bulletApplied.mistakes.includes(
-    "- [MEM-154] → see core/LEARNINGS.md:3 — CI green discipline (Source: Jakub, 2026-06-01)"
+    "- [MEM-154] → see core/LEARNINGS.md:1 — CI green discipline (Source: Jakub, 2026-06-01)"
   ),
   "bullet: entry rewritten to a pointer in the SAME short format as Step 5d — destination only, no per-entry archive annotation"
 );
@@ -283,7 +284,7 @@ assert(
   "bullet: pre-existing pointer entry left completely untouched"
 );
 assert(
-  bulletApplied.archive.includes("Archived 2026-08-20 — superseded by core/LEARNINGS.md:3 [MEM-154]"),
+  bulletApplied.archive.includes("Archived 2026-08-20 — superseded by core/LEARNINGS.md:1 [MEM-154]"),
   "bullet: archive gets a provenance header for the relocated entry"
 );
 assert(
@@ -543,7 +544,7 @@ const mixedMistakePointers = findMistakesTrimCandidates([
 ].join("\n"), []);
 assert(mixedMistakePointers.alreadyPointer === 3, "MISTAKES recognises dated and legacy bullet/heading pointers");
 const datedMistake = `- **Important dated mistake** — ${"Original incident detail worth preserving. ".repeat(12)} (Source: incident, [${DATED_A}])\n`;
-const datedDest = [{ file: "core/LEARNINGS.md", text: `### Stable dated lesson heading\nCondensed lesson [${DATED_A}]` }];
+const datedDest = [{ file: "core/LEARNINGS.md", text: `### Stable dated lesson heading [${DATED_A}]\nCondensed lesson [${DATED_A}]` }];
 const datedMistakeFound = findMistakesTrimCandidates(datedMistake, datedDest);
 assert(datedMistakeFound.candidates[0]?.key === DATED_A, "MISTAKES extracts whole dated identity");
 const datedMistakeApplied = applyMistakesTrimCandidates(datedMistake, "", datedMistakeFound.candidates, "2026-11-07", DEFAULT_ARCHIVE_HEADER("2026-H2"));
@@ -593,6 +594,8 @@ for (const key of ["MEM-1", DATED_A]) {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+runTrimOwnershipTests("mistakes", assert);
 
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

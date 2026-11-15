@@ -20,6 +20,7 @@
  * There is no "--apply --all" mode on purpose.
  */
 
+import { printOwnershipRejections } from "./lib/citation-detect.js";
 import { MEM_ID_PATTERN, isMemId } from "./lib/mem-id.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -189,7 +190,7 @@ function main(): void {
 
   const mistakesBefore = fs.readFileSync(MISTAKES_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, unreliableHooks, coverageRatio } =
+  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, ownershipRejections, unreliableHooks, coverageRatio } =
     findMistakesTrimCandidates(mistakesBefore, destinations);
 
   const bucket = halfYearBucket(new Date());
@@ -198,6 +199,7 @@ function main(): void {
 
   if (!apply) {
     printParseSummary({ totalEntries, multiKeyEntries, alreadyPointer, candidates });
+    printOwnershipRejections(ownershipRejections);
     printIndexRejections(indexRejections);
     printUnreliableHooks(unreliableHooks);
 

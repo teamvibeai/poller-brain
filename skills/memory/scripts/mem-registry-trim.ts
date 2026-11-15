@@ -16,7 +16,7 @@
  * destination file.
  *
  * The content-coverage guard (#505) requires case-sensitive equality between
- * the complete normalized Description and a whole line in the selected file,
+ * the complete normalized Description and a whole line in the accepted owned section,
  * optionally removing one leading prefix for the same key.
  * Both modes print an additive `contentCoverage: <JSON array>` field;
  * Rejections carry a single `no-literal-match` reason in `missingTokens`.
@@ -43,6 +43,7 @@
  *   npx tsx mem-registry-trim.ts --apply --only MEM-1,MEM-5  # apply exactly these approved keys
  */
 
+import { printOwnershipRejections } from "./lib/citation-detect.js";
 import { isMemId } from "./lib/mem-id.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -199,7 +200,7 @@ function main(): void {
 
   const registryBefore = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, duplicateKeys, totalDataRows, alreadyPointer, indexRejections, unreliableHooks, contentCoverage } = findTrimCandidates(
+  const { candidates, duplicateKeys, totalDataRows, alreadyPointer, indexRejections, ownershipRejections, unreliableHooks, contentCoverage } = findTrimCandidates(
     registryBefore,
     destinations
   );
@@ -210,6 +211,7 @@ function main(): void {
   printContentCoverage(contentCoverage);
 
   if (!apply) {
+    printOwnershipRejections(ownershipRejections);
     printIndexRejections(indexRejections);
     printUnreliableHooks(unreliableHooks);
     if (candidates.length === 0) {
