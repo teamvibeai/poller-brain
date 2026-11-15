@@ -13,16 +13,34 @@ let instance = 0
 const TS = '1000.000002'
 const OWN = { ts: TS, user: 'UOWN', bot_id: 'BOWN' }
 
+function assertDeleteAudit(result, outcome, { authenticated = true } = {}) {
+  const { audit } = result
+  assert.ok(audit, 'MCP tool result must carry the deletion audit')
+  assert.equal(audit.event, 'slack.delete_message')
+  assert.equal(audit.channel, 'CTARGET')
+  assert.equal(audit.ts, TS)
+  assert.equal(audit.actor_user_id, authenticated ? 'UOWN' : null)
+  assert.equal(audit.actor_bot_id, authenticated ? 'BOWN' : null)
+  assert.equal(audit.outcome, outcome)
+  assert.ok(Number.isFinite(Date.parse(audit.at)))
+  assert.equal(audit.reason === null, outcome === 'deleted')
+  assert.ok(JSON.stringify(audit).length < 1024, 'audit stays below 1 KiB')
+  assert.ok(!JSON.stringify(result).includes('xoxb-mock'))
+  assert.deepEqual(Object.keys(audit).sort(), [
+    'event', 'channel', 'ts', 'actor_user_id', 'actor_bot_id', 'outcome', 'reason', 'at',
+    ...(audit.slack_error ? ['slack_error'] : []),
+  ].sort(), 'audit must contain metadata only')
+}
+
 async function fixture(run, { env = {}, responses = {} } = {}) {
   const originalEnv = { ...process.env }
   const originalFetch = globalThis.fetch
-  const originalError = console.error
   Object.assign(process.env, {
     SLACK_BOT_TOKEN: 'xoxb-mock', SLACK_CHANNEL: 'CDEFAULT', SLACK_THREAD_TS: '1000.000001',
     SLACK_MESSAGE_TS: '', TEAMVIBE_API_URL: 'https://platform.invalid',
     TEAMVIBE_POLLER_TOKEN: 'mock', TEAMVIBE_BOT_ID: 'BUNTRUSTED', ...env,
   })
-  const calls = [], audit = []
+  const calls = []
   globalThis.fetch = async (url, options) => {
     const method = url.split('/').at(-1)
     const body = options.headers['Content-Type'] === 'application/json'
@@ -43,7 +61,6 @@ async function fixture(run, { env = {}, responses = {} } = {}) {
     assert.ok(response, `unexpected fetch: ${url}`)
     return { ok: true, json: async () => response }
   }
-  console.error = (...args) => audit.push(args.join(' '))
   try {
     const { handleRequest } = await import('data:text/javascript,' + encodeURIComponent(source + '\nexport { handleRequest }\n') + `#${instance++}`)
     const call = async (name, args) => {
@@ -52,10 +69,9 @@ async function fixture(run, { env = {}, responses = {} } = {}) {
       })).result
       return { envelope, result: JSON.parse(envelope.content[0].text) }
     }
-    await run({ call, calls, audit })
+    await run({ call, calls })
   } finally {
     globalThis.fetch = originalFetch
-    console.error = originalError
     for (const key of Object.keys(process.env)) if (!Object.hasOwn(originalEnv, key)) delete process.env[key]
     Object.assign(process.env, originalEnv)
   }
@@ -167,22 +183,17 @@ for (const dry_run of [undefined, false]) {
 }
 
 for (const message of [OWN, { ts: TS, user: 'UOWN' }, { ts: TS, bot_id: 'BOWN' }]) {
-  test(`delete verified own message ${JSON.stringify(message)}`, () => fixture(async ({ call, calls, audit }) => {
+  test(`delete verified own message ${JSON.stringify(message)}`, () => fixture(async ({ call, calls }) => {
     const { result, envelope } = await call('delete_message', { channel: 'CTARGET', ts: TS })
     assert.ok(!envelope.isError)
-    assert.deepEqual(result, { ok: true, channel: 'CTARGET', ts: TS })
+    assert.equal(result.ok, true)
+    assert.equal(result.channel, 'CTARGET')
+    assert.equal(result.ts, TS)
+    assertDeleteAudit(result, 'deleted')
     assert.deepEqual(calls.map(c => c.method), ['auth.test', 'conversations.history', 'chat.delete'])
     assert.deepEqual(calls[1].body, { channel: 'CTARGET', oldest: TS, latest: TS, inclusive: 'true', limit: '1' })
     assert.deepEqual(calls[2].body, { channel: 'CTARGET', ts: TS })
     assert.equal(calls[2].headers['Content-Type'], 'application/x-www-form-urlencoded')
-    assert.equal(audit.length, 1)
-    const event = JSON.parse(audit[0])
-    assert.equal(event.event, 'slack.delete_message')
-    assert.equal(event.outcome, 'deleted')
-    assert.equal(event.channel, 'CTARGET')
-    assert.equal(event.ts, TS)
-    assert.equal(event.actor_bot_id, 'BOWN')
-    assert.ok(!audit[0].includes('xoxb-mock'))
   }, { responses: { 'conversations.history': { ok: true, messages: [message] } } }))
 }
 
@@ -208,12 +219,13 @@ for (const [label, message] of [
   ['nested ownership', { ts: TS, message: OWN }],
   ['malformed author', { ...OWN, user: {} }],
 ]) {
-  test(`delete rejects ${label}`, () => fixture(async ({ call, calls, audit }) => {
+  test(`delete rejects ${label}`, () => fixture(async ({ call, calls }) => {
     const { result, envelope } = await call('delete_message', { channel: 'CTARGET', ts: TS })
     assert.equal(envelope.isError, true)
     assert.ok(['permission_denied', 'ownership_unverified'].includes(result.error))
     assert.ok(!calls.some(c => c.method === 'chat.delete'))
-    assert.equal(audit.length, 1)
+    assertDeleteAudit(result, result.error)
+    if (label === 'foreign user') assert.equal(result.audit.reason, 'author_mismatch')
   }, { responses: { 'conversations.history': { ok: true, messages: [message] } } }))
 }
 
@@ -241,13 +253,12 @@ for (const [label, responses, error] of [
   ['delete response wrong timestamp', { 'chat.delete': { ok: true, channel: 'CTARGET', ts: '999.000001' } }, 'delete_failed'],
   ['delete rate limit', { 'chat.delete': { ok: false, error: 'ratelimited' } }, 'delete_failed'],
 ]) {
-  test(`delete fails closed: ${label}`, () => fixture(async ({ call, calls, audit }) => {
+  test(`delete fails closed: ${label}`, () => fixture(async ({ call, calls }) => {
     const { result, envelope } = await call('delete_message', { channel: 'CTARGET', ts: TS })
     assert.equal(envelope.isError, true)
     assert.equal(result.error, error)
     assert.equal(calls.filter(c => c.method === 'chat.delete').length, Object.hasOwn(responses, 'chat.delete') ? 1 : 0)
-    assert.equal(audit.length, 1)
-    assert.equal(JSON.parse(audit[0]).outcome, error)
+    assertDeleteAudit(result, error, { authenticated: !Object.hasOwn(responses, 'auth.test') })
   }, { responses }))
 }
 
@@ -255,6 +266,53 @@ test('delete requires explicit channel/ts and forbids caller ownership or broade
   for (const args of [
     { ts: TS }, { channel: 'CTARGET' }, { channel: '', ts: TS }, { channel: 'CTARGET', ts: 'oops' },
     ...['user', 'bot_id', 'owned', 'token', 'as_user', 'thread_ts', 'recursive'].map(key => ({ channel: 'CTARGET', ts: TS, [key]: true })),
-  ]) assert.equal((await call('delete_message', args)).envelope.isError, true)
+  ]) {
+    const { result, envelope } = await call('delete_message', args)
+    assert.equal(envelope.isError, true)
+    assert.equal(result.audit.outcome, 'invalid_arguments')
+    assert.equal(result.audit.reason, 'invalid_arguments')
+    assert.equal(result.audit.actor_user_id, null)
+    assert.equal(result.audit.actor_bot_id, null)
+  }
   assert.deepEqual(calls, [])
 }))
+
+test('delete audit excludes message content and unrecognized remote errors', () => fixture(async ({ call }) => {
+  const { result, envelope } = await call('delete_message', { channel: 'CTARGET', ts: TS })
+  assert.equal(envelope.isError, true)
+  assertDeleteAudit(result, 'delete_failed')
+  assert.equal(result.audit.reason, 'delete_failed')
+  assert.ok(!JSON.stringify(result).includes('PRIVATE_MESSAGE_CONTENT'))
+}, { responses: {
+  'conversations.history': { ok: true, messages: [{ ...OWN, text: 'PRIVATE_MESSAGE_CONTENT' }] },
+  'chat.delete': { ok: false, error: 'PRIVATE_MESSAGE_CONTENT' },
+} }))
+
+test('delete audit bounds invalid destinations without API calls', () => fixture(async ({ call, calls }) => {
+  for (const args of [
+    { channel: 'C' + 'A'.repeat(64), ts: TS },
+    { channel: 'CTARGET', ts: '1'.repeat(26) + '.000001' },
+    { channel: 'xoxb-mock', ts: 'PRIVATE_MESSAGE_CONTENT' },
+    null,
+  ]) {
+    const { result, envelope } = await call('delete_message', args)
+    assert.equal(envelope.isError, true)
+    assert.equal(result.audit.outcome, 'invalid_arguments')
+    assert.equal(result.audit.actor_user_id, null)
+    assert.equal(result.audit.actor_bot_id, null)
+    assert.ok(JSON.stringify(result.audit).length < 1024)
+    assert.ok(!JSON.stringify(result.audit).includes('xoxb-mock'))
+    assert.ok(!JSON.stringify(result.audit).includes('PRIVATE_MESSAGE_CONTENT'))
+    assert.equal(result.audit.channel, args?.channel === 'CTARGET' ? 'CTARGET' : null)
+    assert.equal(result.audit.ts, args?.ts === TS ? TS : null)
+  }
+  assert.deepEqual(calls, [])
+}))
+
+test('delete rejects oversized authenticated IDs without copying them to audit', () => fixture(async ({ call, calls }) => {
+  const { result, envelope } = await call('delete_message', { channel: 'CTARGET', ts: TS })
+  assert.equal(envelope.isError, true)
+  assertDeleteAudit(result, 'ownership_unverified', { authenticated: false })
+  assert.equal(result.audit.reason, 'identity_incomplete')
+  assert.deepEqual(calls.map(c => c.method), ['auth.test'])
+}, { responses: { 'auth.test': { ok: true, user_id: 'U' + 'A'.repeat(64), bot_id: 'BOWN' } } }))

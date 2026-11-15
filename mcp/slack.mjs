@@ -666,16 +666,37 @@ function buildSendPreflight(args, body, { thread_ts, hasModals, transformed }) {
   return response
 }
 
+// Keep the audit below 1 KiB, including when arguments/auth/error data are
+// malformed. Null actor IDs mean no complete identity was authenticated.
+function createDeleteAudit(args, outcome = 'ownership_unverified') {
+  const identifier = (value, pattern, max) =>
+    typeof value === 'string' && value.length <= max && pattern.test(value) ? value : null
+  return {
+    event: 'slack.delete_message',
+    channel: identifier(args?.channel, /^[CDG][A-Z0-9]+$/, 64),
+    ts: identifier(args?.ts, /^[0-9]+\.[0-9]{6}$/, 32),
+    actor_user_id: null,
+    actor_bot_id: null,
+    outcome,
+    reason: outcome === 'invalid_arguments' ? 'invalid_arguments' : null,
+    at: new Date().toISOString(),
+  }
+}
+
 // Do not use resolveSelfIds(): that best-effort warning helper permits env
 // fallbacks after failed auth. Destruction requires fresh authenticated IDs.
 async function deleteOwnMessage(channel, ts) {
-  const audit = { event: 'slack.delete_message', channel, ts, outcome: 'ownership_unverified' }
+  const audit = createDeleteAudit({ channel, ts })
+  const reject = (reason) => {
+    audit.reason = reason
+    throw new Error(reason)
+  }
   let stage = 'identity'
   try {
     const self = await slackApi('auth.test', {})
-    if (self.ok !== true || typeof self.user_id !== 'string' || !/^[UW][A-Z0-9]+$/.test(self.user_id) ||
-        typeof self.bot_id !== 'string' || !/^B[A-Z0-9]+$/.test(self.bot_id)) {
-      throw new Error('Authenticated bot identity is incomplete')
+    if (self.ok !== true || typeof self.user_id !== 'string' || !/^[UW][A-Z0-9]{1,63}$/.test(self.user_id) ||
+        typeof self.bot_id !== 'string' || !/^B[A-Z0-9]{1,63}$/.test(self.bot_id)) {
+      reject('identity_incomplete')
     }
     audit.actor_user_id = self.user_id
     audit.actor_bot_id = self.bot_id
@@ -683,7 +704,7 @@ async function deleteOwnMessage(channel, ts) {
     let lookup = await slackApi('conversations.history', {
       channel, oldest: ts, latest: ts, inclusive: true, limit: 1,
     })
-    if (lookup.ok !== true || !Array.isArray(lookup.messages)) throw new Error('Message lookup is incomplete')
+    if (lookup.ok !== true || !Array.isArray(lookup.messages)) reject('lookup_incomplete')
     let matches = lookup.messages.filter(m => m?.ts === ts)
     if (!matches.length) {
       // Slack accepts a parent or reply ts. Bound the lookup to the exact
@@ -691,53 +712,61 @@ async function deleteOwnMessage(channel, ts) {
       lookup = await slackApi('conversations.replies', {
         channel, ts, oldest: ts, latest: ts, inclusive: true, limit: 2,
       })
-      if (lookup.ok !== true || !Array.isArray(lookup.messages)) throw new Error('Message lookup is incomplete')
+      if (lookup.ok !== true || !Array.isArray(lookup.messages)) reject('lookup_incomplete')
       matches = lookup.messages.filter(m => m?.ts === ts)
     }
     if (!matches.length) {
-      if (lookup.has_more || lookup.response_metadata?.next_cursor) throw new Error('Message lookup is truncated')
+      if (lookup.has_more || lookup.response_metadata?.next_cursor) reject('lookup_truncated')
       audit.outcome = 'not_found'
-      throw new Error('Exact message was not found')
+      reject('exact_message_not_found')
     }
-    if (matches.length !== 1) throw new Error('Message lookup is ambiguous')
+    if (matches.length !== 1) reject('lookup_ambiguous')
     const message = matches[0]
     if ((message.type && message.type !== 'message') ||
         (message.subtype && !['bot_message', 'file_share', 'thread_broadcast'].includes(message.subtype))) {
-      throw new Error('Unsupported message type or subtype')
+      reject('unsupported_message_type')
     }
     const hasUser = Object.hasOwn(message, 'user')
     const hasBot = Object.hasOwn(message, 'bot_id')
-    if (!hasUser && !hasBot) throw new Error('Message author is unknown')
+    if (!hasUser && !hasBot) reject('author_unknown')
     // Every present author field must agree, even when the other matches.
     if ((hasUser && message.user !== self.user_id) || (hasBot && message.bot_id !== self.bot_id)) {
       audit.outcome = 'permission_denied'
-      throw new Error('Message author does not match the authenticated bot')
+      reject('author_mismatch')
     }
     stage = 'delete'
     const deleted = await slackApi('chat.delete', { channel, ts })
     if (deleted.ok !== true || deleted.channel !== channel || deleted.ts !== ts) {
-      throw new Error('Delete response is uncertain')
+      reject('delete_response_uncertain')
     }
     audit.outcome = 'deleted'
-    return { ok: true, channel, ts }
+    return { ok: true, channel, ts, audit }
   } catch (error) {
-    const slackError = /^Slack API [\w.]+: ([\w_]+)$/.exec(error.message)?.[1]
+    const permissionErrors = ['missing_scope', 'not_in_channel', 'cant_delete_message', 'no_permission',
+      'access_denied', 'restricted_action', 'not_authed', 'invalid_auth', 'token_revoked',
+      'token_expired', 'account_inactive', 'is_archived']
+    const notFoundErrors = ['message_not_found', 'thread_not_found', 'channel_not_found']
+    const code = /^Slack API [\w.]+: ([\w_]{1,64})$/.exec(error?.message)?.[1]
+    // Only known Slack codes may cross the audit boundary, never remote text.
+    const slackError = [...permissionErrors, ...notFoundErrors, 'ratelimited'].includes(code) ? code : null
     if (slackError) {
       audit.slack_error = slackError
-      if (['message_not_found', 'thread_not_found', 'channel_not_found'].includes(slackError)) {
+      audit.reason = 'slack_api_error'
+      if (notFoundErrors.includes(slackError)) {
         audit.outcome = 'not_found'
-      } else if (['missing_scope', 'not_in_channel', 'cant_delete_message', 'no_permission',
-        'access_denied', 'restricted_action', 'not_authed', 'invalid_auth', 'token_revoked',
-        'token_expired', 'account_inactive', 'is_archived'].includes(slackError)) {
+      } else if (permissionErrors.includes(slackError)) {
         audit.outcome = 'permission_denied'
       }
     }
+    audit.reason ||= `${stage}_failed`
     if (stage === 'delete' && audit.outcome === 'ownership_unverified') audit.outcome = 'delete_failed'
     const failure = new Error(`delete_message: ${audit.outcome}${slackError ? ` (${slackError})` : ''}`)
     failure.slackDeleteCode = audit.outcome
+    failure.slackDeleteAudit = audit
     throw failure
   } finally {
-    // Metadata only: no token, message text, or arbitrary remote error text.
+    // Supplemental only: the poller retains the MCP tool result, not this
+    // child's stderr. Both successful and failed results must carry audit.
     console.error(JSON.stringify(audit))
   }
 }
@@ -802,13 +831,13 @@ const TOOLS = [
   },
   {
     name: 'delete_message',
-    description: 'Delete exactly one message authored by the authenticated bot. Verifies fresh auth.test identity against the exact message user/bot_id; fails closed on unknown, conflicting or unreadable ownership. Requires explicit channel and ts. Never recursively deletes replies. Audits the outcome. Cannot retract notifications or undo sessions already started.',
+    description: 'Delete exactly one message authored by the authenticated bot. Verifies fresh auth.test identity against the exact message user/bot_id; fails closed on unknown, conflicting or unreadable ownership. Requires explicit channel and ts. Never recursively deletes replies. Returns bounded audit metadata on success and failure (event, destination, verified actor IDs or null, outcome, reason, UTC time). Cannot retract notifications or undo sessions already started.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        channel: { type: 'string', pattern: '^[CDG][A-Z0-9]+$', description: 'Explicit Slack conversation ID containing the message; no session default.' },
-        ts: { type: 'string', pattern: '^[0-9]+\\.[0-9]{6}$', description: 'Exact timestamp of the message to delete (not its parent unless deleting the parent itself).' },
+        channel: { type: 'string', maxLength: 64, pattern: '^[CDG][A-Z0-9]+$', description: 'Explicit Slack conversation ID containing the message; no session default.' },
+        ts: { type: 'string', maxLength: 32, pattern: '^[0-9]+\\.[0-9]{6}$', description: 'Exact timestamp of the message to delete (not its parent unless deleting the parent itself).' },
       },
       required: ['channel', 'ts'],
     },
@@ -1719,7 +1748,12 @@ async function handleRequest(req) {
         })
       } catch (e) {
         return jsonrpcResponse(id, {
-          content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.slackDeleteCode || e.message, ...(e.slackDeleteCode ? { detail: e.message } : {}) }) }],
+          content: [{ type: 'text', text: JSON.stringify({
+            ok: false,
+            error: e.slackDeleteCode || e.message,
+            ...(e.slackDeleteCode ? { detail: e.message } : {}),
+            ...(name === 'delete_message' ? { audit: e.slackDeleteAudit || createDeleteAudit(args, 'invalid_arguments') } : {}),
+          }) }],
           isError: true,
         })
       }
