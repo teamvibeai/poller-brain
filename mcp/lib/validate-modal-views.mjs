@@ -98,9 +98,11 @@ function numberInput(value, path) {
   return null
 }
 
-function element(value, path) {
+function element(value, path, input = false) {
   if (!isObject(value)) return error(path, 'must be an object')
-  if (actionTypes.has(value.type) && (typeof value.action_id !== 'string' || !value.action_id.trim())) {
+  // Slack action_id is optional. Keep explicit IDs for known input elements
+  // so submitted values can be routed; elsewhere validate only supplied IDs.
+  if (actionTypes.has(value.type) && (input || Object.hasOwn(value, 'action_id')) && (typeof value.action_id !== 'string' || !value.action_id.trim())) {
     return error(`${path}.action_id`, 'must be a nonempty string')
   }
   if (actionTypes.has(value.type) && Object.hasOwn(value, 'placeholder')) {
@@ -168,7 +170,7 @@ function view(value, path) {
       blockIds.add(block.block_id)
     }
     if (block.type === 'input') {
-      const invalid = element(block.element, `${blockPath}.element`)
+      const invalid = element(block.element, `${blockPath}.element`, true)
       if (invalid) return invalid
     }
     if (block.type === 'section' && Object.hasOwn(block, 'accessory')) {

@@ -62,6 +62,9 @@ test('input submit, explicit block ID and known element action ID', () => {
   }
   for (const type of ['plain_text_input', 'static_select', 'multi_static_select', 'external_select', 'multi_external_select', 'users_select', 'multi_users_select', 'conversations_select', 'multi_conversations_select', 'channels_select', 'multi_channels_select', 'radio_buttons', 'checkboxes', 'datepicker', 'timepicker', 'datetimepicker', 'number_input', 'email_text_input', 'url_text_input', 'rich_text_input', 'file_input']) {
     invalid(view({ submit: text('Send'), blocks: [input({ type })] }), 'view.blocks[0].element.action_id', 'must be a nonempty string')
+    for (const action_id of [undefined, null, '', '   ', 42]) {
+      invalid(view({ submit: text('Send'), blocks: [input({ type, action_id })] }), 'view.blocks[0].element.action_id', 'must be a nonempty string')
+    }
   }
 })
 
@@ -177,9 +180,34 @@ test('type-aware traversal reaches actions and accessories without imposing a fu
   ] })
   invalid(form, 'view.blocks[0].accessory.options[0].value', 'maximum length 150')
   form.blocks = [{ type: 'actions', elements: [{ type: 'button', text: text('Go') }] }]
-  invalid(form, 'view.blocks[0].elements[0].action_id', 'must be a nonempty string')
+  assert.equal(check(form), null)
   form.blocks = [{ type: 'future_block', options: 'opaque', elements: 'opaque' }]
   assert.equal(check(form), null)
+})
+
+test('action IDs are optional outside input blocks, but supplied IDs must be nonempty strings', () => {
+  const elements = [
+    { type: 'button', text: text('Go') },
+    { type: 'button', text: text('Link Button'), url: 'https://docs.slack.dev/block-kit' },
+    ...['overflow', 'static_select', 'multi_static_select', 'radio_buttons', 'checkboxes'].map(type => ({ type, options: [option()] })),
+    ...['external_select', 'multi_external_select', 'users_select', 'multi_users_select', 'conversations_select', 'multi_conversations_select', 'channels_select', 'multi_channels_select', 'datepicker', 'timepicker', 'datetimepicker'].map(type => ({ type })),
+  ]
+  for (const element of elements) {
+    for (const [block, path] of [
+      [{ type: 'actions', elements: [element] }, 'elements[0]'],
+      [{ type: 'section', text: text('Choose'), accessory: element }, 'accessory'],
+    ]) {
+      const form = view({ blocks: [block] })
+      delete element.action_id
+      assert.equal(check(form), null, `${element.type}: omitted ${path}.action_id`)
+      element.action_id = 'route'
+      assert.equal(check(form), null)
+      for (const action_id of [undefined, null, '', '   ', 42]) {
+        element.action_id = action_id
+        invalid(form, `view.blocks[0].${path}.action_id`, 'must be a nonempty string')
+      }
+    }
+  }
 })
 
 test('first error is deterministic; all valid views and unknown fields remain unchanged', () => {

@@ -71,6 +71,7 @@ for (const [label, args, env] of [
 
 for (const [label, change, path] of [
   ['missing submit', v => { v.blocks = [{ type: 'input', block_id: 'x', element: { type: 'plain_text_input', action_id: 'x' } }] }, 'submit'],
+  ['missing input action ID', v => { v.submit = { type: 'plain_text', text: 'Send' }; v.blocks = [{ type: 'input', block_id: 'x', label: { type: 'plain_text', text: 'Answer' }, element: { type: 'plain_text_input' } }] }, 'blocks[0].element.action_id'],
   ['duplicate block ID', v => { v.blocks = [{ type: 'divider', block_id: 'x' }, { type: 'divider', block_id: 'x' }] }, 'blocks[1].block_id'],
   ['oversized option', v => { v.blocks = [{ type: 'actions', elements: [{ type: 'static_select', action_id: 'x', options: [{ text: { type: 'plain_text', text: 'Label' }, value: 'x'.repeat(151) }] }] }] }, 'blocks[0].elements[0].options[0].value'],
 ]) {
@@ -81,6 +82,29 @@ for (const [label, change, path] of [
     assert.equal(result.ok, false)
     assert.ok(result.error.includes(`modals[0].view.${path}`))
     assert.deepEqual(calls, [])
+  }))
+}
+
+for (const dry_run of [false, true]) {
+  test(`documented link button without action_id succeeds through MCP: dry_run=${dry_run}`, () => fixture(async ({ call, calls }) => {
+    // https://docs.slack.dev/reference/block-kit/block-elements/button-element/
+    const m = modal({ blocks: [{ type: 'actions', elements: [{
+      type: 'button', text: { type: 'plain_text', text: 'Link Button' },
+      url: 'https://docs.slack.dev/block-kit',
+    }] }] })
+    const before = structuredClone(m)
+    const { result, envelope } = await call({ modals: [m], dry_run })
+    assert.equal(result.ok, true, result.error)
+    assert.ok(!envelope.isError)
+    assert.deepEqual(m, before)
+    if (dry_run) {
+      assert.deepEqual(calls, [])
+      assert.ok(result.validation.checked.includes('modal_views'))
+      assert.deepEqual(result.modals.definitions, [m])
+    } else {
+      assert.deepEqual(calls.map(c => c.method), ['chat.postMessage', 'modal-definitions', 'chat.update', 'conversations.info'])
+      assert.deepEqual(calls[1].body.viewDefinition, m.view)
+    }
   }))
 }
 
