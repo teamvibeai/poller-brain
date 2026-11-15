@@ -168,12 +168,18 @@ try {
     for (const path of args) safePath(path)
     commitMemory([...new Set(args)], head)
   } else {
-    if (!/^step (?:1[b-c]?|2|3|4|5[b-d]?|7)$/.test(boundary) || args.length > 1) fail('unsupported mutation step')
+    if (!/^step (?:1[b-c]?|2|3|4|5[b-d]?|7|(?:5d|9e) condensation)$/.test(boundary) || args.length > 1) fail('unsupported mutation step')
     const plan = JSON.parse(readFileSync(args[0] && args[0] !== '-' ? args[0] : 0, 'utf8'))
     if (plan.version !== 1 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(plan.baseline) || !Array.isArray(plan.mutations)) fail('invalid mutation manifest')
     if (!plan.validation || !Array.isArray(plan.validation.alarms) || plan.validation.alarms.length) fail('missing validation or unresolved validation alarms')
     git(['merge-base', '--is-ancestor', plan.baseline, head])
     if (plan.baseline !== start) git(['merge-base', '--is-ancestor', start, plan.baseline])
+    if (boundary.endsWith(' condensation')) {
+      const source = boundary === 'step 5d condensation' ? 'memory/core/LEARNINGS.md' : 'memory/MEM_REGISTRY.md'
+      if (plan.mutations.length !== 2 || plan.mutations.filter(m => m.path === source && m.op === 'write' && typeof m.before === 'string').length !== 1 ||
+          plan.mutations.filter(m => /^memory\/(?:semantic|procedural|episodic)\/[A-Za-z0-9_-]+\.md$/.test(m.path) && !/^memory\/episodic\/consolidation-(?:progress|history)-/.test(m.path) && m.op === 'write' && m.before === null).length !== 1) fail('condensation requires one hot source and one new tier destination')
+      if (/— step (?:5d|9e) condensation$/m.test(gitText(['log', '--first-parent', '--format=%s', `${start}..HEAD`]))) fail('one-topic condensation budget already used this cycle')
+    }
     const paths = new Set()
     const changes = plan.mutations.map(m => {
       safePath(m.path)

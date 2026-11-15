@@ -436,3 +436,31 @@ test('pre-commit and commit-msg hooks are disabled for the transaction commit', 
   assert.equal(r.status, 0, r.stdout + r.stderr)
   assert.equal(f.git('log', '-1', '--format=%s'), `chore: consolidate memory checkpoint (${date}) — step 5d`)
 })
+
+
+test('condensation boundaries allow exactly one existing hot source and one new tier destination, once per cycle', t => {
+  const f = fixture(t)
+  const initial = f.snapshot()
+  assert.notEqual(f.apply('step 5d condensation').status, 0, 'single-file write is refused')
+  assert.deepEqual(f.snapshot(), initial)
+  f.manifest.mutations.push({ op: 'write', path: 'memory/semantic/condensed.md', before: null, content: 'complete original narrative\n' })
+  assert.notEqual(f.apply('step 9e condensation').status, 0, 'wrong hot source is refused')
+  assert.deepEqual(f.snapshot(), initial)
+  f.manifest.mutations[1].path = 'memory/core/condensed.md'
+  assert.notEqual(f.apply('step 5d condensation').status, 0, 'core destination is refused')
+  assert.deepEqual(f.snapshot(), initial)
+  f.manifest.mutations[1].path = 'memory/semantic/condensed.md'
+  const result = f.apply('step 5d condensation')
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.equal(readFileSync(join(f.dir, 'memory/semantic/condensed.md'), 'utf8'), 'complete original narrative\n')
+  assert.equal(f.git('show', '--format=', '--name-only', 'HEAD'), 'memory/core/LEARNINGS.md\nmemory/semantic/condensed.md')
+  const after = f.snapshot()
+  f.manifest.baseline = after.head
+  f.manifest.mutations[0].before = hash('promoted\n')
+  f.manifest.mutations[0].content = 'smaller\n'
+  f.manifest.mutations[1].path = 'memory/procedural/second.md'
+  const second = f.apply('step 5d condensation')
+  assert.notEqual(second.status, 0)
+  assert.match(second.stderr, /one-topic condensation budget/)
+  assert.deepEqual(f.snapshot(), after)
+})

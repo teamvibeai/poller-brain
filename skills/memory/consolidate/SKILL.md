@@ -426,6 +426,8 @@ If `memory/semantic/` doesn't exist or is empty, record `justified no-split — 
 
 ### 5c. LEARNINGS.md Gradual Reduction
 
+Before this step's mutations, capture `LEARNINGS_BEFORE_BYTES=$(wc -c < memory/core/LEARNINGS.md)` for the shared 5d/9e fallback's final progress measurement below.
+
 If `memory/core/LEARNINGS.md` exceeds its threshold, perform **one** small archival per consolidation cycle. This mirrors Step 9c (CLAUDE.md reduction) but for lessons memory — without this step, LEARNINGS.md grows monotonically because promotion appends new entries but never retires resolved or superseded ones.
 
 **Preflight:** Run `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-scaled-threshold.ts" --mode learnings` (see Step 9b's "Scaled thresholds" note — `teamvibeai/poller-brain#324`). If `overCap` is false, skip this step entirely. If true, proceed.
@@ -497,6 +499,38 @@ A valid hit prints `previously rejected, unchanged: N` plus current source locat
 6. If `LEARNINGS.md` is under its (scaled) threshold, skip this step. If nothing needs fresh review, retain the compact cached-hit output when present; skip logging only when there are no candidates, cached hits or warnings.
 
 An entry the script cannot find cited anywhere (or only ever cited ambiguously, or bundles multiple keys) is left with its full narrative — that's expected, not a failure.
+
+### 5d fallback / 9e fallback: bounded, reviewed condensation (#530)
+
+After the normal Step 5c/5d or 9d/9e paths and explicit review leave an over-scaled-cap file with no safe reduction, record **`heuristic exhausted — condensation review needed`**. Do not infer safety from zero approvals, repeated rejection, or ACTIVE status. This is separate from #466 retry/backoff and does not change Step 5c eligibility. The trim CLIs emit this outcome when there are no outstanding proposals, along with slice-1 `unchanged-verdicts` and consecutive zero-progress cycles. Unchanged counts use only valid completed rejection records; newly recorded rejections remain pending until completion.
+
+Capture the hot-file byte count **before normal reduction paths** (before 5c for LEARNINGS, before 9d for registry). After those paths, use the status helper with that measured count and original pre-Step-0 HEAD:
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-condense.ts" --mode learnings --status --exhausted --before-bytes "$LEARNINGS_BEFORE_BYTES" --completed-at "$START_HEAD"
+```
+
+Use `--mode registry` and its own before count at 9e. `--exhausted` asserts that normal proposals have been explicitly reviewed and none offers a safe reduction; it does not approve a relocation. Never assert it on an incomplete scan, unresolved parse/integrity alarm, or unreviewed proposals. Ordinary trim scans' outcomes describe that invocation; put **only the final status invocation's single `trim-outcome: {...}` line per source** in the completed markdown report (outside a code fence). The helper computes current-cycle progress from the supplied before count and walks completed report pairs for consecutive zero-progress cycles; missing/malformed/unfinished history breaks the chain. A rerun does not add a cycle. Any net reduction resets the count. State is reporting evidence only, never permission to write. Keep over-cap warnings even when no proposal can be built.
+
+**One bounded attempt across both files per cycle.** Choose which exhausted file to address; do not attempt the other file or another entry after an unsafe/no-shrink result. The helper selects the smallest supported non-pointer topic, at most 8192B, and never tries another topic on failure. Grouped/multi-key learnings, duplicate owners, unsupported entry structures, oversized entries and narrative containing `.md` references or Markdown/HTML links are explicitly refused: their mapping/link semantics need a separate reviewed transformation. Refusal is a reportable outcome, not permission to force a rewrite. No caps are raised.
+
+Prepare one proposal in a new empty scratch directory outside the brain (use the run's designated scratch root). Supply a short **actionable rule including load-bearing conditions and exceptions**, and choose a new dedicated semantic/procedural/episodic file appropriate for the topic. Inspect the selected topic printed by the helper to confirm that the supplied rule fits; an unrelated or incomplete rule requires rejection. The default destination is `semantic/condensation-<full-MEM-ID>.md`; `--destination procedural/release-safety.md` or `episodic/incident-lesson.md` can choose the appropriate tier. Existing destinations, core files and archive/bookkeeping destinations are refused.
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-condense.ts" --mode learnings --exhausted --completed-at "$START_HEAD" --scratch "$CONDENSATION_SCRATCH" --destination procedural/release-safety.md --rule "Record the release SHA before deployment; skip only for a documented sandbox."
+```
+
+Default mode writes only scratch `plan.json`, `source.md` and `destination.md`. Review all three together: the complete original narrative, every MEM ID and provenance must survive in the destination, and hot memory must retain the actionable rule, conditions/exceptions and a resolvable pointer. Registry relocation preserves the complete original row, a separate complete matching Description line, and unchanged Key/Status/Created cells. It reruns the existing #505 guard against that destination before trimming; paraphrases alone cannot pass. The planner verifies strict hot-file byte reduction, before/after scaled thresholds and overage, all non-target bytes, pointer target and narrative preservation. Dedicated new files with no outgoing `.md` references exclude self/circular pointers; linked narrative is refused rather than relocated with uncertain relative links. Total corpus bytes count all `memory/**/*.md`, including daily/archive files, separately from selected hot-file bytes; relocation normally increases corpus bytes while reducing hot-path bytes.
+
+**Explicit approval only:** after reviewing the exact plan, run its printed selector (always `MEM-ID@source-line`, including full dated IDs):
+
+```bash
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-condense.ts" --apply --plan "$CONDENSATION_SCRATCH/plan.json" --only MEM-25@67 --cycle-date "$CYCLE_DATE"
+```
+
+This helper's apply mode revalidates the source and destination together and submits both desired contents through `consolidation-apply.sh` using `step 5d condensation` or `step 9e condensation`. Require its successful checkpoint before continuing. Unlike the existing single-file trim CLIs, do not apply this helper in a copy and then submit only the hot file. The narrow transaction accepts exactly one hot source plus one new tier destination, checks baseline HEAD and both original hashes, preserves unrelated staged/worktree bytes, and restores both files on a synchronous failure. Interrupted transactions retain existing lock/marker inspection requirements. A changed plan, mismatched scratch preview, changed baseline or existing destination requires a new proposal and review; neither ledger state nor a stored plan authorizes apply. Both CLI and locked transaction enforce at most one successful relocation across the two files in the cycle. Stop after the bounded attempt; an unsafe/no-shrink proposal changes no live file and leaves the warning intact.
+
+Under `## Condensation Review`, report selected entry/span, supplied rule and conditions, destination, refusal/rejection/approval, checkpoint, before/after hot bytes, both scaled thresholds and overages, **total corpus bytes separately**, unchanged-verdict count/reason references and consecutive zero-progress cycles. If applied, add both paths to `filesChanged`, reconcile SUMMARY/catalog links through normal workflow, and rerun threshold/status measurement with the original before count and START_HEAD. Keep one final `trim-outcome` record per still-exhausted source; a successful relocation that remains over cap still needs a visible warning. Do not count corpus growth as hot-path reduction or treat a refusal as a completed integrity check.
 
 ### 6. Regenerate SUMMARY.md and append consolidation history
 
@@ -764,6 +798,8 @@ This ensures steady progress toward the threshold while allowing time to detect 
 
 #### 9d. MEM_REGISTRY.md REMOVED-Row Archival
 
+Before this step's mutations, capture `REGISTRY_BEFORE_BYTES=$(wc -c < memory/MEM_REGISTRY.md)` for the shared 5d/9e fallback's final progress measurement.
+
 `MEM_REGISTRY.md` is append-only for audit reasons — REMOVED rows are never deleted (Step 1c), so the registry grows unbounded. This step relocates **dead REMOVED audit rows** to `memory/MEM_REGISTRY_ARCHIVE.md`, leaving a single navigable pointer stub in the live registry. ACTIVE / OBSOLETE rows and all prose stay untouched.
 
 > **Scope — mechanical only.** This automates relocation of *dead* data (rows already marked REMOVED via the MEM lifecycle). It does **not** touch ACTIVE/OBSOLETE rows or inline policy prose (e.g. HOLD-rule sections) — relocating live content is a semantic judgment that stays with reflection, not this automated step. On registries whose bulk is live prose, the byte target may need a complementary manual prose move; that is out of scope here.
@@ -813,6 +849,8 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-registry-trim.ts" --comple
 6. If `MEM_REGISTRY.md` is under its (scaled) threshold, skip this step. If nothing is proposed, skip logging only when there are no coverage rejections, cached hits or warnings to report.
 
 **Incremental path (a promotion Step 1b/4 just wrote and grep-verified THIS run):** you already know the exact key, destination file, and line because you just wrote and verified it. Apply it immediately: `--apply --only <that key>`. The same content-coverage guard still runs: if rejected, preserve the complete entry text in the destination first and rerun; never bypass rejection with a hand edit.
+
+If normal 9d/9e paths leave the registry over cap with no safe reduction, use the shared **5d fallback / 9e fallback** contract above, including final status measurement and the one-topic budget across both files.
 
 A row the script cannot find cited anywhere (or only ever cited ambiguously) is left with its full narrative — that's expected, not a failure, whether that's because it's genuinely not yet promoted or because a candidate was reviewed and rejected.
 

@@ -49,6 +49,7 @@
 
 import { MEM_ID_PATTERN } from "./lib/mem-id.js";
 import * as fs from "fs";
+import { printExhaustion } from "./lib/trim-exhaustion.js";
 import { brainPath, resolveBrainRoot } from "./lib/brain-root.js";
 import { collectTrimDestinations, reviewProposals, checkReviewApplyFlags } from "./lib/trim-review-state.js";
 import {
@@ -266,6 +267,10 @@ function main(): void {
     }
     const review = reviewProposals(resolveBrainRoot(), "memory/core/LEARNINGS.md", learningsBefore, candidates, destinations);
     if (review === null) return;
+    printExhaustion(resolveBrainRoot(), "learnings", learningsBefore, candidates.length - review.length, review.length, {
+      completedAt: process.argv[process.argv.indexOf("--completed-at") + 1] && process.argv.includes("--completed-at")
+        ? process.argv[process.argv.indexOf("--completed-at") + 1] : undefined,
+    });
     if (candidates.length === 0) {
       console.log(
         `No promoted entries to propose (${alreadyPointer} already pointers out of ${totalEntries} entries, ` +
