@@ -15,8 +15,8 @@ export function runRegistryIsolationTests(assert: Assert): void {
   const own = `${heading}\n[MEM-53] ${body}\n`;
   const foreign = "## Unrelated lesson [MEM-113]";
   const boundary = (continuation: string) => `${heading}\nShort introduction only.\n\nUse \`literal\n${continuation} <!--\` here.\n\n${foreign}\nUse \`-->\` literally.\n[MEM-53] ${body}`;
-  // All nine review2 probes, through both real CLI modes. Ambiguous quote
-  // nesting remains fail-closed; the indented-code control retains its behavior.
+  // All nine review2 probes, through both real CLI modes. CommonMark ends
+  // a quote fence when its container ends; indented code cannot cover prose.
   const cases: { name: string; text: string; covered: boolean; reason?: OwnershipRejection["reason"]; absent?: boolean }[] = [
     { name: "multiline_span_angle_continuation", text: boundary("<value>"), covered: false, reason: "foreign-key" },
     { name: "multiline_span_plain_control", text: boundary("value"), covered: false, reason: "foreign-key" },
@@ -24,9 +24,9 @@ export function runRegistryIsolationTests(assert: Assert): void {
     { name: "same_indent_fence", text: "  ```sh\necho example\n  ```\n\n" + own, covered: true },
     { name: "less_indented_closing_fence", text: "  ```sh\necho example\n```\n\n" + own, covered: true },
     { name: "more_indented_closing_fence", text: "```sh\necho example\n  ```\n\n" + own, covered: true },
-    { name: "quote_container_ends", text: "> ```sh\n> echo example\n\n" + own, covered: false, absent: true },
-    { name: "indented_code_after_literal_fences", text: `${heading}\n\n    \`\`\`\n    \`\`\`\n    [MEM-53] ${body}`, covered: true },
-    { name: "setext_foreign_section", text: `${heading}\nShort introduction only.\n\nUnrelated lesson [MEM-113]\n-------------------------\n[MEM-53] ${body}`, covered: false, reason: "uncertain-section" },
+    { name: "quote_container_ends", text: "> ```sh\n> echo example\n\n" + own, covered: true },
+    { name: "indented_code_after_literal_fences", text: `${heading}\n\n    \`\`\`\n    \`\`\`\n    [MEM-53] ${body}`, covered: false },
+    { name: "setext_foreign_section", text: `${heading}\nShort introduction only.\n\nUnrelated lesson [MEM-113]\n-------------------------\n[MEM-53] ${body}`, covered: false, reason: "foreign-key" },
     // This matrix deliberately hides raw headings using real comments/fences.
     // Safety must hold without the visibility scanner recognizing those headings.
     ...["", "   ", "    ", "> ", "- "].flatMap((prefix) => ["comment", "fence"].map((hidden) => ({
@@ -39,7 +39,7 @@ export function runRegistryIsolationTests(assert: Assert): void {
     { name: "later_safe_section", text: `${heading}\n<!--\n${foreign}\n-->\n${own}`, covered: true, reason: "uncertain-section" },
   ];
   // Every top-level/explicit quote indentation pair is legal within the
-  // same container. A different or ambiguous container never closes the fence.
+  // same container. Container exits and indented code follow CommonMark.
   for (const marker of ["```", "~~~"]) {
     for (const container of ["", "> "]) {
       for (let opening = 0; opening <= 3; opening++) {
@@ -50,10 +50,10 @@ export function runRegistryIsolationTests(assert: Assert): void {
         }
       }
     }
-    for (const [opening, closing] of [["", "    "], ["> ", ""], ["> > ", "> "], ["    ", "        "]]) {
+    for (const [opening, closing, covered] of [["", "    ", false], ["> ", "", false], ["> > ", "> ", true], ["    ", "        ", true]] as const) {
       const text = `${opening}${marker}sh\nexample\n${closing}${marker}\n\n${own}`;
-      assert(findTrimCandidates(registry, [{ file: "semantic/topic.md", text }]).candidates.length === 0,
-        `registry #447: ${marker} ambiguous container ${JSON.stringify(opening)} -> ${JSON.stringify(closing)} stays closed`);
+      assert(findTrimCandidates(registry, [{ file: "semantic/topic.md", text }]).candidates.length === Number(covered),
+        `registry #447: ${marker} container ${JSON.stringify(opening)} -> ${JSON.stringify(closing)} follows CommonMark`);
     }
   }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-registry-isolation-"));

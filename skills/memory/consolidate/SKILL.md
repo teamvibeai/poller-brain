@@ -10,6 +10,10 @@ description: |
 
 Process recent daily logs and promote important information to long-term memory.
 
+Before using the MEM trim scripts on a fresh checkout or after their dependencies
+change, run `npm ci --prefix "$CLAUDE_CONFIG_DIR/skills/memory" --ignore-scripts`.
+Their CommonMark parser and locked installation are documented in [../README.md](../README.md).
+
 ## When to Run
 
 First run the Pre-Step-0 state check below. An unfinished cycle stops the run:

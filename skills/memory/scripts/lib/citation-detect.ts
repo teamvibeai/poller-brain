@@ -31,6 +31,9 @@
  * real brain's memory/.
  */
 
+import { fromMarkdown } from "mdast-util-from-markdown";
+import type { Nodes, Heading } from "mdast";
+
 import { MEM_ID_PATTERN, MEM_CITATION_PATTERN, compareMemIds } from "./mem-id.js";
 
 /** A destination file's content, path relative to `memory/` (e.g. "semantic/foo.md"). */
@@ -44,8 +47,8 @@ export interface Citation {
   line: number;
   lineText: string;
   /**
-   * Nearest markdown heading (`#` through `######`) above `line` within the
-   * same destination file, text with the `#` markers stripped — null if no
+   * Nearest CommonMark heading (ATX or Setext) above `line` within the
+   * same destination file, text without heading markers — null if no
    * heading precedes this line. Governs until the NEXT heading (standard
    * markdown section semantics), regardless of blank lines in between — a
    * real entry is routinely `### Title` / blank / `**Rule:** ...` / blank /
@@ -181,122 +184,66 @@ export function distinctCitedKeysInLine(line: string): string[] {
   return [...keys];
 }
 
-// Accept possible fences at any container indentation, including list-marker
-// lines and blockquotes. An indented fence must never expose example coverage.
-const FENCE_OPEN_RE = /^((?:[ \t>]|(?:[-+*]|\d+[.)])(?=[ \t]))*)(`{3,}|~{3,})(.*)$/;
-const FENCE_CLOSE_RE = /^([ \t>]*)(`{3,}|~{3,})[ \t]*$/;
-
-/** Find an exact-length closing backtick run within this inline block. */
-function codeSpanEnd(lines: string[], row: number, pos: number, length: number): { row: number; pos: number } | undefined {
-  const quotePrefix = (line: string) => /^(?: {0,3}>[ \t]?)+/.exec(line)?.[0] ?? "";
-  const quoteDepth = (prefix: string) => [...prefix].filter((char) => char === ">").length;
-  const depth = quoteDepth(quotePrefix(lines[row]));
-  for (let i = row; i < lines.length; i++) {
-    const line = lines[i];
-    if (i > row) {
-      // Inline spans cannot cross block boundaries. Do not pair an unmatched
-      // backtick with one in a later heading, fence or list item. An angle
-      // bracket alone does not start a new block inside an inline span.
-      const quote = quotePrefix(line);
-      // A paragraph may lazily continue without repeating every quote marker;
-      // a deeper quote starts a new block. Whitespace around > may also vary.
-      if (quoteDepth(quote) > depth) return undefined;
-      const content = line.slice(quote.length);
-      if (!content.trim() || headingText(content) !== null || FENCE_OPEN_RE.test(line) ||
-        /^ {0,3}(?:[-+*](?:[ \t]|$)|\d+[.)][ \t]|(?:=+|-+)[ \t]*$)/.test(content)) return undefined;
-    }
-    const runs = /`+/g;
-    runs.lastIndex = i === row ? pos : 0;
-    let run: RegExpExecArray | null;
-    // Within a code span backslashes are literal, so even \` can close it.
-    while ((run = runs.exec(line))) {
-      if (run[0].length === length) return { row: i, pos: runs.lastIndex };
-    }
-  }
-  return undefined;
-}
-
-/**
- * Strip HTML comments and fenced code before interpreting headings or citations.
- * Comments only open outside matched inline code spans and backslash escapes.
- * Preserve line count and spaces where comments occur, so hidden text cannot
- * supply ownership, coverage, or join two visible tokens into a new MEM ID.
- */
-function visibleLines(text: string): string[] {
-  let comment = false;
-  let fence: { marker: string; length: number; prefix: string; flexibleIndent: boolean } | undefined;
-  let codeEnd: { row: number; pos: number } | undefined;
-  const lines = text.split(/\r\n|[\n\r]/u);
-  return lines.map((line, row) => {
-    if (fence) {
-      const close = FENCE_CLOSE_RE.exec(line);
-      // Only resume coverage at an unambiguous closing container prefix.
-      // A deeper/uncertain delimiter stays hidden along with the rest of the
-      // block (possibly to EOF), rather than exposing example code as prose.
-      const sameContainer = close && (fence.flexibleIndent
-        ? close[1].startsWith(fence.prefix) && /^ {0,3}$/.test(close[1].slice(fence.prefix.length))
-        : close[1] === fence.prefix);
-      if (close && sameContainer && close[2][0] === fence.marker && close[2].length >= fence.length) fence = undefined;
-      return "";
-    }
-    // A fence's contents are literal, including apparent comment delimiters.
-    const open = !comment && !codeEnd && FENCE_OPEN_RE.exec(line);
-    if (open && (open[2][0] !== "`" || !open[3].includes("`"))) {
-      // At top level (or after an explicit quote container), delimiter
-      // indentation is independently 0–3 spaces. Ambiguous list/tab/deeper
-      // indentation still requires an exact prefix, conservatively to EOF.
-      const quote = /^(?: {0,3}>[ \t]?)+/.exec(open[1])?.[0] ?? "";
-      const flexibleIndent = /^ {0,3}$/.test(open[1].slice(quote.length));
-      fence = { marker: open[2][0], length: open[2].length, flexibleIndent,
-        prefix: flexibleIndent ? quote : open[1].replace(/(?:[-+*]|\d+[.)])(?=[ \t])/g, (marker) => " ".repeat(marker.length)) };
-      return "";
-    }
-    let visible = "";
-    let pos = 0;
-    while (pos < line.length) {
-      if (comment) {
-        // HTML comment contents are raw: backticks/backslashes cannot escape
-        // their closing delimiter once a real comment has opened.
-        const end = line.indexOf("-->", pos);
-        if (end < 0) break;
-        visible += " ".repeat(end + 3 - pos);
-        pos = end + 3;
-        comment = false;
-      } else if (codeEnd) {
-        const end = codeEnd.row === row ? codeEnd.pos : line.length;
-        visible += line.slice(pos, end);
-        pos = end;
-        if (codeEnd.row === row) codeEnd = undefined;
-      } else if (line[pos] === "\\") {
-        // Consuming pairs also handles odd/even runs of escaping backslashes.
-        visible += line.slice(pos, pos + 2);
-        pos += 2;
-      } else if (line[pos] === "`") {
-        const run = /^`+/.exec(line.slice(pos))![0];
-        codeEnd = codeSpanEnd(lines, row, pos + run.length, run.length);
-        visible += run;
-        pos += run.length;
-      } else if (line.startsWith("<!--", pos)) {
-        comment = true;
-      } else {
-        visible += line[pos++];
-      }
-    }
-    return visible;
-  });
-}
-
 const OBSOLETE_OWNER_RE = new RegExp(String.raw`\b${MEM_CITATION_PATTERN}:obsolete\b`);
 
-/** ATX headings, including empty boundaries, optional indentation/closing hashes. */
-function headingText(line: string): string | null {
-  const m = /^ {0,3}#{1,6}(?:[ \t]+(.*)|$)/.exec(line.replace(/^\ufeff/, ""));
-  return m ? (m[1] ?? "").replace(/(?:^|[ \t]+)#+[ \t]*$/, "").trim() : null;
+interface Section {
+  start: number;
+  headingEnd: number;
+  end: number;
+  heading: string | null;
+}
+
+/** Only CommonMark heading nodes own/end sections; literal nodes never do.
+ * Keep source offsets/line endings intact when masking excluded nodes so the
+ * existing line-based citation and literal-coverage rules retain their meaning.
+ * No Markdown syntax is recognized here: micromark/mdast owns all parsing.
+ */
+function parseDestination(text: string): { lines: string[]; sections: Section[] } {
+  const tree = fromMarkdown(text);
+  const headings: Heading[] = [];
+  const excluded: { start: number; end: number }[] = [];
+  function visit(node: Nodes): void {
+    if (node.type === "code" || node.type === "html" || node.type === "definition") {
+      excluded.push({ start: node.position!.start.offset!, end: node.position!.end.offset! });
+      return;
+    }
+    if (node.type === "inlineCode") return; // literal inline text, never block syntax
+    if (node.type === "heading") headings.push(node);
+    if ("children" in node) for (const child of node.children) visit(child);
+  }
+  visit(tree);
+  let offset = 0;
+  const visible: string[] = [];
+  for (const range of excluded) {
+    visible.push(text.slice(offset, range.start), text.slice(range.start, range.end).replace(/[^\r\n]/g, " "));
+    offset = range.end;
+  }
+  visible.push(text.slice(offset));
+  const visibleText = visible.join("");
+  const lines = visibleText.split(/\r\n|[\n\r]/u);
+  function headingText(node: Heading): string {
+    // AST child positions omit ATX/Setext delimiters. Read the original source
+    // so literal escapes (notably \| in registry pointer hooks) survive. HTML
+    // children have already been masked; inlineCode stays literal inline text.
+    if (!node.children.length) return "";
+    const first = node.children[0].position!.start.offset!;
+    const last = node.children[node.children.length - 1].position!.end.offset!;
+    return visibleText.slice(first, last).replace(/\r\n|[\n\r]/g, " ").trim();
+  }
+  const sections: Section[] = headings.map((node) => ({
+    start: node.position!.start.line - 1,
+    headingEnd: node.position!.end.line,
+    end: lines.length,
+    heading: headingText(node),
+  }));
+  if (!sections.length || sections[0].start > 0) sections.unshift({ start: 0, headingEnd: 0, end: lines.length, heading: null });
+  for (let i = 0; i + 1 < sections.length; i++) sections[i].end = sections[i + 1].start;
+  return { lines, sections };
 }
 
 /**
  * Safety boundaries, NOT a Markdown parser: inspect every raw line, including
- * code/comments, without consulting visibleLines or any of its state. Accept
+ * code/comments, without consulting the AST or any parser state. Accept
  * possible container/indentation prefixes conservatively and include Setext
  * shapes. False positives may reject a trim; visibility bugs cannot authorize
  * one by hiding a foreign owner or borrowing text past a raw heading.
@@ -326,69 +273,53 @@ export function firstCitations(destinations: DestinationFile[]): CitationScan {
   for (const { file, text } of sorted) {
     const rawLines = text.split(/\r\n|[\n\r]/u);
     const raw = rawHeadings(rawLines);
-    const lines = visibleLines(text);
-    let heading: string | null = null;
-    let sectionStart = 0;
-    const sections = lines.map(headingText);
-    // Visible sections supply candidates; raw boundaries independently limit
-    // their evidence and veto hidden foreign owners BEFORE accepting any line.
-    const sectionEnds = new Map<number, number>();
-    for (let i = 0; i < lines.length; i++) {
-      if (sections[i] !== null) {
-        sectionEnds.set(sectionStart, i);
-        sectionStart = i;
-      }
-    }
-    sectionEnds.set(sectionStart, lines.length);
-    const safety = new Map<number, { end: number; conflict?: RawHeading }>();
-    for (const [start, visibleEnd] of sectionEnds) {
-      const owners = distinctCitedKeysInLine(sections[start] ?? "");
-      let end = visibleEnd;
+    const { lines, sections } = parseDestination(text);
+    for (const section of sections) {
+      const { start, end: sectionEnd, heading } = section;
+      const owners = distinctCitedKeysInLine(heading ?? "");
+      let evidenceEnd = sectionEnd;
       let conflict: RawHeading | undefined;
-      for (let i = start; i < visibleEnd; i++) {
+      // Independent fix2 invariant: inspect the WHOLE section before accepting
+      // even its heading citation, including excluded code/HTML/inlineCode.
+      for (let i = start; i < sectionEnd; i++) {
         const boundary = raw[i];
         if (!boundary) continue;
-        if (i > start) end = Math.min(end, i);
+        if (i >= section.headingEnd && i > start) evidenceEnd = Math.min(evidenceEnd, i);
         if (!conflict && boundary.owners.some((key) => !owners.includes(key))) conflict = boundary;
       }
-      safety.set(start, { end, conflict });
+      lines.slice(start, sectionEnd).forEach((visible, relative) => {
+        const idx = start + relative;
+        const keysOnLine = distinctCitedKeysInLine(visible);
+        if (keysOnLine.length === 0) return;
+        const key = keysOnLine.length === 1 ? keysOnLine[0] : subjectPositionKey(visible);
+        if (key === null) return; // ambiguous cross-reference, no sole subject
+        const lineText = rawLines[idx];
+        if (isIndexShapedLine(visible)) {
+          indexRejections.push({ key, file, line: idx + 1, lineText });
+          return;
+        }
+        const reason = heading === null ? "missing-heading"
+          : owners.length === 0 ? "missing-key"
+          : owners.length > 1 ? "multi-key"
+          : owners[0] !== key ? "foreign-key"
+          : OBSOLETE_OWNER_RE.test(heading) ? "obsolete-owner"
+          : null;
+        if (reason) {
+          ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners, reason });
+          return;
+        }
+        const uncertain = conflict ?? (idx >= evidenceEnd ? raw[evidenceEnd] : null);
+        if (uncertain) {
+          ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners,
+            reason: "uncertain-section", rawHeading: uncertain });
+          return;
+        }
+        if (!found.has(key)) {
+          found.set(key, { file, line: idx + 1, lineText, heading,
+            sectionText: lines.slice(start, evidenceEnd).join("\n") });
+        }
+      });
     }
-    sectionStart = 0;
-    lines.forEach((visible, idx) => {
-      if (sections[idx] !== null) { heading = sections[idx]; sectionStart = idx; }
-      const keysOnLine = distinctCitedKeysInLine(visible);
-      if (keysOnLine.length === 0) return;
-      const key = keysOnLine.length === 1 ? keysOnLine[0] : subjectPositionKey(visible);
-      if (key === null) return; // ambiguous cross-reference, no sole subject
-      const lineText = rawLines[idx];
-      if (isIndexShapedLine(visible)) {
-        indexRejections.push({ key, file, line: idx + 1, lineText });
-        return;
-      }
-      const owners = distinctCitedKeysInLine(heading ?? "");
-      const reason = heading === null ? "missing-heading"
-        : owners.length === 0 ? "missing-key"
-        : owners.length > 1 ? "multi-key"
-        : owners[0] !== key ? "foreign-key"
-        : OBSOLETE_OWNER_RE.test(heading) ? "obsolete-owner"
-        : null;
-      if (reason) {
-        ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners, reason });
-        return;
-      }
-      const guard = safety.get(sectionStart)!;
-      const uncertain = guard.conflict ?? (idx >= guard.end ? raw[guard.end] : null) ??
-        (!raw[sectionStart] ? { line: sectionStart + 1, lineText: rawLines[sectionStart], owners: [] } : null);
-      if (uncertain) {
-        ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners,
-          reason: "uncertain-section", rawHeading: uncertain });
-        return;
-      }
-      if (!found.has(key)) {
-        found.set(key, { file, line: idx + 1, lineText, heading,
-          sectionText: lines.slice(sectionStart, guard.end).join("\n") });
-      }
-    });
   }
   return { citations: found, indexRejections, ownershipRejections };
 }

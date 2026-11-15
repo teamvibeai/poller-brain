@@ -27,3 +27,6 @@
 !.github/**
 !docs/
 !docs/**
+
+# Installed CommonMark parser dependencies (manifest and lockfile are tracked).
+node_modules/
