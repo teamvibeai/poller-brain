@@ -528,6 +528,18 @@ If over **9000 bytes**, apply the per-file retry contract after regeneration and
 
 Prepare and verify Step 6 edits directly and protect them with the existing Step 6a checkpoint below; **do not use `consolidation-apply.sh` for Step 6** (its transaction allowlist excludes this step).
 
+**Mechanical tier-inventory refresh (mandatory, #482):** After the Step 6 tier mutations (including promotions, moves, deletions and reduction destinations), regenerate the inventory from the current brain tree, even on a zero-promotion run. From the brain root, save the helper's complete output outside `memory/` and `reports/`, then verify it against a fresh scan:
+
+```bash
+TIER_INVENTORY_DRAFT=$(git rev-parse --git-path consolidation-tier-inventory-YYYY-MM-DD.md)
+node "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-tier-inventory.mjs" . > "$TIER_INVENTORY_DRAFT"
+node "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-tier-inventory.mjs" . --check "$TIER_INVENTORY_DRAFT"
+```
+
+Require exit 0 from **both commands** before continuing. Read the generated `## Tier Inventory` block: verify promoted/moved destinations appear, retired paths are absent, and per-tier file counts/UTF-8 byte totals reflect the current `core/`, `semantic/`, `episodic/`, and `procedural/` tree. Paths are relative to `memory/`, recursively sorted; timestamps and non-tier files are excluded. Missing and empty tiers are explicitly distinguished. An unavailable brain/memory root, unreadable scan/file, symlink, unsupported entry or invalid UTF-8 is an error, never a successful empty inventory. On helper/check failure, stop consolidation, report the error and affected path through the existing failure-reporting flow, and investigate; do not silently skip, reuse stale output, or publish completed reports.
+
+Refresh and verify again after any later tier mutation, including Step 5b's deferred retirement, trims, or progress-ledger creation/removal. Step 12 requires a final scan **after the last tier mutation** and embeds the unchanged generated block in the completed markdown report; Step 12a must commit that artifact in the report checkpoint. Keep it separate from `## Tier Coverage` and do not create a generated tier file or count this bookkeeping as a promotion. The draft outside memory is temporary evidence, not the committed artifact.
+
 The 9000 B cap is a soft bound that keeps the always-in-context SUMMARY.md from crowding the working context. Encoding the trigger here removes the prior reliance on reflection-cycle recommendation chaining, where the same trim was re-proposed across cycles without ever landing (`teamvibeai/poller-brain#186`).
 
 ### 6a. Checkpoint Commit (crash-safety)
@@ -911,10 +923,18 @@ cannot be confirmed. Do not automatically resolve rescue refs.
 
 Before reporting the final catalog result, rerun Step 9a-catalog if scoped tier files or catalog pages changed after its measurement, including any new tier archive files. Keep initial and final measurements distinct.
 
-Create both reports, carrying forward Step 10a's ledger fields without dropping compliance, recovery, or cumulative file tracking. Once both reports are verified, remove the in-progress ledger (its content is now in the reports) before Step 12a:
+Prepare both report drafts outside `reports/`, carrying forward Step 10a's ledger fields without dropping compliance, recovery, or cumulative file tracking. Verify that the drafts preserve the ledger's content, then remove the in-progress ledger before the final tier-inventory scan (removing it changes `episodic/` counts and bytes). Regenerate and verify the inventory using Step 6's commands after this and all other tier mutations. Include the complete generated `## Tier Inventory` block unchanged in the markdown draft, under its own heading outside `## Tier Coverage`. Publish both verified reports:
 
-- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the per-file retry block and truthful reduction statuses from the retry contract, plus `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, `## Memory Catalog Audit` from Step 9a-catalog, and `## Memory Metrics` from Step 9b)
+- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the verified `## Tier Inventory` block, the per-file retry block and truthful reduction statuses from the retry contract, plus `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, `## Memory Catalog Audit` from Step 9a-catalog, and `## Memory Metrics` from Step 9b)
 - **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` and `mem-integrity-check` keys in `selfAssessment`, and the `[self-critique]` entry from Step 11 in `processImprovements`)
+
+Before the report checkpoint, mechanically verify the embedded artifact against the current tree:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-tier-inventory.mjs" . --check reports/YYYY-MM-DD-memory-consolidation.md
+```
+
+Require exit 0 and inspect counts/paths as in Step 6. A mismatch or scan failure blocks completion: report and resolve it, regenerate after any tier changes, and reverify before Step 12a. Do not mutate tier files between this final verification and the report checkpoint. The existing `## Tier Coverage` checklist and JSON schema remain unchanged; inventory paths alone are not promotion evidence.
 
 **Post-write existence check (required, added per pb#257):** After writing the JSON report, run `ls reports/YYYY-MM-DD-memory-consolidation.json` and confirm it exists on disk. This step is easy to drop silently on unusually busy sessions (many interleaved threads) — and when it's dropped, the poller's guard-file hook (`teamvibe.ai#128`) has nothing to POST, so `.last_consolidation` never updates even though real consolidation content landed. The next `maintenance-guard.sh` run then reports a false-overdue signal despite consolidation having actually happened. Verify the pair before Step 12a commits it. After that checkpoint, the platform may consume/delete JSON; use its committed copy as evidence and never recreate an already consumed report. If no committed report evidence exists and the check fails, stop and finish the report before closing the session.
 
@@ -922,11 +942,13 @@ For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log w
 
 ### 12a. Checkpoint Commit (crash-safety)
 
-**Commit the completed markdown/JSON reports and all Steps 10–12 changes immediately after Step 12, before the user-facing final report (#462).** Verify both report files exist and the required fields/checks from Step 12 pass first. This complements 10a, which protects compliance/bookkeeping before report completion. Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the allowed consolidation paths have no changes.
+**Commit the completed markdown/JSON reports and all Steps 10–12 changes immediately after Step 12, before the user-facing final report (#462).** Verify both report files exist and the required fields/checks from Step 12 pass first, including the mechanical check of the report's final tier inventory. This complements 10a, which protects compliance/bookkeeping before report completion. Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the allowed consolidation paths have no changes.
 
 ```bash
 bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-commit.sh" . YYYY-MM-DD "steps 10-12"
 ```
+
+Verify that `git show <checkpoint-SHA>:reports/YYYY-MM-DD-memory-consolidation.md` contains the exact verified `## Tier Inventory` block. The report is the durable inventory artifact; the temporary draft alone does not satisfy this checkpoint requirement.
 
 ## Scoring Guidance
 
