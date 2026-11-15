@@ -61,6 +61,7 @@ import {
   applyTrimCandidates,
   trimPromotedRows,
   verifyTrimStats,
+  isPointerDescription,
   type DestinationFile,
 } from "./lib/mem-registry-trim-core.js";
 import { isReliableHook } from "./lib/citation-detect.js";
@@ -360,6 +361,114 @@ assert(found2.alreadyPointer === 6, "run 2 finds all six trimmed rows as already
 const r2 = applyTrimCandidates(r1.registry, found2.candidates);
 verifyTrimStats(r2.stats);
 assert(r2.registry === r1.registry, "a second apply pass is byte-identical (idempotent)");
+
+// #482: one Description grammar must protect both scanning and stale approvals.
+// Compact targets end at whitespace or end-of-cell; hooks have no required
+// separator. Spaced paths are deliberately narrower: a tier-relative path
+// with nonempty, non-dot segments and ASCII spaces, plus the writer's ` — `.
+const pointerDescriptions = [
+  "see semantic/guide.md",
+  "see guide.md",
+  "see semantic/guide.md — Existing rule",
+  "see semantic/guide.md - Existing rule",
+  "see semantic/guide.md → Existing rule",
+  "see semantic/guide.md Existing rule",
+  "see semantic/guide.md  Existing rule",
+  "see semantic/guide.md  — Existing rule",
+  "see semantic/guide.md\tExisting rule",
+  "see semantic/guide.md\u00a0Existing rule",
+  "see core/team rules.md — Existing rule",
+  "see semantic/team guide.md — Existing rule",
+  "see episodic/2026 recap/incident  notes.md — Existing rule",
+  "see procedural/Český tým/run_book-v2.1 guide (final).md — Existing rule",
+];
+const narrativeDescriptions = [
+  "see the operational guide.md — this is narrative",
+  "see the operational guide.md",
+  "Please see semantic/guide.md — Existing rule",
+  "see semantic/guide.md.bak",
+  "see semantic/guide.md.bak — Existing rule",
+  "see semantic/team guide.md.bak — Existing rule",
+  // The registry writer emits :line in Obsoleted only, never Description.
+  // Keep line-qualified Description targets out of the pointer grammar.
+  "see semantic/guide.md:12 — Existing rule",
+  "see semantic/team guide.md:12 — Existing rule",
+  "see semantic/guide.md:12 — Read another guide.md — this is narrative",
+  "see semantic/guide.md→Existing rule",
+  "see semantic/guide.md-Existing rule",
+  "see semantic/guide.md—Existing rule",
+  "see semantic/team guide.md",
+  "see semantic/team guide.md - Existing rule",
+  "see semantic/team guide.md → Existing rule",
+  "see semantic/team guide.md Existing rule",
+  "see docs/team guide.md — Existing rule",
+  "see memory/semantic/team guide.md — Existing rule",
+  "see semantic//team guide.md — Existing rule",
+  "see semantic/../team guide.md — Existing rule",
+  "see semantic/./team guide.md — Existing rule",
+  "see semantic/team\tguide.md — Existing rule",
+];
+const pointerKeys = ["MEM-482", "MEM-2026-11-13-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"];
+const pointerBody = "Preserve the complete reviewed lesson and its original evidence. ".repeat(8).trim();
+for (const columns of [4, 5]) {
+  for (const key of pointerKeys) {
+    // Keep irregular spacing, Obsoleted content, CRLF and lack of final newline
+    // visible: preserving just the parsed Description would not be sufficient.
+    const rowFor = (description: string) =>
+      `|  ${key} | PROMOTED  | 2026-11-13 |${columns === 5 ? " old-source:7  |" : ""}  ${description}  |`;
+    const destinations = [{ file: "semantic/reviewed.md", text:
+      `### Preserve the reviewed lesson\n[${key}] ${pointerBody}` }];
+    const staleApprovals = findTrimCandidates(rowFor(pointerBody), destinations).candidates;
+    assert(staleApprovals.length === 1, `#482 ${columns} columns ${key}: fixture has a reviewed narrative candidate`);
+    for (const description of pointerDescriptions) {
+      const label = `#482 ${columns} columns ${key}: ${description}`;
+      const registry = `# Registry\r\n${rowFor(description)}\r\n<!-- keep this footer -->`;
+      assert(isPointerDescription(description), `${label}: predicate recognizes pointer`);
+      const scan = findTrimCandidates(registry, destinations);
+      assert(scan.totalDataRows === 1 && scan.alreadyPointer === 1 && scan.candidates.length === 0 &&
+        scan.contentCoverage.length === 0, `${label}: scan skips the pointer before coverage`);
+      assert(trimPromotedRows(registry, destinations).registry === registry, `${label}: scan/apply preserves every byte`);
+      const staleApply = applyTrimCandidates(registry, staleApprovals);
+      assert(staleApply.registry === registry, `${label}: stale approval preserves every byte`);
+      assert(staleApply.stats.alreadyPointer === 1 && staleApply.stats.candidateRows === 0 &&
+        staleApply.stats.trimmedRows === 0, `${label}: apply reports a pointer and no rewrite`);
+      verifyTrimStats(staleApply.stats);
+    }
+    for (const description of narrativeDescriptions) {
+      const label = `#482 ${columns} columns ${key}: ${description}`;
+      assert(!isPointerDescription(description), `${label}: predicate rejects non-pointer`);
+      assert(findTrimCandidates(rowFor(description), []).alreadyPointer === 0, `${label}: scan does not bypass narrative guards`);
+      const unchanged = applyTrimCandidates(rowFor(description), []);
+      assert(unchanged.stats.alreadyPointer === 0 && unchanged.stats.candidateRows === 1 &&
+        unchanged.registry === rowFor(description), `${label}: apply treats it as unapproved narrative`);
+    }
+    const prose = narrativeDescriptions[0];
+    assert(findTrimCandidates(rowFor(prose), [{ file: "semantic/narrative.md", text:
+      `### Preserve the operational guide narrative\n[${key}] ${prose}` }]).candidates.length === 1,
+    `#482 ${columns} columns ${key}: fully covered narrative still receives citation review`);
+
+    // Round-trip actual trim-writer output rather than only hand-built pointers.
+    for (const file of ["core/team rules.md", "semantic/team guide.md",
+      "episodic/2026 recap/incident  notes.md", "procedural/Český tým/run_book-v2.1 guide (final).md"]) {
+      const destinations = [{ file, text: `### Preserve the reviewed lesson\n[${key}] ${pointerBody}` }];
+      const approved = findTrimCandidates(rowFor(pointerBody), destinations).candidates;
+      const written = applyTrimCandidates(rowFor(pointerBody), approved);
+      assert(written.stats.trimmedRows === 1 && written.registry.includes(`see ${file} — Preserve the reviewed lesson`),
+        `#482 writer ${columns} columns ${key}: emits spaced ${file} verbatim`);
+      if (columns === 5) {
+        assert(written.registry.includes(`| ${file}:2 |`), `#482 writer: :line belongs only in Obsoleted for ${file}`);
+      }
+      verifyTrimStats(written.stats);
+      const repeated = findTrimCandidates(written.registry, destinations);
+      assert(repeated.alreadyPointer === 1 && repeated.candidates.length === 0,
+        `#482 writer ${columns} columns ${key}: scan recognizes spaced ${file}`);
+      const reapplied = applyTrimCandidates(written.registry, approved);
+      assert(reapplied.registry === written.registry && reapplied.stats.trimmedRows === 0,
+        `#482 writer ${columns} columns ${key}: stale approval preserves spaced ${file} byte-for-byte`);
+      verifyTrimStats(reapplied.stats);
+    }
+  }
+}
 
 // --- verifyTrimStats FAIL LOUD on a broken invariant -------------------------
 let threw = false;

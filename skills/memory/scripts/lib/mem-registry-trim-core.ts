@@ -144,8 +144,25 @@ function checkCoverage(key: string, description: string, destination: string, ci
   };
 }
 
-/** Matches an already-trimmed pointer row's Description cell. */
-export const POINTER_DESC_RE = /^see .+\.md( —| -)/;
+/** Recognize an existing pointer in a trimmed Description cell. */
+export function isPointerDescription(description: string): boolean {
+  // Compact targets need only a token boundary, independent of the hook's
+  // separator (or whether a hook exists). A suffix like .md.bak or .md:12
+  // is not a target emitted by this registry writer.
+  if (/^see \S+\.md(?:\s|$)/u.test(description)) return true;
+
+  // The writer also preserves spaces in tier-relative filesystem paths.
+  // Accept those only with its canonical ` — ` delimiter, rather than
+  // treating arbitrary multiword prose ending in .md as a path. The first
+  // delimiter bounds the target so a later .md in the hook cannot rescue it.
+  if (!description.startsWith("see ")) return false;
+  const separator = description.indexOf(" — ", 4);
+  if (separator === -1) return false;
+  const file = description.slice(4, separator);
+  return /^(?:core|semantic|episodic|procedural)\/.+\.md$/u.test(file) &&
+    file.includes(" ") &&
+    file.split("/").every((part) => part.length > 0 && part !== "." && part !== ".." && !/[^\S ]/u.test(part));
+}
 
 export interface FindCandidatesResult {
   candidates: TrimCandidate[];
@@ -198,7 +215,7 @@ export function findTrimCandidates(
     const cells = parseRegistryCells(line);
     // An unparseable row has no verifiable body and must fail coverage.
     const description = cells ? cells[cells.length - 2].trim() : "";
-    if (POINTER_DESC_RE.test(description)) {
+    if (isPointerDescription(description)) {
       alreadyPointer++;
       continue;
     }
@@ -296,7 +313,7 @@ export function applyTrimCandidates(
     const key = m[1];
     const description = cells ? cells[cells.length - 2].trim() : "";
 
-    if (POINTER_DESC_RE.test(description)) {
+    if (isPointerDescription(description)) {
       alreadyPointer++;
       return line;
     }
