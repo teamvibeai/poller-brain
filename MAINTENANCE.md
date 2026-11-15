@@ -50,6 +50,8 @@ For CLAUDE.md Step 9c and SUMMARY.md Step 6 only, follow the consolidation skill
 
 On deferral, report `deferred: structural stall; next eligible <time>; last actual search <time>` with source report/commit, current byte overage, and the human-review flag. Keep the warning in Consequences and `processImprovements` using existing fields. Do not claim a fresh search or repeat a long candidate narrative. SUMMARY still regenerates with a fresh timestamp, reconciles/validates pointers, appears in `filesChanged`, and sets `selfAssessment["summary-md-regenerated"] = true`; Step 9b metrics and integrity audits still run. Report the SUMMARY budget as 0 used / the fixed allowed amount. Due searches retain the #452 fixed relocation budget, strict shrinking/preservation checks and all caps. Clear retry state on under-cap results or successful progress. No new JSON schema or evaluator keys are introduced.
 
+For semantic split review, include `## Semantic Lifecycle` with the explicit `migrated`, `justified no-split`, or `concrete handoff` outcome and evidence required by [consolidation Step 5b](skills/memory/consolidate/SKILL.md#citation-safe-split-runbook). Link its durable inventory/relocation map or handoff (source fingerprint, plan, owner, UTC deadline, blocker); summarize the outcome in the existing JSON `decisions` field, without new schema/evaluator fields. Reflection carries the same task forward and reports overdue escalation under its previous-recommendations review. Keep past reports unchanged; their citations use the original revision and relocation map for historical lookup.
+
 ### Rules
 
 - Reports are **append-only** — never edit past reports.
