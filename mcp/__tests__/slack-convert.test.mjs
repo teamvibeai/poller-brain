@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
+  .replace(/'\.\/lib\/([^']+)'/g, (_, file) => JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', file)).href))
 const exports = '\nexport { isTableLine, computePipeTableWarning, gfmInlineToMrkdwn, convertPipeTablesToBlocks, textToSections, stripBoldWrappedUrl, wrapBoldEmbeddedUrl }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { computePipeTableWarning, convertPipeTablesToBlocks, stripBoldWrappedUrl, wrapBoldEmbeddedUrl } = mod

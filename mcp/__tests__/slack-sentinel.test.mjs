@@ -15,7 +15,7 @@ process.env.TEAMVIBE_POLLER_TOKEN = 'test-token'
 const serverPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs')
 const src = readFileSync(serverPath, 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(serverPath), 'lib', 'validate-args.mjs')).href))
+  .replace(/'\.\/lib\/([^']+)'/g, (_, file) => JSON.stringify(pathToFileURL(join(dirname(serverPath), 'lib', file)).href))
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + '\nexport { handleRequest }\n'))
 const { handleRequest, shouldSuppressSentinel } = mod
 
@@ -88,7 +88,7 @@ for (const text of [
 
 {
   const { result, calls } = await callTool('send_message', {
-    text: SENTINEL, modals: [{ label: 'Open', view: { type: 'modal', blocks: [] } }],
+    text: SENTINEL, modals: [{ label: 'Open', view: { type: 'modal', title: { type: 'plain_text', text: 'Form' }, blocks: [] } }],
   })
   ok('modals bypass suppression', result.ok === true && !result.suppressed && calls.some(c => c.url.endsWith('/chat.postMessage')))
   ok('modal registration and button update still run', calls.some(c => c.url.endsWith('/modal-definitions')) && calls.some(c => c.url.endsWith('/chat.update')))

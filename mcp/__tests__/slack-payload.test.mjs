@@ -13,7 +13,7 @@ import { expectedEncoding } from './slack-encoding-expectations.mjs'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'slack.mjs'), 'utf8')
 const prelude = src.split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'validate-args.mjs')).href))
+  .replace(/'\.\/lib\/([^']+)'/g, (_, file) => JSON.stringify(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', file)).href))
 const exports = '\nexport { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi }\n'
 const mod = await import('data:text/javascript,' + encodeURIComponent(prelude + exports))
 const { buildSendPayload, buildSendResponse, needsFormEncoding, slackApi } = mod

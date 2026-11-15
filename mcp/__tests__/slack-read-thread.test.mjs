@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const mcpDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const source = readFileSync(join(mcpDir, 'slack.mjs'), 'utf8')
   .split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(mcpDir, 'lib/validate-args.mjs')).href))
+  .replace(/'\.\/lib\/([^']+)'/g, (_, file) => JSON.stringify(pathToFileURL(join(mcpDir, 'lib', file)).href))
 const THREAD_TS = '1790081797.452189'
 const RECEIPT_TS = '1790081800.000001'
 const CURSOR = 'bmV4dDo+/=:_-'
