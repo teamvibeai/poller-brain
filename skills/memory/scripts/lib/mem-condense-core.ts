@@ -34,20 +34,34 @@ function pointerText(mode: Mode, topic: Topic, options: CondensationOptions): st
   return mode === "learnings" ? pointerFor(topic.original, candidate) :
     applyTrimCandidates(topic.original, [candidate]).registry;
 }
-function usesExternalReference(lines: string[], topic: Topic): boolean {
-  // Conservative label scan, including bracketed prose/code and definitions in
-  // containers. Do not move/copy definitions or assume a renderer's context.
-  const normalize = (label: string) => label.replace(/\\(.)/g, "$1").trim().replace(/\s+/gu, " ").toUpperCase();
-  const external = new Set<string>();
-  for (const outside of [lines.slice(0, topic.start - 1), lines.slice(topic.end)]) {
-    for (const match of outside.join("\n").matchAll(/\[((?:\\[\s\S]|[^\[\]\\])+)\]:/g)) external.add(normalize(match[1]));
+// This is deliberately a conservative syntax scan, including prose/code and
+// containers. Relocation never imports/exports a reference namespace or rebases
+// a relative target. Bare MEM citations are safe only without a definition.
+const referenceLabel = /\[((?:\\[\s\S]|[^\[\]\\])+)\]/g;
+const referenceDefinition = /\[((?:\\[\s\S]|[^\[\]\\])+)\]:/g;
+const normalizeLabel = (label: string) => label.replace(/\\(.)/g, "$1").trim().replace(/\s+/gu, " ").toLowerCase().toUpperCase();
+function relocationLinkRefusal(original: string, definitions: Set<string>): string | null {
+  // Includes definitions with 0–3 spaces and in containers. Even an unused
+  // definition must stay: a retained entry may depend on it (reverse edge).
+  if ([...original.matchAll(referenceDefinition)].length) return "Markdown reference definition needs separate pointer review";
+  if (/\]\s*\[/.test(original) || [...original.matchAll(referenceLabel)].some(m =>
+    definitions.has(normalizeLabel(m[1])))) {
+    return "Markdown reference link needs separate pointer review";
   }
-  // The second label catches full references; the first catches collapsed and
-  // shortcut references. A bare [MEM-ID] is harmless without a definition.
-  return [...topic.original.matchAll(/\[((?:\\[\s\S]|[^\[\]\\])+)\]/g)].some(m => external.has(normalize(m[1])));
+  // Inspect both links and images, including angle-wrapped destinations. A
+  // missing destination is relative too; only explicit safe schemes may move.
+  for (const match of original.matchAll(/\]\s*\(\s*(?:<([^<>]*)>|([^\s)]*))/g)) {
+    const target = match[1] ?? match[2];
+    if (!/^(?:https?:\/\/|mailto:)/i.test(target)) return "relative inline link/image or unsupported scheme needs separate pointer review";
+  }
+  // Keep the existing guard for bare memory paths, wiki/HTML links. Absolute
+  // URLs (including inline .md destinations) have no directory dependency.
+  const withoutAbsoluteURLs = original.replace(/(?:https?:\/\/|mailto:)[^\s<>]*/gi, "");
+  return /\.md\b|\[\[|href\s*=/i.test(withoutAbsoluteURLs) ? "linked narrative needs separate pointer review" : null;
 }
 export function selectTopic(mode: Mode, text: string, options: CondensationOptions): { topic: Topic | null; refusals: string[] } {
   const lines = text.split("\n");
+  const definitions = new Set([...text.matchAll(referenceDefinition)].map(m => normalizeLabel(m[1])));
   const refusals: string[] = [];
   let topics: Topic[];
   if (mode === "learnings") {
@@ -72,9 +86,8 @@ export function selectTopic(mode: Mode, text: string, options: CondensationOptio
     const occurrences = mode === "registry" ? lines.filter(l => l.match(new RegExp(String.raw`^\|\s*${t.key}\s*\|`))).length :
       (distinctCitedKeysInLine([...lines.slice(0, t.start - 1), ...lines.slice(t.end)].join("\n")).includes(t.key) ? 2 : 1);
     const reason = occurrences !== 1 ? "duplicate key" : Buffer.byteLength(t.original) > MAX_TOPIC_BYTES ? "topic exceeds 8192B bound" :
-      /\.md\b|\]\(|\[\[|href\s*=/i.test(t.original) ? "linked narrative needs separate pointer review" :
-      usesExternalReference(lines, t) ? "reference link definition outside topic needs separate pointer review" :
-      Buffer.byteLength(pointerText(mode, t, options)) >= Buffer.byteLength(t.original) ? "pointer cannot shrink topic" : null;
+      relocationLinkRefusal(t.original, definitions) ??
+      (Buffer.byteLength(pointerText(mode, t, options)) >= Buffer.byteLength(t.original) ? "pointer cannot shrink topic" : null);
     if (reason) refusals.push(`${t.key}: ${reason}`);
     return !reason;
   });

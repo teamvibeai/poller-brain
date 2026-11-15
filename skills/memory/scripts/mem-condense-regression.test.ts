@@ -1,4 +1,4 @@
-/** #530 slice2: reference dependencies and an unshrinkable shortest entry. */
+/** #530 slice2: isolated links/references and an unshrinkable shortest entry. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs";
@@ -130,15 +130,6 @@ test("learnings: retained provenance counts toward pointer size", () => {
   assert.equal(selectTopic("learnings", text, { rule }).topic?.key, "MEM-2");
 });
 
-test("learnings: a definition already inside the whole topic stays verbatim", () => {
-  const original = `## Deployment [MEM-1]\nFollow [policy][deploy]. ${long}\n\n[deploy]: https://example.test/policy`;
-  const text = `# Rules\n\n${original}\n`;
-  const topic = selectTopic("learnings", text, { rule }).topic!;
-  assert.equal(topic.key, "MEM-1");
-  const result = buildCondensation("learnings", text, topic, { rule });
-  assert.ok(result.destinationText.includes(original));
-  assert.ok(!result.after.includes("[deploy]:"));
-});
 
 test("registry: five-column pointer budgets both target occurrences", () => {
   const short = `| MEM-1 | ACTIVE | 2026-09-01 | - | ${"Keep receipts. ".repeat(9).trim()} |`;
@@ -157,3 +148,153 @@ test("learnings: an equal-size pointer is refused before selection", () => {
   const selected = selectTopic("learnings", `# Rules\n\n${short}\n\n${entry("learnings", "MEM-2", long)}\n`, { rule, destination });
   assert.equal(selected.topic?.key, "MEM-2");
 });
+
+// Relocation must be independent of the source file's reference namespace and
+// directory. Scan conservatively, including syntax in prose/code/containers.
+for (const mode of ["learnings", "registry"] as const) {
+  for (const link of ["[policy][deploy]", "[deploy][]", "![policy][deploy]", "![deploy][]"]) {
+    test(`${mode}: refuse reference syntax even without a definition: ${link}`, () => {
+      const text = `# Rules\n\n${entry(mode, "MEM-1", `${link}. ${long}`)}\n`;
+      const selected = selectTopic(mode, text, { rule });
+      assert.equal(selected.topic, null);
+      assert.match(selected.refusals.join("\n"), /MEM-1:.*reference/);
+    });
+  }
+  for (const target of ["release-policy.pdf", "./policy.pdf", "../policy.pdf", "#deployment", "https://example.test/policy"]) {
+    for (const indent of ["", " ", "  ", "   "]) {
+      test(`${mode}: refuse definition with ${indent.length}-space indent and target ${target}`, () => {
+        const definition = `${indent}[deploy]: ${target}`;
+        const original = mode === "learnings" ? `## Deployment [MEM-1]\n${long}\n\n${definition}` :
+          entry(mode, "MEM-1", `${definition} ${long}`);
+        const selected = selectTopic(mode, `# Rules\n\n${original}\n`, { rule });
+        assert.equal(selected.topic, null);
+        assert.match(selected.refusals.join("\n"), /MEM-1:.*reference definition/);
+      });
+    }
+  }
+  for (const link of ["[Deploy   Policy]", "![Deploy   Policy]"]) {
+    test(`${mode}: shortcut uses normalized definition anywhere in the file: ${link}`, () => {
+      const text = `# Rules\n\n${entry(mode, "MEM-1", `${link}. ${long}`)}\n\n# Definitions\n\n   [deploy policy]: release-policy.pdf\n`;
+      assert.equal(selectTopic(mode, text, { rule }).topic, null);
+    });
+  }
+  for (const target of ["release-policy.pdf", "./policy.pdf", "../policy.pdf", "#deployment", "/policy.pdf", "//example.test/policy", ""]) {
+    for (const image of ["", "!"]) {
+      for (const angle of [false, true]) {
+        const link = `${image}[policy](${angle ? `<${target}>` : target})`;
+        test(`${mode}: refuse relative inline destination: ${link}`, () => {
+          const text = `# Rules\n\n${entry(mode, "MEM-1", `${link}. ${long}`)}\n`;
+          const selected = selectTopic(mode, text, { rule });
+          assert.equal(selected.topic, null);
+          assert.match(selected.refusals.join("\n"), /MEM-1:.*relative inline/);
+        });
+      }
+    }
+  }
+  for (const target of ["https://example.test/policy.md#deploy", "http://example.test/policy", "mailto:release@example.test", "HTTPS://example.test/policy"]) {
+    for (const image of ["", "!"]) {
+      for (const angle of [false, true]) {
+        const link = `${image}[policy](${angle ? `<${target}>` : target} "Policy")`;
+        test(`${mode}: absolute inline destination remains relocatable: ${link}`, () => {
+          const original = entry(mode, "MEM-1", `${link}. ${long}`);
+          const text = `# Rules\n\n${original}\n`;
+          const selected = selectTopic(mode, text, { rule });
+          assert.equal(selected.topic?.key, "MEM-1", selected.refusals.join("\n"));
+          const result = buildCondensation(mode, text, selected.topic!, { rule });
+          assert.ok(result.destinationText.includes(original));
+        });
+      }
+    }
+  }
+  for (const [definition, shortcut] of [["key", "Key"], ["STRAẞE", "Straße"]]) {
+    test(`${mode}: shortcut label case normalization: ${shortcut}`, () => {
+      const text = `# Rules\n\n[${definition}]: https://example.test/policy\n\n${entry(mode, "MEM-1", `Follow [${shortcut}]. ${long}`)}\n`;
+      assert.equal(selectTopic(mode, text, { rule }).topic, null);
+    });
+  }
+  for (const suffix of [" (https://example.test/policy)", "(https://example.test/policy"]) {
+    test(`${mode}: a shortcut cannot hide behind an incomplete/adjacent inline link: ${suffix}`, () => {
+      const text = `# Rules\n\n[deploy]: https://example.test/policy\n\n${entry(mode, "MEM-1", `[deploy]${suffix}. ${long}`)}\n`;
+      assert.equal(selectTopic(mode, text, { rule }).topic, null);
+    });
+  }
+  test(`${mode}: filter unsafe references before deterministic shortest-topic selection`, () => {
+    const unsafe = entry(mode, "MEM-1", `Follow [policy][deploy]. ${long.slice(0, 700)}`);
+    const text = `# Rules\n\n${unsafe}\n\n${entry(mode, "MEM-3", long)}\n\n${entry(mode, "MEM-2", long)}\n`;
+    const first = selectTopic(mode, text, { rule });
+    assert.equal(first.topic?.key, "MEM-3");
+    assert.match(first.refusals.join("\n"), /MEM-1:.*reference/);
+    assert.deepEqual(selectTopic(mode, text, { rule }), first);
+    assert.ok(buildCondensation(mode, text, first.topic!, { rule }).after.includes(unsafe));
+  });
+}
+
+for (const indent of ["", " ", "  ", "   "]) {
+  for (const reference of ["[policy][deploy]", "[deploy][]", "[deploy]"]) {
+    test(`learnings: preserve reverse dependency (${indent.length}-space definition, ${reference})`, () => {
+      const original = `## Deployment [MEM-1]\n${long}\n\n${indent}[deploy]: https://example.test/policy`;
+      const text = `# Rules\n\n${original}\n\n## Receipts [MEM-2]\nKeep ${reference}.\n`;
+      const selected = selectTopic("learnings", text, { rule });
+      assert.equal(selected.topic, null);
+      assert.match(selected.refusals.join("\n"), /MEM-1:.*reference definition/);
+    });
+  }
+}
+
+for (const mode of ["learnings", "registry"] as const) {
+  for (const variant of ["reverse-definition", "relative-definition", "fragment-definition", "relative-inline", "fragment-inline", "absolute-inline"]) {
+    if (mode === "registry" && variant.includes("definition")) continue; // Rows cannot own standalone definitions.
+    test(`${mode}: CLI link isolation propose/apply (${variant})`, t => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "condensation-isolation-"));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const brain = path.join(root, "brain"), scratch = path.join(root, "proposal");
+      const absolute = variant === "absolute-inline";
+      const target = variant.startsWith("fragment") ? "#deployment" : "release-policy.pdf";
+      const original = variant.includes("definition") ?
+        `## Deployment [MEM-1]\n${long}\n\n   [deploy]: ${variant === "reverse-definition" ? "https://example.test/policy" : target}` :
+        entry(mode, "MEM-1", `Follow [policy](${absolute ? "https://example.test/policy.md#deploy" : target}). ${long}`);
+      const retained = variant === "reverse-definition" ? "\n\n## Receipts [MEM-2]\nKeep [policy][deploy]." : "";
+      const text = `# Rules\n\n${original}${retained}\n`;
+      fs.mkdirSync(path.join(brain, "memory/core"), { recursive: true });
+      fs.writeFileSync(path.join(brain, "CLAUDE.md"), "fixture\n");
+      fs.writeFileSync(path.join(brain, sources[mode]), text);
+      const env = { ...process.env, BRAIN_ROOT: brain, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.test", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.test" };
+      const git = (...args: string[]) => {
+        const r = spawnSync("git", args, { cwd: brain, env, encoding: "utf8" });
+        assert.equal(r.status, 0, r.stderr);
+        return r.stdout.trimEnd();
+      };
+      const cli = (...args: string[]) => spawnSync(process.execPath,
+        [...process.execArgv, path.join(repo, "skills/memory/scripts/mem-condense.ts"), ...args], { cwd: repo, env, encoding: "utf8" });
+      git("init", "-q"); git("add", "."); git("commit", "-qm", "base");
+      const head = git("rev-parse", "HEAD");
+      const proposal = cli("--mode", mode, "--scratch", scratch, "--rule", rule);
+      assert.equal(proposal.status, 0, proposal.stdout + proposal.stderr);
+      assert.equal(fs.readFileSync(path.join(brain, sources[mode]), "utf8"), text);
+      assert.equal(git("rev-parse", "HEAD"), head);
+      assert.equal(git("status", "--porcelain"), "");
+      if (!absolute) {
+        assert.match(proposal.stdout, /refused: MEM-1:.*(?:reference definition|relative inline)/);
+        assert.ok(!fs.existsSync(scratch), "unsafe-only source produces no plan");
+        // A later safe topic must still be proposed and applied, retaining all
+        // unsafe bytes and any incoming reference in their original context.
+        const safe = mode === "learnings" ? `## Safe alternative [MEM-3]\n${long}` : entry(mode, "MEM-3", long);
+        fs.writeFileSync(path.join(brain, sources[mode]), `${text}\n${safe}\n`);
+        git("add", "."); git("commit", "-qm", "safe alternative");
+        const next = cli("--mode", mode, "--scratch", scratch, "--rule", rule);
+        assert.equal(next.status, 0, next.stdout + next.stderr);
+        assert.match(next.stdout, /refused: MEM-1:.*(?:reference definition|relative inline)/);
+      }
+      const planFile = path.join(scratch, "plan.json"), plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
+      assert.equal(plan.topic.key, absolute ? "MEM-1" : "MEM-3");
+      fs.writeFileSync(path.join(brain, ".git/consolidation-start"), `v1 2026-11-15 ${git("rev-parse", "HEAD")}\n`);
+      const applied = cli("--apply", "--plan", planFile, "--only", `${plan.topic.key}@${plan.topic.start}`, "--cycle-date", "2026-11-15");
+      assert.equal(applied.status, 0, applied.stdout + applied.stderr);
+      assert.equal(fs.readFileSync(path.join(brain, sources[mode]), "utf8"), plan.sourceAfter);
+      assert.equal(fs.readFileSync(path.join(brain, "memory", plan.destination), "utf8"), plan.destinationText);
+      assert.ok(absolute ? plan.destinationText.includes(original) : plan.sourceAfter.includes(text.trimEnd()));
+      assert.equal(git("status", "--porcelain"), "");
+    });
+  }
+}
