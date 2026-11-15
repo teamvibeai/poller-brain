@@ -333,9 +333,9 @@ If MISTAKES.md has no entries or doesn't exist, skip this step.
 
 Scan `memory/semantic/` for stale, oversized, or redundant files. This step keeps semantic memory clean and navigable — without it, old files accumulate noise that degrades search quality.
 
-**This step MUST run before Step 6 (Regenerate SUMMARY.md)** — otherwise SUMMARY.md will contain stale pointers to files that were just deleted or renamed.
+**Run this step before Step 6 (Regenerate SUMMARY.md).** For a split, prepare destinations and live-pointer changes here; if SUMMARY still needs the original, retain its unchanged content until the cutover after Step 6a described below.
 
-Submit all UPDATE/DELETE/MERGE/split results (including any TODAY.md pointer edits) through `consolidation-apply.sh` with `step 5b`. Group each move's writes and deletions into one manifest and require checkpoint success.
+Submit UPDATE/DELETE/MERGE/split results within the **Mutation submission** allowlist (including TODAY.md and registry pointer edits) through `consolidation-apply.sh` with `step 5b`. Group related writes and deletions into one manifest and require checkpoint success. The split runbook below governs changes outside that allowlist and any deferred retirement.
 
 #### Staleness Detection
 
@@ -358,19 +358,39 @@ For each stale file, assess its content against current knowledge:
 
 **Conservative approach:** When unsure whether content is still relevant, KEEP it. Only DELETE when the information is clearly wrong or obsolete. Prefer UPDATE over DELETE.
 
-**Never delete a file that contains `[MEM-NNN]` ACTIVE keys** — those entries must first go through the MEM lifecycle (Step 1c) before the file can be removed.
+**Never discard ACTIVE MEM content.** Obsolete content must first go through the MEM lifecycle (Step 1c). A lossless split may retire the original only after the runbook verifies every section and MEM key at its new location, with registry status unchanged. This applies to both legacy and dated MEM IDs.
 
 #### Size Check
 
 For all files in `memory/semantic/` (not just stale ones):
 
-1. Count lines with `wc -l`
-2. If a file exceeds **100 lines**, split it into logical sub-topics:
-   - Create new files with descriptive names (e.g., `teamvibe-architecture.md` → `teamvibe-architecture-infra.md` + `teamvibe-architecture-api.md`)
-   - Delete the oversized original
-   - Update any pointers in `TODAY.md` that reference the old filename
+Count lines with `wc -l`. **Over 100 lines is a review trigger, not a hard cap or an instruction to delete content.** Split only clearly distinct sub-topics; a 120-line cohesive topic can remain intact with a recorded reason. Choose leaf files with descriptive names and record their size goals and any cohesive-topic exceptions. A roughly 250-line destination goal still requires review above 100 lines; it does not replace that trigger. For example, 671 lines cannot fit losslessly into two files each below 250 lines: use additional leaf files within the themes or justify a revised goal. Never drop or condense content merely to meet a size target.
 
-**Do not split aggressively** — only split when the file covers clearly distinct sub-topics. A 120-line file about one cohesive topic is fine.
+#### Citation-safe split runbook
+
+Use this runbook for semantic splits, including ones first identified by reflection. Topic partitioning is a semantic judgment; neither a filename search nor the MEM citation detector proves a safe migration.
+
+1. **Bound the work and select at most one source file per cycle.** Read prior Semantic Lifecycle reports and existing split handoffs first. Prioritize an existing due task over a fresh candidate; carry its task identity and original deadline forward. Fix a time/change budget before planning. List other candidates as queued, not completed splits. For the selected source, finish with exactly one outcome: `migrated`, `justified no-split`, or `concrete handoff`. If nothing warrants splitting (including an empty directory), record `justified no-split` with the measured reason. Complexity, budget exhaustion, or unavailable review requires a handoff, not a no-split justification.
+
+2. **Capture a fresh origin-repo baseline and inventory readers.** Inspect HEAD, index and working changes under **Checkpoint Rules**; isolate unrelated work. Record the full origin revision, source path, SHA-256 of exact source bytes, line/byte counts, and hashes of inbound files. Inventory complete section spans, including nested headings, preamble/trailing text, explicit section numbers, MEM keys, and outbound/internal links. Search the whole origin repository, not only `memory/`: include all memory tiers, `memory/SUMMARY.md`, registry rows, `kb/`, docs and reports, including relevant hidden/ignored or untracked files. Exclude Git metadata and generated dependencies explicitly; record search coverage and exclusions.
+
+   Search both full/relative path variants and basename, then inspect each occurrence for bare paths, Markdown links (including reference-style links), `:line`/line ranges, `#L…`/`#L…-L…`, heading anchors and section-number references. Search heading names/numbers and aliases too so shorthand references are not missed. Distinguish live navigation from examples, immutable revision links and historical quotations; resolve ambiguous matches by reading the surrounding content. Record each occurrence's reader path/location, syntax, classification/reason, intended source content, and proposed destination/selector. Count reference occurrences separately from distinct referring files. Include existing destination readers if inserting text or editing pointers shifts their cited lines; expand the affected set until all affected references are accounted for.
+
+3. **Map complete sections before writing.** Save a partition plan and old-section/line-range → new-path/section/line-range map in a durable origin-repo file (for memory-only work, e.g. `memory/procedural/semantic-split-<source>.md`). Include the original revision and source hash so historical citations can be looked up later. Assign every source span exactly once, retaining parent/nested-heading context without overlapping or omitting content. Preserve section text, heading/section identifiers, MEM keys, status, provenance and links; do not renumber sections or reissue IDs. Record any necessary relative-link rebasing or fragment change explicitly and verify it still reaches the same content. Cross-section links may need new file paths. Prefer stable section identifiers for new references where readers support them; retain numeric selectors where required.
+
+4. **Prepare and validate the complete affected set in scratch.** Prepare destinations, every live-pointer update, registry locations and the relocation map together. Compare every original span and MEM key with the final files: no lost text, duplicate moves or missing ACTIVE content. Validate each live reference against its recorded intended content using the final bytes, not just an existing file or an in-range line. Recalculate numeric pointers after all edits; check range endpoints, nested/duplicate-heading anchor behavior in the actual reader, section-number meaning, and outbound/relative/internal links from each new directory. Ambiguous targets block retirement. Rescan for old references and give every remaining occurrence an explicit disposition.
+
+   Recheck HEAD and source/inbound/destination hashes immediately before applying. Any unplanned source or reader change, including a new inbound reference, invalidates the plan: refresh the inventory and validation instead of applying stale offsets. Rebaseline only after inspecting expected checkpoints in a staged cutover. An empty `validation.alarms` attests to these checks; the helper does **not** perform content-equivalence or citation checks.
+
+5. **Apply within the correct transaction boundary.** For allowlisted memory outputs, use `consolidation-apply.sh` with `step 5b`, baseline hashes and the complete grouped manifest. Include the durable plan/map and affected TODAY/registry/tier pointers; order destination writes before reader updates and source deletion last. Never broaden the helper's allowlist or bypass it with a second memory writer. `kb/` or other live-reader edits outside the allowlist (apart from SUMMARY's Step 6 path) require a **dedicated reviewed origin-repo change covering the complete affected set**; hand off that migration and keep the original content intact until that change is ready. This shared-repo workflow change does not repair a deployed origin file.
+
+   Regenerate SUMMARY through **Step 6**, never through the apply helper. If SUMMARY still cites the source, first publish validated destinations and allowlisted pointer updates while retaining the **unchanged original content**, recording this temporary exception to retirement in the plan. Step 6 must use the map to move SUMMARY's live references to the destinations and omit the retained original from the new index. After the Step 6a checkpoint succeeds, recheck the complete inventory and final bytes; retire the original and finalize the map through a fresh `step 5b` manifest/checkpoint. If no live SUMMARY reference depends on the source, retirement may be grouped with the initial move. Validate every live reader again after application and SUMMARY regeneration before reporting `migrated`.
+
+   Every intermediate state must keep existing references valid. A short index at the old path can preserve path-only navigation, but cannot preserve old `:line`/`#L` selectors or section anchors by itself. Retain the unchanged original until all such references have validated dispositions. An optional temporary index needs a named owner, retirement deadline and documented reason; unresolved retirement means `concrete handoff`. Keep **append-only past reports unchanged**: preserve their historical lookup via the original source revision and durable relocation map rather than rewriting their citations.
+
+   Grouping is not whole-batch filesystem atomicity: individual renames do not prevent interruption between files. On failure or interruption, stop under **Mutation submission** / **Pre-Step-0** inspection and repair rules; preserve marker, baseline and checkpoint evidence, and record the exact applied boundary and remaining work. Do not auto-retry, leave an undocumented mixed migration, or call a scan, scratch validation or partial cutover a completed split.
+
+6. **Record the outcome and carry unfinished work forward.** Link the durable inventory/plan/map from the current report. A `migrated` outcome requires committed destinations, validated live references, SUMMARY regeneration, and source retirement. `justified no-split` requires measured sizes and a content/cohesion rationale, not "defer again". A `concrete handoff` must name a stable task/path, source fingerprint (origin revision + path + SHA-256), inventory, partition/validation plan, responsible owner, explicit UTC deadline, blocker, next action and any applied checkpoints. If no separate assignee is available, name the responsible brain/maintainer; do not imply another person accepted the task. Retain the same task and overdue history when replanning; do not reset the deadline to hide a missed one. Record an overdue handoff as `[blocked]` for its owner to resolve in the report; reflection Step 4 escalates it using the lifecycle review. Escalation follows MAINTENANCE.md's reporting channel, without an unsolicited message.
 
 #### Merge Detection
 
@@ -387,14 +407,20 @@ Add a `## Semantic Lifecycle` section to the markdown report:
 - Files scanned: 8
 - Stale (30+ days): 3 (1 via shallow clone fallback)
 - Actions: 1 KEEP (reviewed), 1 UPDATE (refreshed), 1 DELETE (obsolete)
-- Oversized (>100 lines): 1 (split into 2 files)
+- Oversized (>100 lines): 2 reviewed; 1 selected, 1 queued
+- Split outcome: migrated — semantic/old-topic.md → semantic/topic-a.md + semantic/topic-b.md
+- Sizes (lines / bytes): source 180 / 6400 → topic-a 90 / 3200, topic-b 90 / 3200
+- References: 7 live occurrences in 4 referring files; 2 historical occurrences retained
+- Validation: all source spans/MEM keys preserved; every live selector reaches intended content
+- Inventory / relocation map: memory/procedural/semantic-split-old-topic.md (includes original revision/hash)
+- Exceptions / remaining work: none
 - Merges: 0
 - Files changed: semantic/old-topic.md (deleted), semantic/architecture.md (updated)
 ```
 
-Add any created, updated, or deleted semantic files to `filesChanged`. Set `selfAssessment["semantic-lifecycle-checked"]` to `true`.
+Record the selected source's explicit outcome and supporting evidence using the runbook above; for a handoff include its owner, deadline and blocker. For no selection, record the justified no-split reason; keep queued files distinct from that outcome. Include original/final sizes, destinations, reference-occurrence and referring-file counts, exceptions and remaining work when a split is attempted. Add all created, updated, or deleted files (including reader edits and the plan/map) to `filesChanged`. Summarize the outcome/task in the existing JSON `decisions` field within its brevity cap; no new JSON/evaluator fields. Set `selfAssessment["semantic-lifecycle-checked"]` to `true` only for a completed scan and recorded outcome; this does not assert that a split completed.
 
-If `memory/semantic/` doesn't exist or is empty, skip this step and set `selfAssessment["semantic-lifecycle-checked"]` to `true` (nothing to check).
+If `memory/semantic/` doesn't exist or is empty, record `justified no-split — no semantic files` and set `selfAssessment["semantic-lifecycle-checked"]` to `true` (nothing to check).
 
 ### 5c. LEARNINGS.md Gradual Reduction
 
@@ -510,6 +536,8 @@ The 9000 B cap is a soft bound that keeps the always-in-context SUMMARY.md from 
 ```bash
 bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-commit.sh" . YYYY-MM-DD "steps 5-6"
 ```
+
+If Step 5b retained an unchanged split source for SUMMARY cutover, now perform its deferred retirement through the runbook's fresh `step 5b` manifest and require checkpoint success before Step 7. Keep the same one-source budget; this finishes that migration, not a second split.
 
 ### 7. Archive Old Daily Logs
 
