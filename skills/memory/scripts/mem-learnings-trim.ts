@@ -54,6 +54,7 @@ import {
   parseOnlySelectors,
   groupCandidatesByKey,
   unambiguousHeadlineKeys,
+  pointerFor,
   type DestinationFile,
   type LearningsTrimCandidate,
   type OnlySelector,
@@ -132,7 +133,8 @@ function parseOnlyFlag(): OnlySelector[] | null {
   }
 }
 
-function printProposals(candidates: LearningsTrimCandidate[]): void {
+function printProposals(learningsBefore: string, candidates: LearningsTrimCandidate[]): void {
+  const lines = learningsBefore.split("\n");
   const byKey = groupCandidatesByKey(candidates);
   const selectorFor = (c: LearningsTrimCandidate): string =>
     byKey.get(c.key)!.length > 1 ? `${c.key}@${c.entryStartLine}` : c.key;
@@ -163,14 +165,14 @@ function printProposals(candidates: LearningsTrimCandidate[]): void {
   }
   for (const c of candidates) {
     const span = c.entryStartLine === c.entryEndLine ? `${c.entryStartLine}` : `${c.entryStartLine}-${c.entryEndLine}`;
-    const marker = c.format === "heading" ? "###" : "-";
+    const entryText = lines.slice(c.entryStartLine - 1, c.entryEndLine).join("\n");
     console.log(`${selectorFor(c)} (LEARNINGS.md:${span}, ${c.format} entry) → ${c.file}:${c.line}`);
     console.log(`  citing line:      ${c.lineText.trim()}`);
     // Must match applyLearningsTrimCandidates' actual write, verbatim — a
     // reviewer approves THIS text (DevGuru catch, poller-brain#300 review
     // round 1: printed proposal previously omitted ":line" that the write
     // included).
-    console.log(`  proposed pointer: ${marker} [${c.key}] → see ${c.file}:${c.line} — ${c.hook}`);
+    console.log(`  proposed pointer: ${pointerFor(entryText, c)}`);
     console.log();
   }
 }
@@ -288,7 +290,7 @@ function main(): void {
       );
       return;
     }
-    printProposals(candidates);
+    printProposals(learningsBefore, candidates);
     return;
   }
 
