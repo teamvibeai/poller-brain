@@ -366,6 +366,8 @@ When you need context beyond core/ and daily logs:
 
 `memory/SUMMARY.md` is the consolidated long-term memory index. It's generated during maintenance and included in context via `@` import. Target: ~100-150 lines max.
 
+Regeneration also reads the previous SUMMARY: carry forward verified relocation pointers and their actionable hooks without expanding already-relocated narrative. Reconcile missing or materially changed sources explicitly and preserve unique/load-bearing rules. The example sections below do not override existing valid pointers; the consolidation skill's Step 6 defines the bounded reduction and byte measurements.
+
 Structure:
 ```markdown
 **Last consolidated:** YYYY-MM-DD HH:MM UTC
