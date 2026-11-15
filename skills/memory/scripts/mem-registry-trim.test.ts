@@ -12,6 +12,7 @@
  */
 
 import { runTrimOwnershipTests } from "./test-support/trim-ownership.js";
+import { runRegistryVisibilityTests } from "./test-support/registry-visibility.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1093,6 +1094,7 @@ try {
 }
 
 runTrimOwnershipTests("registry", assert);
+runRegistryVisibilityTests(assert);
 
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

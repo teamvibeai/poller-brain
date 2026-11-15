@@ -172,41 +172,96 @@ export function distinctCitedKeysInLine(line: string): string[] {
   return [...keys];
 }
 
+// Accept possible fences at any container indentation, including list-marker
+// lines and blockquotes. An indented fence must never expose example coverage.
+const FENCE_OPEN_RE = /^((?:[ \t>]|(?:[-+*]|\d+[.)])(?=[ \t]))*)(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE_RE = /^([ \t>]*)(`{3,}|~{3,})[ \t]*$/;
+
+/** Find an exact-length closing backtick run within this inline block. */
+function codeSpanEnd(lines: string[], row: number, pos: number, length: number): { row: number; pos: number } | undefined {
+  const quotePrefix = (line: string) => /^(?: {0,3}>[ \t]?)+/.exec(line)?.[0] ?? "";
+  const quoteDepth = (prefix: string) => [...prefix].filter((char) => char === ">").length;
+  const depth = quoteDepth(quotePrefix(lines[row]));
+  for (let i = row; i < lines.length; i++) {
+    const line = lines[i];
+    if (i > row) {
+      // Inline spans cannot cross block boundaries. Do not pair an unmatched
+      // backtick with one in a later heading, fence, list item or HTML block.
+      const quote = quotePrefix(line);
+      // A paragraph may lazily continue without repeating every quote marker;
+      // a deeper quote starts a new block. Whitespace around > may also vary.
+      if (quoteDepth(quote) > depth) return undefined;
+      const content = line.slice(quote.length);
+      if (!content.trim() || headingText(content) !== null || FENCE_OPEN_RE.test(line) ||
+        /^ {0,3}(?:<|[-+*](?:[ \t]|$)|\d+[.)][ \t]|(?:=+|-+)[ \t]*$)/.test(content)) return undefined;
+    }
+    const runs = /`+/g;
+    runs.lastIndex = i === row ? pos : 0;
+    let run: RegExpExecArray | null;
+    // Within a code span backslashes are literal, so even \` can close it.
+    while ((run = runs.exec(line))) {
+      if (run[0].length === length) return { row: i, pos: runs.lastIndex };
+    }
+  }
+  return undefined;
+}
+
 /**
  * Strip HTML comments and fenced code before interpreting headings or citations.
+ * Comments only open outside matched inline code spans and backslash escapes.
  * Preserve line count and spaces where comments occur, so hidden text cannot
  * supply ownership, coverage, or join two visible tokens into a new MEM ID.
  */
 function visibleLines(text: string): string[] {
   let comment = false;
-  let fence: { marker: string; length: number } | undefined;
-  return text.split(/\r\n|[\n\r]/u).map((line) => {
+  let fence: { marker: string; length: number; prefix: string } | undefined;
+  let codeEnd: { row: number; pos: number } | undefined;
+  const lines = text.split(/\r\n|[\n\r]/u);
+  return lines.map((line, row) => {
     if (fence) {
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-      if (close && close[1][0] === fence.marker && close[1].length >= fence.length) fence = undefined;
+      const close = FENCE_CLOSE_RE.exec(line);
+      // Only resume coverage at an unambiguous closing container prefix.
+      // A deeper/uncertain delimiter stays hidden along with the rest of the
+      // block (possibly to EOF), rather than exposing example code as prose.
+      if (close && close[1] === fence.prefix && close[2][0] === fence.marker && close[2].length >= fence.length) fence = undefined;
       return "";
     }
     // A fence's contents are literal, including apparent comment delimiters.
-    const open = !comment && /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (open && (open[1][0] !== "`" || !open[2].includes("`"))) {
-      fence = { marker: open[1][0], length: open[1].length };
+    const open = !comment && !codeEnd && FENCE_OPEN_RE.exec(line);
+    if (open && (open[2][0] !== "`" || !open[3].includes("`"))) {
+      fence = { marker: open[2][0], length: open[2].length,
+        prefix: open[1].replace(/(?:[-+*]|\d+[.)])(?=[ \t])/g, (marker) => " ".repeat(marker.length)) };
       return "";
     }
     let visible = "";
     let pos = 0;
     while (pos < line.length) {
       if (comment) {
+        // HTML comment contents are raw: backticks/backslashes cannot escape
+        // their closing delimiter once a real comment has opened.
         const end = line.indexOf("-->", pos);
         if (end < 0) break;
         visible += " ".repeat(end + 3 - pos);
         pos = end + 3;
         comment = false;
-      } else {
-        const start = line.indexOf("<!--", pos);
-        if (start < 0) { visible += line.slice(pos); break; }
-        visible += line.slice(pos, start);
-        pos = start;
+      } else if (codeEnd) {
+        const end = codeEnd.row === row ? codeEnd.pos : line.length;
+        visible += line.slice(pos, end);
+        pos = end;
+        if (codeEnd.row === row) codeEnd = undefined;
+      } else if (line[pos] === "\\") {
+        // Consuming pairs also handles odd/even runs of escaping backslashes.
+        visible += line.slice(pos, pos + 2);
+        pos += 2;
+      } else if (line[pos] === "`") {
+        const run = /^`+/.exec(line.slice(pos))![0];
+        codeEnd = codeSpanEnd(lines, row, pos + run.length, run.length);
+        visible += run;
+        pos += run.length;
+      } else if (line.startsWith("<!--", pos)) {
         comment = true;
+      } else {
+        visible += line[pos++];
       }
     }
     return visible;
