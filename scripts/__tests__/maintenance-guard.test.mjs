@@ -253,7 +253,8 @@ for (const kind of ['maintenance', 'reflection']) {
     const dir = mkdtempSync(join(tmpdir(), 'tier guard scripts '))
     t.after(() => rmSync(dir, { recursive: true, force: true }))
     mkdirSync(join(dir, 'lib'))
-    for (const file of [`${kind}-guard.sh`, 'consolidation-state.sh', 'consolidation-marker.sh']) {
+    for (const file of [`${kind}-guard.sh`, 'consolidation-state.sh', 'consolidation-marker.sh',
+      'consolidation-history.mjs', 'consolidation-history-schema.mjs']) {
       copyFileSync(join(repoRoot, 'scripts', file), join(dir, file))
     }
     if (helper !== undefined) writeFileSync(join(dir, 'lib', 'tier-coverage.sh'), helper)
@@ -387,8 +388,19 @@ function history(t, options) {
   const commit = subject => git('commit', '-q', '--allow-empty', '-m', subject)
   const checkpoint = (date = dateAgo(0)) => commit(`chore: consolidate memory checkpoint (${date}) — step 7`)
   const pair = (date = dateAgo(0)) => {
+    const record = marker(dir, 'inspect')
+    const startingHead = record.status === 1 ? record.stdout.trim().split(' ')[2] : git('rev-parse', 'HEAD')
+    const archive = `memory/episodic/archive/consolidation-history-${date.slice(0, 4)}-H${Number(date.slice(5, 7)) <= 6 ? 1 : 2}.md`
+    mkdirSync(join(dir, 'memory/episodic/archive'), { recursive: true })
+    let previous = ''
+    try { previous = readFileSync(join(dir, archive), 'utf8') } catch (error) { if (error.code !== 'ENOENT') throw error }
+    const heading = `## Consolidation ${date} / ${startingHead}`
+    if (!previous.includes(heading)) writeFileSync(join(dir, archive), previous + `\n${heading}\nStatus: in progress\nWork performed: Reviewed all tiers; zero promotions; regenerated SUMMARY.md.\n<!-- /consolidation-history -->\n`)
     writeFileSync(join(dir, 'reports', `${date}-memory-consolidation.md`), zeroPromotion)
-    writeFileSync(join(dir, 'reports', `${date}-memory-consolidation.json`), '{"operationType":"consolidation"}\n')
+    writeFileSync(join(dir, 'reports', `${date}-memory-consolidation.json`), JSON.stringify({
+      operationType: 'consolidation', consolidationHistory: { version: 1, cycleDate: date, startingHead },
+    }) + '\n')
+    return archive
   }
   return { dir, git, commit, checkpoint, pair }
 }
@@ -444,7 +456,7 @@ test('completed final pair permits recent-run skip, including consumed JSON', t 
     assert.match(result.stdout, /consolidation_needed: false/)
   }
   // Ordinary post-completion session activity must not restart the old cycle.
-  mkdirSync(join(dir, 'memory'))
+  mkdirSync(join(dir, 'memory'), { recursive: true })
   writeFileSync(join(dir, 'memory', 'TODAY.md'), memLines(1))
   assert.equal(guard(dir).status, 1)
 })
@@ -545,10 +557,10 @@ test('JSON consumed before final is proved by the report checkpoint, even if del
   const { dir, git, checkpoint, pair, commit } = history(t)
   checkpoint()
   pair()
-  git('add', '--', 'reports')
+  git('add', '--', 'reports', 'memory')
   commit(`chore: consolidate memory checkpoint (${dateAgo(0)}) — steps 10-12`)
   rmSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.json`))
-  git('add', '--', 'reports')
+  git('add', '--', 'reports', 'memory')
   commit(`chore: consolidate memory (${dateAgo(0)})`)
   assert.equal(state(dir).status, 0, state(dir).stdout)
   assert.match(state(dir).stdout, /complete/)
@@ -580,7 +592,7 @@ for (const phase of ['untracked', 'staged', 'committed without final']) {
   test(`checkpoint-free report draft (${phase}) requires reconciliation`, t => {
     const { dir, git, pair, commit } = history(t)
     pair()
-    if (phase !== 'untracked') git('add', '--', 'reports')
+    if (phase !== 'untracked') git('add', '--', 'reports', 'memory')
     if (phase === 'committed without final') commit('unfinished report draft')
     assert.equal(state(dir).status, 1, state(dir).stdout)
     assert.match(state(dir).stdout, /unfinished consolidation cycle.*report/)
@@ -592,13 +604,19 @@ for (const phase of ['untracked', 'staged', 'committed without final']) {
 
 for (const boundary of ['step 0', 'steps 1-4', 'steps 5-6', 'step 7', 'steps 8-9', 'step 10', 'steps 10-12', 'final']) {
   test(`scoped ${boundary} commit preserves unrelated staged, unstaged and untracked work`, t => {
-    const { dir, git, commit } = history(t)
+    const { dir, git, commit, pair } = history(t)
     writeFileSync(join(dir, 'user-notes.md'), 'original\n')
     writeFileSync(join(dir, 'user-staged.md'), 'original\n')
     mkdirSync(join(dir, 'memory', 'daily'), { recursive: true })
     writeFileSync(join(dir, 'memory', 'daily', 'old.md'), 'old archive\n')
     git('add', '-A')
     commit('user base')
+    if (['steps 5-6', 'steps 10-12', 'final'].includes(boundary)) {
+      assert.equal(markerStart(dir).status, 0)
+      pair()
+      git('add', '--', 'reports', 'memory/episodic/archive')
+      commit(`chore: consolidate memory checkpoint (${dateAgo(0)}) — steps 10-12`)
+    }
     writeFileSync(join(dir, 'user-notes.md'), 'unstaged user draft\n')
     writeFileSync(join(dir, 'user-staged.md'), 'staged user draft\n')
     git('add', '--', 'user-staged.md')
@@ -624,6 +642,7 @@ for (const boundary of ['step 0', 'steps 1-4', 'steps 5-6', 'step 7', 'steps 8-9
 
 test('final marker leaves consumed JSON deletion uncommitted and never recreates it', t => {
   const { dir, git, checkpoint, pair } = history(t)
+  assert.equal(markerStart(dir).status, 0)
   checkpoint()
   pair()
   scopedCommit(dir, dateAgo(0), 'steps 10-12')
@@ -631,7 +650,7 @@ test('final marker leaves consumed JSON deletion uncommitted and never recreates
   scopedCommit(dir, dateAgo(0), 'final')
   assert.match(git('status', '--short'), /^D reports\/.*memory-consolidation.json/)
   assert.equal(git('diff', '--cached', '--name-only'), '')
-  assert.equal(git('show', `HEAD:reports/${dateAgo(0)}-memory-consolidation.json`), '{"operationType":"consolidation"}')
+  assert.equal(JSON.parse(git('show', `HEAD:reports/${dateAgo(0)}-memory-consolidation.json`)).consolidationHistory.version, 1)
   assert.equal(state(dir).status, 0, state(dir).stdout)
   assert.equal(guard(dir).status, 1)
 })
@@ -664,6 +683,7 @@ test('documented mutation command commits before returning and keeps maintenance
 for (const stagedDeletion of [false, true]) {
   test(`consumption before final preserves JSON index state (staged deletion=${stagedDeletion})`, t => {
     const { dir, git, checkpoint, pair } = history(t)
+    assert.equal(markerStart(dir).status, 0)
     checkpoint()
     pair()
     scopedCommit(dir, dateAgo(0), 'steps 10-12')
@@ -673,7 +693,7 @@ for (const stagedDeletion of [false, true]) {
     const index = git('diff', '--cached', '--binary')
     scopedCommit(dir, dateAgo(0), 'final')
     assert.equal(git('diff', '--cached', '--binary'), index)
-    assert.equal(git('show', `HEAD:${json}`), '{"operationType":"consolidation"}')
+    assert.equal(JSON.parse(git('show', `HEAD:${json}`)).consolidationHistory.version, 1)
     assert.equal(state(dir).status, 0, state(dir).stdout)
   })
 }
@@ -686,6 +706,7 @@ test('scoped commit handles pre-staged retention/ledger deletion and exact extra
   writeFileSync(join(dir, 'HEARTBEAT.md'), 'old tasks\n')
   git('add', '-A')
   commit('ledger and heartbeat')
+  assert.equal(markerStart(dir).status, 0)
   rmSync(join(dir, ledger))
   git('add', '--', ledger)
   writeFileSync(join(dir, 'HEARTBEAT.md'), 'migrated tasks\n')
@@ -693,11 +714,11 @@ test('scoped commit handles pre-staged retention/ledger deletion and exact extra
   writeFileSync(join(dir, 'user-staged.md'), 'keep staged\n')
   git('add', '--', 'user-staged.md')
   const index = git('diff', '--cached', '--binary', '--', 'user-staged.md')
-  pair()
+  const archive = pair()
   scopedCommit(dir, dateAgo(0), 'steps 10-12', ['HEARTBEAT.md', 'CLAUDE.md'])
   assert.equal(git('diff', '--cached', '--binary', '--', 'user-staged.md'), index)
   assert.deepEqual(git('show', '--format=', '--name-only', 'HEAD').split('\n').sort(), [
-    'CLAUDE.md', 'HEARTBEAT.md', ledger,
+    'CLAUDE.md', 'HEARTBEAT.md', ledger, archive,
     `reports/${dateAgo(0)}-memory-consolidation.json`, `reports/${dateAgo(0)}-memory-consolidation.md`,
   ].sort())
 })
@@ -715,11 +736,11 @@ for (const extra of ['user-notes.md', 'scripts/', 'scripts/../user-notes.md', 's
 test('report pair in an unrelated earlier commit cannot substitute for Step 12a evidence', t => {
   const { dir, git, checkpoint, pair, commit } = history(t)
   pair()
-  git('add', '--', 'reports')
+  git('add', '--', 'reports', 'memory')
   commit('unrelated report files')
   checkpoint()
   rmSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.json`))
-  git('add', '--', 'reports')
+  git('add', '--', 'reports', 'memory')
   commit(`chore: consolidate memory (${dateAgo(0)})`)
   assert.equal(state(dir).status, 1)
   assert.match(guard(dir).stdout, /unfinished consolidation cycle/)
@@ -729,10 +750,10 @@ test('today report draft cannot be hidden by a completed prior cycle', t => {
   const { dir, git, checkpoint, pair, commit } = history(t)
   checkpoint(dateAgo(1))
   pair(dateAgo(1))
-  git('add', '--', 'reports')
+  git('add', '--', 'reports', 'memory')
   commit(`chore: consolidate memory (${dateAgo(1)})`)
   pair()
-  git('add', '--', 'reports')
+  git('add', '--', 'reports', 'memory')
   commit('unfinished report for today')
   assert.equal(state(dir).status, 1)
   assert.match(guard(dir).stdout, /unfinished consolidation cycle/)
@@ -861,7 +882,7 @@ for (const localFinal of [false, true]) {
     const record = readFileSync(markerPath(dir))
     git('checkout', '-q', 'other-clone')
     pair()
-    git('add', '--', 'reports')
+    git('add', '--', 'reports', 'memory')
     commit(`chore: consolidate memory checkpoint (${dateAgo(0)}) — steps 10-12`)
     commit(`chore: consolidate memory (${dateAgo(0)})`)
     git('checkout', '--detach', '-q', local)
@@ -920,7 +941,7 @@ for (const daysAgo of [0, 1]) {
     const cycleDate = dateAgo(daysAgo)
     checkpoint(cycleDate)
     pair(cycleDate)
-    git('add', '--', 'reports')
+    git('add', '--', 'reports', 'memory')
     commit(`chore: consolidate memory (${cycleDate})`)
     assert.match(state(dir).stdout, /consolidation_state: complete/)
     assert.equal(markerStart(dir, cycleDate).status, 0)
@@ -974,11 +995,11 @@ for (const consumption of ['present', 'deleted before final', 'deletion committe
     assert.equal(marker(dir, 'clear').status, 2)
     pair(cycleDate)
     assert.equal(marker(dir, 'clear').status, 2) // drafts alone do not finish
-    git('add', '--', 'reports')
+    git('add', '--', 'reports', 'memory')
     commit(`chore: consolidate memory checkpoint (${cycleDate}) — steps 10-12`)
     assert.equal(marker(dir, 'clear').status, 2) // checkpoint alone does not finish
     if (consumption !== 'present') rmSync(join(dir, 'reports', `${cycleDate}-memory-consolidation.json`))
-    if (consumption.startsWith('deletion committed')) { git('add', '--', 'reports'); commit('consume JSON') }
+    if (consumption.startsWith('deletion committed')) { git('add', '--', 'reports', 'memory'); commit('consume JSON') }
     commit(`chore: consolidate memory (${dateAgo(0)})`)
     assert.equal(marker(dir, 'clear').status, 2) // final must match marker date
     commit(`chore: consolidate memory (${cycleDate})`)
@@ -1002,7 +1023,7 @@ for (const missing of ['md', 'json']) {
     assert.equal(markerStart(dir).status, 0)
     pair()
     rmSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.${missing}`))
-    git('add', '--', 'reports')
+    git('add', '--', 'reports', 'memory')
     commit(`chore: consolidate memory (${dateAgo(0)})`)
     assert.equal(marker(dir, 'clear').status, 2)
     assert.match(guard(dir).stdout, /unfinished consolidation cycle.*consolidation-marker.sh repair/)
@@ -1013,7 +1034,7 @@ test('final pair without intermediate checkpoints verifies marker completion, bu
   const { dir, git, pair, commit } = history(t)
   assert.equal(markerStart(dir).status, 0)
   pair()
-  git('add', '--', 'reports')
+  git('add', '--', 'reports', 'memory')
   commit(`chore: consolidate memory (${dateAgo(0)})`)
   assert.equal(guard(dir).status, 1)
   writeFileSync(join(dir, 'reports', `${dateAgo(0)}-memory-consolidation.md`), 'unfinished revision\n')

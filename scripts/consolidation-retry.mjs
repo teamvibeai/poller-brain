@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { historyPathFor, validateHistoryAppend } from './consolidation-history-schema.mjs'
 
 export const POLICY_VERSION = 'reduction-retry-v1'
 export const WEEK_MS = 168 * 60 * 60 * 1000
@@ -15,6 +16,70 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const isoTime = value => typeof value === 'string' &&
   /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) &&
   Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value
+const historyPath = /^memory\/episodic\/archive\/consolidation-history-\d{4}-H[12]\.md$/
+const historyEnd = '<!-- /consolidation-history -->'
+const gitBytes = (root, ...args) => execFileSync('git', ['-C', root, ...args], {
+  env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+})
+const gitText = (root, ...args) => gitBytes(root, ...args).toString('utf8').trimEnd()
+
+function historyBlob(root, revision, path) {
+  const entry = gitText(root, 'ls-tree', revision, '--', path)
+  if (!entry) return null
+  if (!/^100(644|755) blob /.test(entry)) throw new Error('history is not a regular Git blob')
+  return gitBytes(root, 'show', `${revision}:${path}`)
+}
+
+// Peel only the shared schema's exact appends, anchored in their starting Git
+// trees. Legacy prefix bytes remain sources. Once committed, an append must
+// still equal its FIRST committed bytes: otherwise a schema-valid rewrite of
+// old Work performed text would disappear along with routine bookkeeping.
+function normalizeHistory(root, path, bytes, head) {
+  const committed = historyBlob(root, head, path)
+  if (committed && !bytes.subarray(0, committed.length).equals(committed)) {
+    throw new Error('history normalization uncertain: committed prefix changed')
+  }
+  let revision = head
+  while (true) {
+    const text = bytes.toString('utf8')
+    if (!Buffer.from(text).equals(bytes)) throw new Error('history normalization uncertain: invalid UTF-8')
+    const record = /## Consolidation (\d{4}-\d\d-\d\d) \/ ([a-f0-9]{40}|[a-f0-9]{64})\nStatus: in progress\nWork performed: [^\n]+\n<!-- \/consolidation-history -->\n?\s*$/.exec(text)
+    if (!record) {
+      if (text.includes(historyEnd) || /^## Consolidation .*\//m.test(text) ||
+          gitText(root, 'log', '--first-parent', '--format=%H', '-S', historyEnd, revision, '--', path)) {
+        throw new Error('history normalization uncertain: malformed or removed records')
+      }
+      return bytes
+    }
+    const [, date, start] = record
+    if (historyPathFor(date) !== path) throw new Error('history normalization uncertain: wrong date bucket')
+    gitText(root, 'merge-base', '--is-ancestor', start, revision)
+    if (gitText(root, 'rev-list', '--merges', `${start}..${revision}`)) {
+      throw new Error('history normalization uncertain: merged append history')
+    }
+    const before = historyBlob(root, start, path)
+    validateHistoryAppend(before || Buffer.alloc(0), bytes, date, start)
+    const changes = gitText(root, 'log', '--first-parent', '--reverse', '--format=%H', `${start}..${revision}`, '--', path).split('\n').filter(Boolean)
+    if (changes.length) {
+      for (const change of changes) {
+        const original = historyBlob(root, change, path)
+        if (!original || !original.equals(bytes)) throw new Error('history normalization uncertain: original append changed')
+      }
+    } else {
+      // An uncommitted first append needs the actual durable cycle identity.
+      const marker = spawnSync('bash', [fileURLToPath(new URL('./consolidation-marker.sh', import.meta.url)), 'inspect', root], {
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, encoding: 'utf8',
+      })
+      const [, cycleDate, startingHead] = marker.stdout?.trimEnd().split(' ') || []
+      if (marker.status !== 1 || cycleDate !== date || startingHead !== start) {
+        throw new Error('history normalization uncertain: unverified active cycle')
+      }
+    }
+    if (before === null) return null
+    bytes = before
+    revision = start
+  }
+}
 
 // Only the first generated line is normalized; malformed/duplicate timestamps
 // cannot authorize backoff. No whitespace, prose, or byte-size normalization.
@@ -76,6 +141,17 @@ export function normalizeDaily(bytes, date) {
 export function fingerprint(root, target, { coverageConfirmed = false, dependencies = [], policyRoot = configRoot } = {}) {
   if (!Object.hasOwn(CAPS, target)) throw new Error('unsupported target')
   if (!coverageConfirmed) throw new Error('dependency coverage unconfirmed')
+  const head = gitText(root, 'rev-parse', 'HEAD')
+  // A removed bookkeeping-only archive must not vanish without verification.
+  const historyFiles = new Set(gitText(root, 'log', '--first-parent', '--format=', '--name-only', head,
+    '--', 'memory/episodic/archive').split('\n').filter(path => historyPath.test(path)))
+  for (const path of historyFiles) {
+    try {
+      if (!lstatSync(resolve(root, path)).isFile()) throw new Error('history archive missing or unreadable')
+    } catch (error) {
+      if (error.code !== 'ENOENT' || gitText(root, 'log', '--first-parent', '--format=%H', '-S', historyEnd, head, '--', path)) throw error
+    }
+  }
   const inputs = []
   function collect(path, label) {
     let stat
@@ -95,8 +171,8 @@ export function fingerprint(root, target, { coverageConfirmed = false, dependenc
         if (label === 'memory/episodic' && /^consolidation-progress-\d{4}-\d\d-\d\d\.md$/.test(name)) continue
         collect(resolve(path, name), `${label}/${name}`)
       }
-      // Creating the first maintenance-only archive must also be a no-op.
-      if (label === 'memory/daily' && inputs.length === start + 1) inputs.pop()
+      // Creating the first bookkeeping-only archive/directories is a no-op.
+      if (['memory/daily', 'memory/episodic', 'memory/episodic/archive'].includes(label) && inputs.length === start + 1) inputs.pop()
     } else if (stat.isFile()) {
       let bytes = readFileSync(path)
       if (label === 'memory/SUMMARY.md') bytes = normalizeSummary(bytes)
@@ -105,19 +181,25 @@ export function fingerprint(root, target, { coverageConfirmed = false, dependenc
         bytes = normalizeDaily(bytes, daily[1])
         if (bytes === null) return
       }
+      if (historyPath.test(label)) {
+        if (gitText(root, 'rev-parse', '--is-shallow-repository') !== 'false') throw new Error('shallow append history')
+        bytes = normalizeHistory(root, label, bytes, head)
+        if (bytes === null) return
+      }
       inputs.push([label, hash(bytes)])
     } else throw new Error('unsupported dependency type')
   }
   // Broad inventory deliberately invalidates on new sources, even unrelated
   // ones. Include root registry/index files as well as every source tier.
   // TODAY, the publication marker, progress ledgers and verified maintenance-
-  // only daily sections are not sources. All other daily content is retained.
+  // only daily sections and verified history appends are not sources. Legacy
+  // history prefixes and all other daily content remain inputs.
   for (const path of ['CLAUDE.md', 'memory']) collect(resolve(root, path), path)
   for (const path of [...new Set(dependencies.map(p => resolve(root, p)))].sort()) {
     collect(path, `extra:${relative(root, path)}`)
   }
   for (const path of ['CLAUDE.md', 'MAINTENANCE.md', 'skills/memory/SKILL.md', 'skills/memory/consolidate/SKILL.md',
-    'scripts/consolidation-retry.mjs']) {
+    'scripts/consolidation-retry.mjs', 'scripts/consolidation-history-schema.mjs', 'scripts/consolidation-marker.sh']) {
     const full = resolve(policyRoot, path)
     // A partial/unavailable policy installation must never reuse old advice.
     if (!lstatSync(full).isFile()) throw new Error('policy unavailable')
