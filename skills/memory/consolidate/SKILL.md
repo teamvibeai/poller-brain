@@ -486,7 +486,20 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-learnings-trim.ts"
 
 An entry the script cannot find cited anywhere (or only ever cited ambiguously, or bundles multiple keys) is left with its full narrative — that's expected, not a failure.
 
-### 6. Regenerate SUMMARY.md
+### 6. Regenerate SUMMARY.md and append consolidation history
+
+**Required history append (including zero promotions):** After regenerating SUMMARY.md below and before Step 6a, read the durable marker with `consolidation-marker.sh inspect .` and use its original UTC cycle date and full starting HEAD. Derive `YYYY` and `Hn` from that date: January–June is H1, July–December is H2. Append to `memory/episodic/archive/consolidation-history-YYYY-Hn.md`, even across midnight, June/July or December/January. Create the archive if absent; preserve every existing byte. Append exactly this bounded record, substituting the marker identity and a factual, substantive single-line description of work already performed:
+
+```markdown
+## Consolidation YYYY-MM-DD / START_HEAD
+Status: in progress
+Work performed: Reviewed memory tiers; zero promotions; regenerated SUMMARY.md with current pointers.
+<!-- /consolidation-history -->
+```
+
+Separate it from prior content with a newline. `Work performed` must describe actual work (at least 20 characters and three words); replace the example with this cycle's results, including promotion counts or zero promotions. The key is **cycle date plus starting HEAD**, not date alone. Add this exact archive path to cumulative `filesChanged`. A retry reuses this cycle's verified append, including one protected by Step 6a; never append a duplicate or rewrite existing archive bytes. A previous same-day cycle cannot satisfy this requirement. Missing or conflicting evidence blocks the boundary; do not auto-backfill or repair it.
+
+Keep `Status: in progress` through final verification. Follow **No forward completion citations**: cite only existing checkpoints and describe only completed work; never predict a final SHA, completion or completed-report link. Any later completion annotation follows the existing separate-commit procedure after verified final/report evidence.
 
 **Always regenerate `memory/SUMMARY.md` on every consolidation run — this step is non-negotiable, even if no facts were promoted in steps 2–4.** A lightweight consolidation with zero promotions must still regenerate SUMMARY.md to ensure it reflects the current state of all memory tiers.
 
@@ -543,6 +556,14 @@ Refresh and verify again after any later tier mutation, including Step 5b's defe
 The 9000 B cap is a soft bound that keeps the always-in-context SUMMARY.md from crowding the working context. Encoding the trigger here removes the prior reliance on reflection-cycle recommendation chaining, where the same trim was re-proposed across cycles without ever landing (`teamvibeai/poller-brain#186`).
 
 ### 6a. Checkpoint Commit (crash-safety)
+
+Before Step 6a, require exit 0 from the shared read-only history validator:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/scripts/consolidation-history.mjs" . YYYY-MM-DD
+```
+
+It compares the append against the starting-HEAD archive, preserving prior bytes and checking the exact marker identity. A failure blocks this checkpoint; report the expected path, cycle identity and missing evidence, keeping the marker in place. The commit helper repeats this gate before staging.
 
 **Commit now, before Step 7.** Protect SUMMARY.md regeneration and Steps 5–6 lifecycle work. Intermediate checkpoints bound a crash to work since the last checkpoint (#436). Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the allowed consolidation paths have no changes.
 
@@ -912,6 +933,8 @@ cannot be confirmed. Do not automatically resolve rescue refs.
 
 ### 12. Produce Report
 
+**Versioned completion invariant:** Include top-level `"consolidationHistory": {"version": 1, "cycleDate": "YYYY-MM-DD", "startingHead": "START_HEAD"}` in the JSON report, using the durable marker's original UTC date and full starting HEAD. This metadata opts new reports into required committed-history verification; it is not proof by itself. Legacy committed reports without this field remain recognized without backfill. New report-checkpoint/final helper calls require v1 metadata and the valid append, even on zero-promotion runs.
+
 **Required top-level field — `operationType` (set FIRST, verify before commit):** The JSON report MUST contain `"operationType": "consolidation"` as a top-level field (NOT inside `selfAssessment`). This is the *single hard-required* field: the poller **permanently deletes** any report missing it — no retry, and the run never reaches the eval pipeline. After writing the JSON, grep the file for `"operationType"` and confirm (a) the value is exactly `consolidation` and (b) the match is a *top-level* key — same indentation as `"filesChanged"`/`"selfAssessment"`, not nested inside `selfAssessment` (a nested match still gets the report deleted). If absent or nested, fix it before committing.
 
 **Pre-report `filesChanged` verification:** Before writing the report, confirm these required entries are in `filesChanged`:
@@ -942,6 +965,14 @@ For `selfAssessment.reduce-log-count`: set to `true` if at least one daily log w
 
 ### 12a. Checkpoint Commit (crash-safety)
 
+Before Step 12a, require exit 0 from:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/scripts/consolidation-history.mjs" . YYYY-MM-DD --report
+```
+
+This rechecks the append and report cycle metadata. Failure blocks completion, not merely self-critique. The helper repeats validation for `steps 10-12` and `final` before staging, including empty final commits. It preserves HEAD, index and marker on validation failure. For final, it checks committed report metadata (including Step 12a's JSON when consumed); never recreate consumed JSON.
+
 **Commit the completed markdown/JSON reports and all Steps 10–12 changes immediately after Step 12, before the user-facing final report (#462).** Verify both report files exist and the required fields/checks from Step 12 pass first, including the mechanical check of the report's final tier inventory. This complements 10a, which protects compliance/bookkeeping before report completion. Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the allowed consolidation paths have no changes.
 
 ```bash
@@ -970,6 +1001,6 @@ bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .
 bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" clear .
 ```
 
-Require `consolidation_state: complete` before running `clear`. The lifecycle helper clears only when the marker's cycle has an exact final commit after its starting HEAD/latest checkpoint and committed report-pair evidence (including Step 12a if JSON was consumed), with markdown still on disk and no unfinished report edits. The starting HEAD must be an ancestor of both checkpoint and final. It leaves the marker in place on failure. An unfinished or malformed marker requires the explicit audited `repair` procedure above; use that command instead of manual marker removal.
+Require `consolidation_state: complete` before running `clear`. The lifecycle helper clears only when the marker's cycle has an exact final commit after its starting HEAD/latest checkpoint and committed report-pair evidence (including Step 12a if JSON was consumed), with markdown still on disk and no unfinished report edits. For v1 reports, state also validates the exact cycle record in the final commit tree against the starting-HEAD archive; an uncommitted append or metadata alone cannot prove completion. The starting HEAD must be an ancestor of both checkpoint and final. It leaves the marker in place on failure. An unfinished or malformed marker requires the explicit audited `repair` procedure above; use that command instead of manual marker removal.
 
 Confirm the guard reports `consolidation_state: complete` before claiming completion to the user or adding completion citations. If it reports unfinished/unknown, stop and report; inspect the missing evidence and use the audited `repair` procedure for an interrupted marker. The intermediate boundaries are Step 0a (archive), 4a (promotions), 6a (SUMMARY/lifecycle), 7a (retention), 9g (sweep/audit/trims), 10a (compliance ledger), and 12a (completed reports).
