@@ -111,7 +111,7 @@ export interface ContentCoverage {
   status: "covered" | "rejected" | "no_verifiable_tokens";
   /** Legacy report field; always empty (coverage uses the complete body). */
   tokens: string[];
-  /** Empty when covered, otherwise ["no-literal-match"]. */
+  /** Empty when covered, otherwise ["no-literal-match"] or ["uncertain-section"]. */
   missingTokens: string[];
 }
 /** Only NFC, NBSP/thin-space -> space, trim and one initial list marker fold; tabs and space runs stay significant (fail closed). */
@@ -206,7 +206,12 @@ export function findTrimCandidates(
     if (duplicateKeys.has(key)) continue; // a key alone cannot identify an approved row
 
     const citation = citations.get(key);
-    if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
+    if (!citation) {
+      const uncertain = ownershipRejections.find((r) => r.key === key && r.reason === "uncertain-section");
+      if (uncertain) contentCoverage.push({ key, file: uncertain.file, line: uncertain.line,
+        status: "rejected", tokens: [], missingTokens: ["uncertain-section"] });
+      continue; // no trustworthy owned evidence; retain the complete registry row
+    }
 
     const coverage = checkCoverage(key, description, citation);
     contentCoverage.push(coverage);

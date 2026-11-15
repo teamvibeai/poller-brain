@@ -7,7 +7,8 @@
  *
  * Destination ownership is required: the nearest visible heading must name
  * exactly the cited key, with no obsolete owner. Generic/unkeyed nested
- * headings do not inherit ownership. Fenced code and HTML comments are ignored.
+ * headings do not inherit ownership. A separate raw-source guard rejects
+ * sections containing foreign MEM headings even inside comments or fences.
  *
  * Detection is content-based, not status-based: a citation is only trusted
  * as evidence if its line cites EXACTLY ONE distinct MEM-N key, OR cites 2+
@@ -70,7 +71,15 @@ export interface OwnershipRejection {
   lineText: string;
   heading: string | null;
   owners: string[];
-  reason: "missing-heading" | "missing-key" | "multi-key" | "foreign-key" | "obsolete-owner";
+  reason: "missing-heading" | "missing-key" | "multi-key" | "foreign-key" | "obsolete-owner" | "uncertain-section";
+  /** Raw boundary that prevents trusting the visible scanner's ownership. */
+  rawHeading?: RawHeading;
+}
+
+interface RawHeading {
+  line: number;
+  lineText: string;
+  owners: string[];
 }
 
 /** A single-key destination line skipped because it looks like an index/pointer row, not narrative. */
@@ -186,14 +195,15 @@ function codeSpanEnd(lines: string[], row: number, pos: number, length: number):
     const line = lines[i];
     if (i > row) {
       // Inline spans cannot cross block boundaries. Do not pair an unmatched
-      // backtick with one in a later heading, fence, list item or HTML block.
+      // backtick with one in a later heading, fence or list item. An angle
+      // bracket alone does not start a new block inside an inline span.
       const quote = quotePrefix(line);
       // A paragraph may lazily continue without repeating every quote marker;
       // a deeper quote starts a new block. Whitespace around > may also vary.
       if (quoteDepth(quote) > depth) return undefined;
       const content = line.slice(quote.length);
       if (!content.trim() || headingText(content) !== null || FENCE_OPEN_RE.test(line) ||
-        /^ {0,3}(?:<|[-+*](?:[ \t]|$)|\d+[.)][ \t]|(?:=+|-+)[ \t]*$)/.test(content)) return undefined;
+        /^ {0,3}(?:[-+*](?:[ \t]|$)|\d+[.)][ \t]|(?:=+|-+)[ \t]*$)/.test(content)) return undefined;
     }
     const runs = /`+/g;
     runs.lastIndex = i === row ? pos : 0;
@@ -214,7 +224,7 @@ function codeSpanEnd(lines: string[], row: number, pos: number, length: number):
  */
 function visibleLines(text: string): string[] {
   let comment = false;
-  let fence: { marker: string; length: number; prefix: string } | undefined;
+  let fence: { marker: string; length: number; prefix: string; flexibleIndent: boolean } | undefined;
   let codeEnd: { row: number; pos: number } | undefined;
   const lines = text.split(/\r\n|[\n\r]/u);
   return lines.map((line, row) => {
@@ -223,14 +233,22 @@ function visibleLines(text: string): string[] {
       // Only resume coverage at an unambiguous closing container prefix.
       // A deeper/uncertain delimiter stays hidden along with the rest of the
       // block (possibly to EOF), rather than exposing example code as prose.
-      if (close && close[1] === fence.prefix && close[2][0] === fence.marker && close[2].length >= fence.length) fence = undefined;
+      const sameContainer = close && (fence.flexibleIndent
+        ? close[1].startsWith(fence.prefix) && /^ {0,3}$/.test(close[1].slice(fence.prefix.length))
+        : close[1] === fence.prefix);
+      if (close && sameContainer && close[2][0] === fence.marker && close[2].length >= fence.length) fence = undefined;
       return "";
     }
     // A fence's contents are literal, including apparent comment delimiters.
     const open = !comment && !codeEnd && FENCE_OPEN_RE.exec(line);
     if (open && (open[2][0] !== "`" || !open[3].includes("`"))) {
-      fence = { marker: open[2][0], length: open[2].length,
-        prefix: open[1].replace(/(?:[-+*]|\d+[.)])(?=[ \t])/g, (marker) => " ".repeat(marker.length)) };
+      // At top level (or after an explicit quote container), delimiter
+      // indentation is independently 0–3 spaces. Ambiguous list/tab/deeper
+      // indentation still requires an exact prefix, conservatively to EOF.
+      const quote = /^(?: {0,3}>[ \t]?)+/.exec(open[1])?.[0] ?? "";
+      const flexibleIndent = /^ {0,3}$/.test(open[1].slice(quote.length));
+      fence = { marker: open[2][0], length: open[2].length, flexibleIndent,
+        prefix: flexibleIndent ? quote : open[1].replace(/(?:[-+*]|\d+[.)])(?=[ \t])/g, (marker) => " ".repeat(marker.length)) };
       return "";
     }
     let visible = "";
@@ -277,6 +295,23 @@ function headingText(line: string): string | null {
 }
 
 /**
+ * Safety boundaries, NOT a Markdown parser: inspect every raw line, including
+ * code/comments, without consulting visibleLines or any of its state. Accept
+ * possible container/indentation prefixes conservatively and include Setext
+ * shapes. False positives may reject a trim; visibility bugs cannot authorize
+ * one by hiding a foreign owner or borrowing text past a raw heading.
+ */
+function rawHeadings(lines: string[]): (RawHeading | null)[] {
+  const content = lines.map((line) => line.replace(/^\ufeff/, "")
+    .replace(/^(?:[ \t>]|(?:[-+*]|\d+[.)])(?=[ \t]))*/, ""));
+  return lines.map((lineText, idx) => {
+    const atx = /^#{1,6}(?:[ \t]|$)/.test(content[idx]);
+    const setext = content[idx].trim() !== "" && /^(?:=+|-+)[ \t]*$/.test(content[idx + 1] ?? "");
+    return atx || setext ? { line: idx + 1, lineText, owners: distinctCitedKeysInLine(lineText) } : null;
+  });
+}
+
+/**
  * First eligible citation per key in file/line order. A line must pass the
  * single-key/leading-subject and index rules AND its nearest visible heading
  * must name exactly that key. Headings can themselves cite their own key.
@@ -289,12 +324,14 @@ export function firstCitations(destinations: DestinationFile[]): CitationScan {
   const ownershipRejections: OwnershipRejection[] = [];
   const sorted = [...destinations].sort((a, b) => a.file.localeCompare(b.file));
   for (const { file, text } of sorted) {
-    const lines = visibleLines(text);
     const rawLines = text.split(/\r\n|[\n\r]/u);
+    const raw = rawHeadings(rawLines);
+    const lines = visibleLines(text);
     let heading: string | null = null;
     let sectionStart = 0;
     const sections = lines.map(headingText);
-    // Precompute each section's end once; hidden headings never split a section.
+    // Visible sections supply candidates; raw boundaries independently limit
+    // their evidence and veto hidden foreign owners BEFORE accepting any line.
     const sectionEnds = new Map<number, number>();
     for (let i = 0; i < lines.length; i++) {
       if (sections[i] !== null) {
@@ -303,6 +340,19 @@ export function firstCitations(destinations: DestinationFile[]): CitationScan {
       }
     }
     sectionEnds.set(sectionStart, lines.length);
+    const safety = new Map<number, { end: number; conflict?: RawHeading }>();
+    for (const [start, visibleEnd] of sectionEnds) {
+      const owners = distinctCitedKeysInLine(sections[start] ?? "");
+      let end = visibleEnd;
+      let conflict: RawHeading | undefined;
+      for (let i = start; i < visibleEnd; i++) {
+        const boundary = raw[i];
+        if (!boundary) continue;
+        if (i > start) end = Math.min(end, i);
+        if (!conflict && boundary.owners.some((key) => !owners.includes(key))) conflict = boundary;
+      }
+      safety.set(start, { end, conflict });
+    }
     sectionStart = 0;
     lines.forEach((visible, idx) => {
       if (sections[idx] !== null) { heading = sections[idx]; sectionStart = idx; }
@@ -326,9 +376,17 @@ export function firstCitations(destinations: DestinationFile[]): CitationScan {
         ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners, reason });
         return;
       }
+      const guard = safety.get(sectionStart)!;
+      const uncertain = guard.conflict ?? (idx >= guard.end ? raw[guard.end] : null) ??
+        (!raw[sectionStart] ? { line: sectionStart + 1, lineText: rawLines[sectionStart], owners: [] } : null);
+      if (uncertain) {
+        ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners,
+          reason: "uncertain-section", rawHeading: uncertain });
+        return;
+      }
       if (!found.has(key)) {
         found.set(key, { file, line: idx + 1, lineText, heading,
-          sectionText: lines.slice(sectionStart, sectionEnds.get(sectionStart)).join("\n") });
+          sectionText: lines.slice(sectionStart, guard.end).join("\n") });
       }
     });
   }

@@ -1,4 +1,5 @@
-/** #447 review1: visibility guards must survive the real proposal/apply path. */
+/** #447 review1: visibility guards must survive the real proposal/apply path.
+ * Review2 intentionally rejects even genuinely hidden foreign MEM headings. */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,14 +23,15 @@ export function runRegistryVisibilityTests(assert: (condition: boolean, message:
     { label: "lazy quote paragraph continuation", text: boundary("> Use `literal\n token <!--` here.", "Use `-->` literally.") },
     { label: "escaped comment opener", text: boundary("Use \\<!-- literally.", "Use --> literally.") },
     { label: "odd backslash run", text: boundary("Use \\\\\\<!-- literally.", "Use --> literally.") },
-    { label: "real comment control", text: boundary("<!--", "-->"), covered: true },
-    { label: "even backslash run opens comment", text: boundary("Use \\\\<!--", "-->"), covered: true },
-    { label: "escaped backtick is not a span", text: boundary("Use \\`<!--", "-->"), covered: true },
-    { label: "unmatched backtick is not a span", text: boundary("Use `<!--", "-->"), covered: true },
-    { label: "code span cannot cross heading boundary", text: boundary("Use `<!--", "--> trailing `"), covered: true },
-    { label: "real comment following code span", text: boundary("Use `literal` <!--", "-->"), covered: true },
-    { label: "backslash inside span does not escape closing backtick", text: boundary("Use `\\`<!--", "-->"), covered: true },
+    { label: "real comment control", text: boundary("<!--", "-->") },
+    { label: "even backslash run opens comment", text: boundary("Use \\\\<!--", "-->") },
+    { label: "escaped backtick is not a span", text: boundary("Use \\`<!--", "-->") },
+    { label: "unmatched backtick is not a span", text: boundary("Use `<!--", "-->") },
+    { label: "code span cannot cross heading boundary", text: boundary("Use `<!--", "--> trailing `") },
+    { label: "real comment following code span", text: boundary("Use `literal` <!--", "-->") },
+    { label: "backslash inside span does not escape closing backtick", text: boundary("Use `\\`<!--", "-->") },
     { label: "comment closer is raw HTML", text: `${own}\n<!-- hidden \\-->\n${foreign}\n${lesson}` },
+    { label: "real comment without a foreign heading", text: `${own}\n<!-- ordinary comment -->\n${lesson}`, covered: true },
     { label: "commented lesson control", text: `${own}\n<!--\n${lesson}\n-->` },
     ...["```", "~~~"].flatMap((marker) => [
       { label: `column zero ${marker} control`, text: `${own}\n${marker}md\n${lesson}\n${marker}` },
@@ -39,7 +41,7 @@ export function runRegistryVisibilityTests(assert: (condition: boolean, message:
       { label: `blockquote list fence ${marker}`, text: `${own}\n> - ${marker}md\n>   ${lesson}\n>   ${marker}` },
       { label: `tab indented fence ${marker}`, text: `${own}\n- Example:\n\n\t${marker}md\n\t${lesson}\n\t${marker}` },
       { label: `uncertain deeper closing fence ${marker}`, text: `${own}\n- Example:\n\n    ${marker}md\n        ${marker}\n    ${lesson}` },
-      { label: `content after list fence ${marker}`, text: `${own}\n- ${marker}md\n  <!-- fake comment\n  ${foreign}\n  ${marker}\n${lesson}`, covered: true },
+      { label: `content after list fence ${marker}`, text: `${own}\n- ${marker}md\n  <!-- fake comment\n  ${foreign}\n  ${marker}\n${lesson}` },
     ]),
   ];
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-registry-visibility-"));

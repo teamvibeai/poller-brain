@@ -19,7 +19,8 @@
  * the complete normalized Description and a whole line in the accepted owned section,
  * optionally removing one leading prefix for the same key.
  * Both modes print an additive `contentCoverage: <JSON array>` field;
- * Rejections carry a single `no-literal-match` reason in `missingTokens`.
+ * Rejections carry `no-literal-match` or `uncertain-section` in `missingTokens`.
+ * Raw heading conflicts are also reported in `ownershipRejections` in both modes.
  * Rejected rows must not be hand-trimmed before moving the missing content.
  *
  * Applying is a separate, explicit, opt-in step — pass the exact keys you
@@ -209,9 +210,9 @@ function main(): void {
     console.log(`Duplicate registry keys rejected; all rows with these keys are retained: ${duplicateKeys.join(", ")}`);
   }
   printContentCoverage(contentCoverage);
+  printOwnershipRejections(ownershipRejections);
 
   if (!apply) {
-    printOwnershipRejections(ownershipRejections);
     printIndexRejections(indexRejections);
     printUnreliableHooks(unreliableHooks);
     if (candidates.length === 0) {

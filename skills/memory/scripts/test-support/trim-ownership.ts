@@ -50,10 +50,13 @@ export function runTrimOwnershipTests(kind: Kind, assert: Assert): void {
     { label: "fenced tildes", text: `~~~md\n${heading("MEM-53")}\n${content("MEM-53")}\n~~~` },
     { label: "commented heading and citation", text: `<!--\n${heading("MEM-53")}\n${content("MEM-53")}\n-->` },
     { label: "inline commented owner", text: `## Generic lesson <!-- [MEM-53] -->\n${content("MEM-53")}`, reason: "missing-key" },
-    { label: "inline commented foreign key", text: `${heading("MEM-53")} <!-- [MEM-113] -->\n${content("MEM-53")}`, accepted: 1 },
+    { label: "inline commented foreign key", text: `${heading("MEM-53")} <!-- [MEM-113] -->\n${content("MEM-53")}`, reason: "uncertain-section" },
     { label: "fake fenced heading cannot govern later text", text: `~~~\n${heading("MEM-53")}\n~~~\n${content("MEM-53")}`, reason: "missing-heading" },
     { label: "fake commented heading cannot govern later text", text: `<!--\n${heading("MEM-53")}\n-->\n${content("MEM-53")}`, reason: "missing-heading" },
-    { label: "hidden headings do not end real section", text: `${heading("MEM-53")}\n~~~\n${heading("MEM-113")}\n<!--\n~~~\n<!--\n${heading("MEM-84")}\n-->\n${content("MEM-53")}`, accepted: 1 },
+    { label: "raw hidden foreign headings veto ownership", text: `${heading("MEM-53")}\n~~~\n${heading("MEM-113")}\n<!--\n~~~\n<!--\n${heading("MEM-84")}\n-->\n${content("MEM-53")}`, reason: "uncertain-section" },
+    { label: "raw guard rejects even preceding full content", text: `${heading("MEM-53")}\n${content("MEM-53")}\n<!--\n${heading("MEM-113")}\n-->`, reason: "uncertain-section" },
+    { label: "raw guard scans past a hidden generic boundary", text: `${heading("MEM-53")}\n${content("MEM-53")}\n<!--\n### Generic boundary\n${heading("MEM-113")}\n-->`, reason: "uncertain-section" },
+    { label: "raw guard does not consume later valid evidence", text: `${heading("MEM-53")}\n<!--\n${heading("MEM-113")}\n-->\n${heading("MEM-53")}\n${content("MEM-53")}`, accepted: 5, reason: "uncertain-section" },
     { label: "indented and closing-hash heading", text: `   ${heading("MEM-53")} ###\n${content("MEM-53")}`, accepted: 1 },
     { label: "index line remains rejected", text: `## [MEM-53] → see semantic/parent.md\n| MEM-53 | semantic/other.md |\n${BODY}` },
   ];
@@ -69,6 +72,11 @@ export function runTrimOwnershipTests(kind: Kind, assert: Assert): void {
       assert(!!rejected && rejected.file === "semantic/topic.md" && rejected.line > 0 &&
         typeof rejected.lineText === "string" && (rejected.heading === null || typeof rejected.heading === "string"),
       `${label}: additive rejection includes key, file, line, heading and reason`);
+      if (test.reason === "uncertain-section") {
+        const raw = rejected?.rawHeading;
+        assert(!!raw && raw.line > 0 && test.text.split("\n")[raw.line - 1] === raw.lineText &&
+          raw.owners.some((owner) => owner !== key), `${label}: diagnostic locates the raw foreign heading`);
+      }
     }
     if (!test.accepted && !test.reason) {
       assert(!found.ownershipRejections.some((r) => r.key === key), `${label}: hidden/index evidence does not become an ownership rejection`);
