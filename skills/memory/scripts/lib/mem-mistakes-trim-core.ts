@@ -70,6 +70,8 @@
  * Keyless headings with no introductory prose instead contain independently
  * keyed bullet entries (poller-brain#463). Unresolved ownership is reported
  * and excluded from trimming, independently of the byte-coverage guard.
+ * Keys shared by multiple active entries or unresolved spans are likewise
+ * excluded: archival deduplicates by key and cannot preserve two originals.
  *
  * Intentionally fs-free — pure string fixtures, unit-testable without a
  * real brain's memory/. The CLI resolves the current half-year bucket name
@@ -202,7 +204,7 @@ function parseEntries(text: string): {
       });
     }
   });
-  return { entries, lines, diagnostics };
+  return { entries: excludeDuplicateKeys(entries, lines, diagnostics), lines, diagnostics };
 }
 
 function entryText(lines: string[], entry: Entry): string {
@@ -219,6 +221,47 @@ function entryCitedKeys(lines: string[], entry: Entry): string[] {
     for (const k of distinctCitedKeysInLine(lines[i])) keys.add(k);
   }
   return [...keys];
+}
+
+/**
+ * A key must have a single owner in the active file before any original can
+ * be shortened. Include pointers and unresolved/unparsed content, but ignore
+ * the aggregate archive stub. Repeated citations within one entry are safe.
+ * Run inside parsing so proposal and apply-time boundary checks agree.
+ */
+function excludeDuplicateKeys(
+  entries: Entry[],
+  lines: string[],
+  diagnostics: MistakesStructureDiagnostic[]
+): Entry[] {
+  const ownerByLine = lines.map((_, idx) => idx);
+  const spans = [
+    ...entries.map((e) => ({ start: e.startLine, end: e.contentEndLine })),
+    ...diagnostics.map((d) => ({ start: d.startLine - 1, end: d.endLine })),
+  ];
+  for (const span of spans) {
+    for (let i = span.start; i < span.end; i++) ownerByLine[i] = span.start;
+  }
+  const ownersByKey = new Map<string, Set<number>>();
+  lines.forEach((line, idx) => {
+    if (STUB_RE.test(line)) return;
+    for (const key of distinctCitedKeysInLine(line)) {
+      const owners = ownersByKey.get(key) ?? new Set<number>();
+      owners.add(ownerByLine[idx]);
+      ownersByKey.set(key, owners);
+    }
+  });
+  return entries.filter((entry) => {
+    const duplicates = entryCitedKeys(lines, entry).filter((key) => (ownersByKey.get(key)?.size ?? 0) > 1);
+    if (duplicates.length === 0) return true;
+    diagnostics.push({
+      startLine: entry.startLine + 1,
+      endLine: entry.contentEndLine,
+      keyedBulletLines: entry.format === "bullet" ? [entry.startLine + 1] : [],
+      reason: `key shared by multiple active entries or unresolved spans: ${sortKeys(duplicates).join(", ")}`,
+    });
+    return false;
+  });
 }
 
 const SOURCE_RE = new RegExp(String.raw`\(Source:\s*([^)]*?)(?:,\s*\[${MEM_ID_PATTERN}(?::obsolete)?\])?\)`, "g");

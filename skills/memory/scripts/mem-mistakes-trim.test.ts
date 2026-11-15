@@ -767,5 +767,94 @@ withMistakeFixture(safeWithAmbiguous, GROUPED_DESTINATIONS, (root, sourcePath) =
   assert(apply.stdout.includes("2 distinct MEM-N keys preserved"), "mixed ambiguity: accounting includes unresolved keys and excludes aggregate stub keys");
 });
 
+// Review #463: different originals sharing a key must never be shortened.
+// Archival deduplicates by key, so proposing both would silently lose one.
+const duplicateFirst = `- [MEM-610] First incident: ${detail.repeat(12)}`;
+const duplicateSecond = `- [MEM-610] Second incident: independent handover failure. ${"The handover omitted validation and its separate remediation. ".repeat(25)}`;
+const duplicateCategory = `# Mistakes\n\n## Operations\n\n${duplicateFirst}\n\n${duplicateSecond}\n`;
+const duplicateFound = findMistakesTrimCandidates(duplicateCategory, GROUPED_DESTINATIONS);
+assert(duplicateFound.candidates.length === 0, "duplicate key: neither distinct original is proposed");
+for (const original of [duplicateFirst, duplicateSecond]) {
+  const startLine = duplicateCategory.split("\n").indexOf(original) + 1;
+  assert(duplicateFound.structuralDiagnostics.some((d) => d.startLine === startLine && d.endLine === startLine && d.keyedBulletLines.includes(startLine) && d.reason.includes("MEM-610")), "duplicate key: diagnostics identify each affected entry span and key");
+}
+
+// Control: changing just the second key restores both candidates and keeps
+// every original verbatim in the archive. Its first candidate also exercises
+// apply-time revalidation when a duplicate is introduced after proposal.
+const uniqueCategory = duplicateCategory.replace("- [MEM-610] Second incident:", "- [MEM-617] Second incident:");
+const uniqueFound = findMistakesTrimCandidates(uniqueCategory, GROUPED_DESTINATIONS);
+assert(uniqueFound.candidates.map((c) => c.key).join(",") === "MEM-610,MEM-617", "unique control: both category bullets remain candidates");
+const uniqueApplied = applyMistakesTrimCandidates(uniqueCategory, "", uniqueFound.candidates, "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+verifyMistakesTrimStats(uniqueApplied.stats);
+assert(uniqueApplied.stats.trimmedEntries === 2 && uniqueFound.candidates.every((c) => uniqueApplied.archive.includes(`\n${c.originalText}\n`)), "unique control: both full originals archived and shortened");
+const mixedDuplicates = `${duplicateCategory}\n- [MEM-617] Unrelated safe incident. ${detail.repeat(12)}\n`;
+const mixedFound = findMistakesTrimCandidates(mixedDuplicates, GROUPED_DESTINATIONS);
+assert(mixedFound.candidates.map((c) => c.key).join(",") === "MEM-617", "duplicate key: unrelated unique sibling remains eligible");
+const mixedApplied = applyMistakesTrimCandidates(mixedDuplicates, "", mixedFound.candidates, "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+verifyMistakesTrimStats(mixedApplied.stats);
+assert([duplicateFirst, duplicateSecond].every((original) => mixedApplied.mistakes.includes(original) && !mixedApplied.archive.includes(original)), "duplicate key: safe sibling apply leaves both duplicate originals intact");
+let duplicateApplyThrew = false;
+try {
+  applyMistakesTrimCandidates(duplicateCategory, "", [uniqueFound.candidates[0]], "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+} catch {
+  duplicateApplyThrew = true;
+}
+assert(duplicateApplyThrew, "duplicate key: core apply rejects a formerly valid candidate even with unchanged boundaries and original text");
+
+// The exclusion is file-wide, including pointers, multi-key entries and
+// unresolved spans; identical originals are also ambiguous, never merged.
+for (const [index, other] of [
+  duplicateFirst,
+  "### Other incident [MEM-610]\nSeparate heading-owned incident.",
+  "## Another category\n\n- [MEM-610] Different category.",
+  "- [MEM-610] → see semantic/lesson.md:2 — Existing pointer",
+  "- [MEM-610] Incident also mentioning MEM-999.",
+  "## Unresolved category\nUnowned prose.\n- [MEM-610] Unresolved bullet.",
+].entries()) {
+  const source = `# Mistakes\n\n${duplicateFirst}\n\n${other}\n`;
+  const found = findMistakesTrimCandidates(source, GROUPED_DESTINATIONS);
+  assert(!found.candidates.some((c) => c.key === "MEM-610") && found.structuralDiagnostics.some((d) => d.reason.includes("MEM-610")), `duplicate key: file-wide exclusion, case ${index + 1}`);
+}
+assert(findMistakesTrimCandidates(`Unparsed reference to MEM-610.\n\n${duplicateCategory}`, GROUPED_DESTINATIONS).candidates.length === 0, "duplicate key: unparsed content also blocks a key");
+const datedDuplicate = duplicateCategory.replaceAll("MEM-610", DATED_B);
+assert(findMistakesTrimCandidates(datedDuplicate, GROUPED_DESTINATIONS).candidates.length === 0, "duplicate key: dated IDs also excluded");
+const repeatedInsideEntry = `## Single incident [MEM-610]\n${detail.repeat(10)}\n- Supporting detail about [MEM-610].\n\n> 📦 1 mistake archived — Keys: MEM-610\n`;
+assert(findMistakesTrimCandidates(repeatedInsideEntry, GROUPED_DESTINATIONS).candidates.length === 1, "duplicate key: repeated citations within one owner and aggregate stub do not create duplicate entries");
+
+// Real CLI regression: proposal writes nothing; explicit approval fails
+// closed with both source and archive byte-identical, present or absent.
+const overCapDuplicateCategory = duplicateCategory.replace(detail.repeat(12), detail.repeat(60));
+const duplicateCliCases = [["under-cap", duplicateCategory], ["over-cap", overCapDuplicateCategory]]
+  .flatMap(([size, source]) => [false, true].map((existingArchive) => ({ size, source, existingArchive })));
+for (const { size, source, existingArchive } of duplicateCliCases) {
+  withMistakeFixture(source, GROUPED_DESTINATIONS, (root, sourcePath) => {
+    const now = new Date();
+    const bucket = `${now.getUTCFullYear()}-${now.getUTCMonth() < 6 ? "H1" : "H2"}`;
+    const archivePath = path.join(root, "memory/episodic/archive", `mistakes-${bucket}.md`);
+    const archiveBefore = Buffer.from("# Existing archive\n\nPreserve unrelated historical detail.\n");
+    if (existingArchive) {
+      fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+      fs.writeFileSync(archivePath, archiveBefore);
+    }
+    const sourceBefore = fs.readFileSync(sourcePath);
+    const unchanged = () => fs.readFileSync(sourcePath).equals(sourceBefore) && (existingArchive
+      ? fs.readFileSync(archivePath).equals(archiveBefore)
+      : !fs.existsSync(path.join(root, "memory/episodic")));
+    const propose = runMistakeCli(root);
+    assert(propose.status === 0 && propose.stdout.includes("candidates=0") && propose.stderr.includes("MEM-610") && propose.stderr.includes("unresolved"), `duplicate CLI (${size}, archive=${existingArchive}): proposal excludes key with diagnostic`);
+    assert(unchanged(), `duplicate CLI (${size}, archive=${existingArchive}): proposal preserves source and archive bytes`);
+    const apply = runMistakeCli(root, ["--apply", "--only", "MEM-610"]);
+    assert(apply.status === 1 && apply.stderr.includes("no write performed"), `duplicate CLI (${size}, archive=${existingArchive}): explicit approval aborts`);
+    assert(unchanged(), `duplicate CLI (${size}, archive=${existingArchive}): apply preserves both originals and archive bytes`);
+  });
+}
+withMistakeFixture(uniqueCategory, GROUPED_DESTINATIONS, (root, sourcePath) => {
+  const apply = runMistakeCli(root, ["--apply", "--only", "MEM-610,MEM-617"]);
+  const archiveDir = path.join(root, "memory/episodic/archive");
+  const archive = fs.existsSync(archiveDir) ? fs.readFileSync(path.join(archiveDir, fs.readdirSync(archiveDir)[0]), "utf8") : "";
+  assert(apply.status === 0 && fs.readFileSync(sourcePath, "utf8") === uniqueApplied.mistakes && uniqueFound.candidates.every((c) => archive.includes(`\n${c.originalText}\n`)), "unique control CLI: both category bullets shortened with both originals archived");
+});
+
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
