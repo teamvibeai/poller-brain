@@ -251,10 +251,24 @@ function parseDestination(text: string): { lines: string[]; sections: Section[] 
 function rawHeadings(lines: string[]): (RawHeading | null)[] {
   const content = lines.map((line) => line.replace(/^\ufeff/, "")
     .replace(/^(?:[ \t>]|(?:[-+*]|\d+[.)])(?=[ \t]))*/, ""));
+  const underline = (line: string) => /^(?:=+|-+)[ \t]*$/.test(line);
+  const titleOwners = new Set<string>();
   return lines.map((lineText, idx) => {
     const atx = /^#{1,6}(?:[ \t]|$)/.test(content[idx]);
-    const setext = content[idx].trim() !== "" && /^(?:=+|-+)[ \t]*$/.test(content[idx + 1] ?? "");
-    return atx || setext ? { line: idx + 1, lineText, owners: distinctCitedKeysInLine(lineText) } : null;
+    // Blank lines and definite raw heading boundaries end a possible title
+    // span. Everything else remains in it: guessing whether a comment, fence,
+    // container or other ambiguous raw line interrupts a paragraph could hide
+    // an earlier owner again. This deliberately over-approximates the title,
+    // independently of AST visibility, in one pass through all its lines.
+    if (atx || content[idx].trim() === "" || underline(content[idx])) {
+      titleOwners.clear();
+      return atx ? { line: idx + 1, lineText, owners: distinctCitedKeysInLine(lineText) } : null;
+    }
+    for (const owner of distinctCitedKeysInLine(lineText)) titleOwners.add(owner);
+    // Keep the boundary at the final title line, inside any visible Setext
+    // heading's section, but veto using owners from the ENTIRE possible span.
+    return underline(content[idx + 1] ?? "")
+      ? { line: idx + 1, lineText, owners: [...titleOwners] } : null;
   });
 }
 
