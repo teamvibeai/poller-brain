@@ -177,8 +177,6 @@ test('report inventory is committed by the existing checkpoint and leaves Tier C
   const draft = renderInventory(f.dir)
   rmSync(join(f.dir, 'memory/episodic/consolidation-progress-2026-11-15.md'))
   assert.throws(() => verifyInventory(f.dir, draft), /differs/)
-  const report = `# Consolidation\n\n${coverage}\n${renderInventory(f.dir)}`
-  verifyInventory(f.dir, report)
   const path = 'reports/2026-11-15-memory-consolidation.md'
   const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com',
@@ -192,8 +190,17 @@ test('report inventory is committed by the existing checkpoint and leaves Tier C
   run('git', ['init', '-q'])
   run('git', ['add', 'memory'])
   run('git', ['commit', '-qm', 'initial'])
+  // The checkpoint requires the durable marker and this cycle's history append (#516).
+  run('bash', [join(repo, 'scripts/consolidation-marker.sh'), 'start', '.', '2026-11-15'])
+  const startingHead = run('git', ['rev-parse', 'HEAD']).trim()
+  f.write('memory/episodic/archive/consolidation-history-2026-H2.md',
+    `\n## Consolidation 2026-11-15 / ${startingHead}\nStatus: in progress\nWork performed: Reviewed all tiers; zero promotions; regenerated SUMMARY.md.\n<!-- /consolidation-history -->\n`)
+  const report = `# Consolidation\n\n${coverage}\n${renderInventory(f.dir)}`
+  verifyInventory(f.dir, report)
   f.write(path, report)
-  f.write('reports/2026-11-15-memory-consolidation.json', '{"operationType":"consolidation"}\n')
+  f.write('reports/2026-11-15-memory-consolidation.json', JSON.stringify({
+    operationType: 'consolidation', consolidationHistory: { version: 1, cycleDate: '2026-11-15', startingHead },
+  }) + '\n')
   run('bash', [join(repo, 'scripts/consolidation-commit.sh'), '.', '2026-11-15', 'steps 10-12'])
   assert.equal(run('git', ['show', `HEAD:${path}`]), report)
   verifyInventory(f.dir, run('git', ['show', `HEAD:${path}`]))
