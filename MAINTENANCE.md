@@ -44,6 +44,8 @@ trigger: {heartbeat|scheduled|auto}
 Commit: {hash}
 ```
 
+For consolidation, also include `## SUMMARY.md Reduction` as required by the consolidation skill's Step 6: previous final UTF-8 byte size (or `not present`), post-regeneration size, each accepted section/destination with whole-SUMMARY bytes before → after, final size and remaining overage, successful-relocation budget used/allowed, and stop reason (`under cap`, `budget exhausted`, `no safe candidate`, or `no progress`). Record rejected attempts and pointer/source reconciliations there too, including runs with no relocations. Add every accepted relocation destination (including reused verified copies) and any destination created/modified before a rejected replacement or interruption to the JSON `filesChanged` array alongside `memory/SUMMARY.md`; keep `selfAssessment["summary-md-regenerated"] = true`. These measurements belong in the markdown report; no new JSON fields are required.
+
 ### Rules
 
 - Reports are **append-only** — never edit past reports.
