@@ -6,6 +6,7 @@ import { readFileSync, lstatSync } from 'node:fs'
 import { resolve, join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { historyPathFor, validateHistoryAppend } from './consolidation-history-schema.mjs'
 
 const [brain, date, mode, final, evidence, markerHead] = process.argv.slice(2)
 const cwd = resolve(brain || '.')
@@ -48,20 +49,11 @@ function metadata(bytes, legacy = false) {
 function validate(bytes, revision) {
   git('merge-base', '--is-ancestor', start, revision)
   const before = blob(start, path, true)
-  if (!bytes.subarray(0, before.length).equals(before)) fail('existing archive bytes were not preserved')
-  const suffix = bytes.subarray(before.length).toString('utf8')
-  // Exactly one bounded record in the new append: prose mentions, empty
-  // headings and another same-day cycle cannot stand in for this identity.
-  const heading = `## Consolidation ${date} / ${start}`
-  const record = suffix.match(/^\s*(## Consolidation [^\n]+)\nStatus: in progress\nWork performed: ([^\n]+)\n<!-- \/consolidation-history -->\n?\s*$/)
-  if (!record || record[1] !== heading || record[2].trim().length < 20 || record[2].trim().split(/\s+/).length < 3) {
-    fail('missing substantive in-progress record for this exact cycle in the new append')
-  }
-  if (before.toString('utf8').split('\n').includes(heading)) fail('cycle record already existed at starting HEAD')
+  validateHistoryAppend(before, bytes, date, start)
 }
 
 try {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) fail('invalid cycle date')
+  historyPathFor(date)
   if (mode === '--committed') {
     const meta = metadata(blob(evidence, reportPath), true)
     if (!meta) {

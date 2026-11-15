@@ -13,7 +13,8 @@ const claude = 'CLAUDE.md'
 const attempted = Date.parse('2026-11-14T01:00:00.000Z')
 const now = attempted + 24 * 3600000
 const policyFiles = ['CLAUDE.md', 'MAINTENANCE.md', 'skills/memory/SKILL.md',
-  'skills/memory/consolidate/SKILL.md', 'scripts/consolidation-retry.mjs']
+  'skills/memory/consolidate/SKILL.md', 'scripts/consolidation-retry.mjs',
+  'scripts/consolidation-history-schema.mjs', 'scripts/consolidation-marker.sh']
 const block = targets => `## Reduction Retry Cadence\n\n\`\`\`consolidation-retry-v1\n${JSON.stringify({ version: 1, targets })}\n\`\`\`\n`
 const cleared = status => ({ status, reason: status, lastAttemptAt: null, nextEligibleAt: null,
   inputFingerprint: null, policyVersion: POLICY_VERSION, reviewReason: null })
@@ -133,6 +134,167 @@ test('Step 0 maintenance-only archival and SUMMARY refresh preserve both weekly 
   }
 })
 
+const historyPath = 'memory/episodic/archive/consolidation-history-2026-H2.md'
+const historyRecord = (date, start) => `\n## Consolidation ${date} / ${start}\nStatus: in progress\nWork performed: Reviewed all memory tiers; zero promotions; regenerated SUMMARY.md.\n<!-- /consolidation-history -->\n`
+
+function historyFixture(t, previous) {
+  const f = fixture(t)
+  if (previous !== null) {
+    f.write(historyPath, previous)
+    f.git('add', 'memory'); f.git('commit', '-qm', 'legacy history')
+  }
+  const helper = (name, ...args) => {
+    const r = spawnSync('bash', [join(repo, `scripts/consolidation-${name}.sh`), ...args], { env: f.env, encoding: 'utf8' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    return r.stdout
+  }
+  const start = date => {
+    const head = f.git('rev-parse', 'HEAD')
+    helper('marker', 'start', f.dir, date)
+    return head
+  }
+  const append = (date, head) => {
+    let before = ''
+    try { before = readFileSync(join(f.dir, historyPath), 'utf8') } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+    f.write(historyPath, before + historyRecord(date, head))
+    helper('commit', f.dir, date, 'steps 5-6')
+  }
+  const finish = (date, head, targets) => {
+    f.write(`reports/${date}-memory-consolidation.md`, block(targets))
+    f.write(`reports/${date}-memory-consolidation.json`, JSON.stringify({ operationType: 'consolidation',
+      consolidationHistory: { version: 1, cycleDate: date, startingHead: head } }))
+    helper('commit', f.dir, date, 'steps 10-12')
+    helper('commit', f.dir, date, 'final')
+    assert.match(helper('state', f.dir), /complete/)
+    helper('marker', 'clear', f.dir)
+  }
+  return { ...f, start, append, finish }
+}
+
+for (const previous of ['# Legacy history without a final newline: café', null]) {
+  for (const target of [summary, claude]) {
+    test(`history appends preserve ${target} stall across completed cycles (new archive=${previous === null})`, t => {
+      const f = historyFixture(t, previous)
+      const date = '2026-11-14'
+      const head = f.start(date)
+      // Production order: Step 6 attempts SUMMARY before the required append;
+      // Step 9c attempts CLAUDE after the Step 6a checkpoint containing it.
+      const entries = { [summary]: f.stall(summary) }
+      f.append(date, head)
+      entries[claude] = f.stall(claude)
+      f.finish(date, head, entries)
+      let result = advise(f.dir, target, f.opts({ now: attempted }))
+      assert.equal(result.decision, 'deferred', `${target} after first final: ${result.reason}`)
+      assert.deepEqual(result.entry, { ...entries[target], status: 'deferred' })
+
+      // Two further valid appends at +24h, including independent same-day
+      // cycles. Use the real marker/commit/state helpers at every boundary.
+      for (let cycle = 0; cycle < 2; cycle++) {
+        const nextDate = '2026-11-15'
+        const completedAt = f.start(nextDate)
+        const options = f.opts({ completedAt, now })
+        result = advise(f.dir, target, options)
+        assert.equal(result.decision, 'deferred', `${target} before append ${cycle}: ${result.reason}`)
+        f.append(nextDate, completedAt)
+        result = advise(f.dir, target, options)
+        assert.equal(result.decision, 'deferred', `${target} after append ${cycle}: ${result.reason}`)
+        assert.deepEqual(result.entry, { ...entries[target], status: 'deferred' })
+        f.finish(nextDate, completedAt, { ...entries, [target]: result.entry })
+        assert.equal(advise(f.dir, target, f.opts()).decision, 'deferred')
+      }
+
+      const source = readFileSync(join(f.dir, 'memory/semantic/project.md'), 'utf8')
+      f.write('memory/semantic/project.md', source + 'New decision: retain audit evidence for 90 days.\n')
+      assert.equal(advise(f.dir, target, f.opts()).decision, 'search', 'substantive source change')
+      f.write('memory/semantic/project.md', source)
+      assert.equal(advise(f.dir, target, f.opts()).decision, 'deferred')
+
+      // Still matches the history schema, but edits the first, sealed record.
+      const history = readFileSync(join(f.dir, historyPath), 'utf8')
+      f.write(historyPath, history.replace('Reviewed all memory tiers', 'Reviewed new memory tiers'))
+      assert.equal(advise(f.dir, target, f.opts()).decision, 'search', 'older record rewritten on disk')
+      f.git('add', historyPath); f.git('commit', '-qm', 'rewrite older history record')
+      assert.equal(advise(f.dir, target, f.opts()).decision, 'search', 'older record rewrite committed')
+    })
+  }
+}
+
+test('history normalization fails closed on uncertain appends and keeps explicit dependencies opaque', t => {
+  const f = historyFixture(t, '# Legacy history\n')
+  const head = f.start('2026-11-14')
+  const entries = { [summary]: f.stall(summary) }
+  f.append('2026-11-14', head)
+  entries[claude] = f.stall(claude)
+  f.finish('2026-11-14', head, entries)
+  const completedAt = f.start('2026-11-15')
+  const options = f.opts({ completedAt })
+  const before = readFileSync(join(f.dir, historyPath), 'utf8')
+  const suffix = historyRecord('2026-11-15', completedAt)
+  const opaque = fingerprint(f.dir, summary, { ...options, dependencies: [historyPath] })
+  for (const valid of [suffix, '\n \t' + suffix.trim(), suffix.trim()]) {
+    f.write(historyPath, before + valid)
+    for (const target of [summary, claude]) {
+      assert.equal(advise(f.dir, target, options).decision, 'deferred', 'valid uncommitted append')
+    }
+  }
+  assert.notEqual(fingerprint(f.dir, summary, { ...options, dependencies: [historyPath] }), opaque)
+  for (const bad of [
+    suffix.replace('Status: in progress', 'Status: completed'),
+    suffix.replace('Work performed: Reviewed all memory tiers; zero promotions; regenerated SUMMARY.md.', 'Work performed: too short'),
+    suffix.replace('Work performed: Reviewed all memory tiers; zero promotions; regenerated SUMMARY.md.', 'Work performed: ' + 'A'.repeat(30)),
+    suffix.replace('2026-11-15', '2026-06-15'),
+    suffix.replace('2026-11-15', '2026-11-31'),
+    suffix.replace(completedAt, 'a'.repeat(40)),
+    suffix.replace(completedAt, completedAt.slice(1)),
+    suffix.replace('<!-- /consolidation-history -->', ''),
+    suffix + suffix,
+    suffix + 'Additional source knowledge.\n',
+    Buffer.concat([Buffer.from(suffix), Buffer.from([0xff])]),
+  ]) {
+    f.write(historyPath, Buffer.concat([Buffer.from(before), Buffer.from(bad)]))
+    for (const target of [summary, claude]) {
+      assert.equal(advise(f.dir, target, options).decision, 'search', String(bad))
+    }
+  }
+  f.write(historyPath, before + suffix)
+  const marker = readFileSync(join(f.dir, '.git/consolidation-start'))
+  rmSync(join(f.dir, '.git/consolidation-start'))
+  for (const target of [summary, claude]) assert.equal(advise(f.dir, target, options).decision, 'search')
+  f.write('.git/consolidation-start', marker)
+  f.write(historyPath, before)
+  for (const target of [summary, claude]) assert.equal(advise(f.dir, target, options).decision, 'deferred')
+  f.write(historyPath, before.replace('# Legacy history', '# Edited history'))
+  for (const target of [summary, claude]) assert.equal(advise(f.dir, target, options).decision, 'search')
+})
+
+test('removing committed history records or their archive requires search, including committed removals', t => {
+  const f = historyFixture(t, null)
+  const entries = {}
+  for (let cycle = 0; cycle < 2; cycle++) {
+    const head = f.start('2026-11-14')
+    if (!cycle) {
+      for (const target of [summary, claude]) entries[target] = f.stall(target)
+    }
+    f.append('2026-11-14', head)
+    f.finish('2026-11-14', head, entries)
+  }
+  const original = readFileSync(join(f.dir, historyPath), 'utf8')
+  const final = f.git('rev-parse', 'HEAD')
+  const lastRecord = original.lastIndexOf('\n## Consolidation ')
+  // Losing a trailing record must not resurrect the earlier normalized state.
+  for (const content of [original.slice(0, lastRecord), '', null]) {
+    if (content === null) rmSync(join(f.dir, historyPath))
+    else f.write(historyPath, content)
+    for (const target of [summary, claude]) assert.equal(advise(f.dir, target, f.opts()).decision, 'search')
+    f.git('add', historyPath); f.git('commit', '-qm', 'remove history evidence')
+    for (const target of [summary, claude]) assert.equal(advise(f.dir, target, f.opts()).decision, 'search')
+    // Only this disposable fixture is reset between independent removal cases.
+    f.git('reset', '--hard', final)
+  }
+})
+
 test('daily filter has an exact allowlist and preserves substantive bytes in mixed archives', () => {
   const date = '2026-11-14'
   const normalize = text => normalizeDaily(Buffer.from(text), date)
@@ -246,6 +408,13 @@ test('policy content/version/threshold, review requests and uncertain coverage i
   assert.equal(advise(f.dir, summary, f.opts({ policyRoot, reviewRequested: true })).decision, 'search')
   assert.equal(advise(f.dir, summary, f.opts({ coverageConfirmed: false })).decision, 'search')
   assert.equal(decide({ ...entry, policyVersion: 'reduction-retry-v2' }, { now, inputFingerprint: entry.inputFingerprint }).decision, 'search')
+  for (const path of ['scripts/consolidation-history-schema.mjs', 'scripts/consolidation-marker.sh']) {
+    const original = readFileSync(join(policyRoot, path))
+    writeFileSync(join(policyRoot, path), 'changed history normalization policy')
+    assert.equal(advise(f.dir, summary, f.opts({ policyRoot })).decision, 'search')
+    writeFileSync(join(policyRoot, path), original)
+    assert.equal(advise(f.dir, summary, f.opts({ policyRoot })).decision, 'deferred')
+  }
   writeFileSync(join(policyRoot, 'skills/memory/consolidate/SKILL.md'), 'new reduction policy')
   assert.equal(advise(f.dir, summary, f.opts({ policyRoot })).decision, 'search')
   const cap = CAPS[summary]

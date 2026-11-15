@@ -56,7 +56,7 @@ function fixture(t, date = '2026-11-14', previous = '# Previous archive\n\nHisto
 }
 
 for (const boundary of ['steps 5-6', 'steps 10-12', 'final']) {
-  for (const bad of ['missing', 'wrong bucket', 'wrong date', 'wrong identity', 'date-only prose', 'empty record', 'prior same-day cycle', 'rewritten prefix', 'duplicate', 'completed status', 'unreadable', 'symlink']) {
+  for (const bad of ['missing', 'wrong bucket', 'wrong date', 'wrong identity', 'date-only prose', 'empty record', 'prior same-day cycle', 'rewritten prefix', 'duplicate', 'completed status', 'invalid UTF-8', 'unreadable', 'symlink']) {
     test(`${boundary} rejects ${bad} without changing HEAD, index or marker`, t => {
       const f = fixture(t)
       f.report()
@@ -72,6 +72,10 @@ for (const boundary of ['steps 5-6', 'steps 10-12', 'final']) {
       if (bad === 'rewritten prefix') f.put(f.archive, '# Replaced old archive\n' + entry(f.date, f.start))
       if (bad === 'duplicate') f.put(f.archive, valid + entry(f.date, f.start))
       if (bad === 'completed status') f.put(f.archive, valid.replace('Status: in progress', 'Status: complete'))
+      if (bad === 'invalid UTF-8') {
+        const [before, after] = valid.split('regenerated')
+        f.put(f.archive, Buffer.concat([Buffer.from(before), Buffer.from([0xff]), Buffer.from(after)]))
+      }
       if (bad === 'unreadable') { rmSync(join(f.dir, f.archive)); mkdirSync(join(f.dir, f.archive)) }
       if (bad === 'symlink') { f.put('history-source.md', valid); rmSync(join(f.dir, f.archive)); symlinkSync(join(f.dir, 'history-source.md'), join(f.dir, f.archive)) }
       f.rejected(boundary)

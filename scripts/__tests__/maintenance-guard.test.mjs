@@ -253,7 +253,8 @@ for (const kind of ['maintenance', 'reflection']) {
     const dir = mkdtempSync(join(tmpdir(), 'tier guard scripts '))
     t.after(() => rmSync(dir, { recursive: true, force: true }))
     mkdirSync(join(dir, 'lib'))
-    for (const file of [`${kind}-guard.sh`, 'consolidation-state.sh', 'consolidation-marker.sh', 'consolidation-history.mjs']) {
+    for (const file of [`${kind}-guard.sh`, 'consolidation-state.sh', 'consolidation-marker.sh',
+      'consolidation-history.mjs', 'consolidation-history-schema.mjs']) {
       copyFileSync(join(repoRoot, 'scripts', file), join(dir, file))
     }
     if (helper !== undefined) writeFileSync(join(dir, 'lib', 'tier-coverage.sh'), helper)
