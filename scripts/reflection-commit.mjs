@@ -2,8 +2,7 @@
 // node reflection-commit.mjs BRAIN_DIR YYYY-MM-DD checklist|final MANIFEST.json
 // Manifest: { paths: [exact reviewed paths], deletionPreservation: { path: reason } }
 import { copyFileSync, lstatSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const [brain, date, boundary, manifest, ...extra] = process.argv.slice(2)
@@ -62,7 +61,8 @@ try {
   writeFileSync(`${index}.lock`, '', { flag: 'wx' })
   lock = `${index}.lock`
   if (paths.length && git(['diff', '--cached', '--name-only', '-z', head, '--', ...paths]).length) fail('reviewed paths overlap staged work; resolve ownership first')
-  scratch = mkdtempSync(join(tmpdir(), 'reflection-index-'))
+  // Keep replacement indexes on the real index filesystem for atomic rename.
+  scratch = mkdtempSync(join(dirname(index), 'reflection-index-'))
   const privateIndex = join(scratch, 'index')
   const nextIndex = join(scratch, 'next')
   copyFileSync(index, nextIndex)

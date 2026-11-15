@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
@@ -18,10 +18,10 @@ const old = 'memory/semantic/old.md'
 const destination = 'memory/episodic/archive/žluťoučký topic.md'
 const reason = `Deleted ${old} — content preserved verbatim in ${destination}`
 
-function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'reflection-commit-test-'))
+function fixture(t, { worktree = false } = {}) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'reflection-commit-test-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const brain = join(dir, 'brain')
+  let brain = join(dir, 'brain')
   mkdirSync(brain)
   const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com' }
@@ -40,13 +40,18 @@ function fixture(t) {
   git('add', '.')
   git('commit', '-qm', 'baseline')
   const baseline = git('rev-parse', 'HEAD')
+  if (worktree) {
+    const linked = join(dir, 'linked-worktree')
+    git('worktree', 'add', '--quiet', '--detach', linked)
+    brain = linked
+  }
   const manifest = join(dir, 'manifest.json')
   const savePlan = plan => writeFileSync(manifest, JSON.stringify(plan))
   const run = (boundary = 'checklist', plan = { paths: [target] }, overrides = {}) => {
     savePlan(plan)
     return spawnSync(process.execPath, [script, brain, date, boundary, manifest], { encoding: 'utf8', env: { ...env, ...overrides } })
   }
-  const snapshot = () => ({ head: git('rev-parse', 'HEAD'), index: readFileSync(join(brain, '.git/index')),
+  const snapshot = () => ({ head: git('rev-parse', 'HEAD'), index: readFileSync(resolve(brain, git('rev-parse', '--git-path', 'index'))),
     work: git('diff', '--binary'), status: git('status', '--porcelain=v1', '--untracked-files=all') })
   const evidence = () => JSON.parse(git('show', '-s', '--format=%B').split('\n').find(line => line.startsWith('Reflection-Evidence: ')).slice('Reflection-Evidence: '.length))
   return { dir, brain, env, git, write, run, savePlan, manifest, snapshot, baseline, evidence }
@@ -76,6 +81,61 @@ function assertUserWork(f, before) {
   assert.equal(f.git('diff', '--cached', '--binary'), before.staged)
   assert.equal(f.git('diff', '--binary'), before.unstaged)
   assert.equal(readFileSync(join(f.brain, 'untracked.md'), 'utf8'), 'keep untracked\n')
+}
+
+function assertNoIndexScratch(f) {
+  const index = resolve(f.brain, f.git('rev-parse', '--git-path', 'index'))
+  assert.equal(existsSync(`${index}.lock`), false)
+  assert.deepEqual(readdirSync(dirname(index)).filter(name => name.startsWith('reflection-index-')), [])
+}
+
+for (const worktree of [false, true]) {
+  for (const split of [false, true]) {
+    for (const boundary of ['checklist', 'final']) {
+      test(`cross-device temp directory: ${boundary}, ${split ? 'split' : 'regular'} index, ${worktree ? 'linked worktree' : 'main repository'}`, t => {
+        const f = fixture(t, { worktree })
+        const user = userWork(f)
+        if (split) {
+          f.git('update-index', '--split-index')
+          assert.notEqual(f.git('rev-parse', '--shared-index-path'), '')
+        }
+        const paths = boundary === 'final' ? reports : [target]
+        for (const path of paths) f.write(path, 'reviewed reflection\n')
+        const index = resolve(f.brain, f.git('rev-parse', '--git-path', 'index'))
+        const allocations = join(f.dir, 'allocations.jsonl')
+        const preload = join(f.dir, 'cross-device.cjs')
+        // Model TMPDIR as a different filesystem. Patch the builtin ESM export
+        // too, so the script's named imports use the injected fs operations.
+        writeFileSync(preload, `
+const fs = require('node:fs')
+const { dirname, resolve } = require('node:path')
+const index = ${JSON.stringify(index)}
+const mkdtemp = fs.mkdtempSync
+fs.mkdtempSync = function (prefix, ...args) {
+  fs.appendFileSync(${JSON.stringify(allocations)}, JSON.stringify(dirname(prefix)) + '\\n')
+  return mkdtemp(prefix, ...args)
+}
+const rename = fs.renameSync
+fs.renameSync = function (from, to) {
+  if (resolve(to) === index + '.lock' && dirname(dirname(resolve(from))) !== dirname(index)) {
+    throw Object.assign(new Error('EXDEV: injected cross-device index rename'), { code: 'EXDEV' })
+  }
+  return rename(from, to)
+}
+require('node:module').syncBuiltinESMExports()
+`)
+        const result = passed(f.run(boundary, { paths }, { NODE_OPTIONS: `--require=${JSON.stringify(preload)}` }))
+        assert.equal(result.result, 'committed')
+        assert.equal(f.git('rev-parse', 'HEAD'), result.commit)
+        assert.equal(f.git('rev-parse', 'HEAD^'), f.baseline)
+        assert.deepEqual(f.git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').split('\n').sort(), paths.slice().sort())
+        for (const path of paths) assert.equal(f.git('show', `HEAD:${path}`), 'reviewed reflection')
+        assert.deepEqual(readFileSync(allocations, 'utf8').trim().split('\n').map(line => JSON.parse(line)), [dirname(index)])
+        assertUserWork(f, user)
+        assertNoIndexScratch(f)
+      })
+    }
+  }
 }
 
 test('interruption after checklist leaves committed content and durable evidence without completing cadence', t => {
@@ -130,6 +190,7 @@ test('genuine no-change and empty review do not create commits or alter the real
   for (const paths of [[target], [], ['memory/absent.md']]) {
     assert.equal(passed(f.run('checklist', { paths })).result, 'no-change')
     assert.deepEqual(f.snapshot(), before)
+    assertNoIndexScratch(f)
   }
 })
 
@@ -174,6 +235,7 @@ test('missing deletion evidence stops the checkpoint without changing HEAD/index
   const before = f.snapshot()
   failed(f.run('checklist', { paths: [old] }), /missing deletion preservation/)
   assert.deepEqual(f.snapshot(), before)
+  assertNoIndexScratch(f)
 })
 
 for (const command of ['commit-tree', 'update-ref']) {
@@ -193,7 +255,7 @@ for (const command of ['commit-tree', 'update-ref']) {
     failed(r, new RegExp(`git ${command} failed`))
     assert.deepEqual(f.snapshot(), before)
     assert.equal(existsSync(join(f.brain, markdown)), false)
-    assert.equal(existsSync(join(f.brain, '.git/index.lock')), false)
+    assertNoIndexScratch(f)
   })
 }
 
