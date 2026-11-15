@@ -585,7 +585,8 @@ export function verifyLearningsTrimStructure(before: string, after: string, cand
   if (original.lines.slice(cursor).join("\n") !== rewritten.lines.slice(cursor + delta).join("\n")) refuse();
 }
 
-function pointerFor(text: string, candidate: LearningsTrimCandidate): string {
+/** Render a pointer from the original entry span, preserving its marker and provenance. */
+export function pointerFor(text: string, candidate: LearningsTrimCandidate): string {
   const source = extractSource(text);
   // Changing ## to ### would nest this entry under a preceding ## sibling.
   const marker = candidate.format === "heading" ? text.match(/^#{2,6}/)![0] : "-";
