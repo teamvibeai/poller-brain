@@ -9,7 +9,7 @@ description: |
 
 All Slack tools are available as MCP tools (prefixed `mcp__slack__`). Channel and thread defaults come from the session when available; sessions from other origins (such as email) may have neither.
 
-`send_message`, `upload_snippet`, and `upload_file` publish immediately, including an upload's `initial_comment`. Never post placeholder/probe messages or uploads to discover or validate a destination.
+`send_message` publishes immediately unless `dry_run: true` requests a wrapper preflight. `upload_snippet` and `upload_file` publish immediately, including an upload's `initial_comment`; they do not support `dry_run`. Never post placeholder/probe messages or uploads to discover or validate a destination.
 
 For ordinary Slack replies, omit `thread_ts` to use the current thread. With no session thread context, `send_message` with an explicit `channel` and omitted `thread_ts` creates a channel-root post. Use `thread_ts: null` for a deliberate root post, including from a thread session. Upload tools require an explicit or current thread timestamp and do not support `thread_ts: null`.
 
@@ -19,7 +19,7 @@ For ordinary Slack replies, omit `thread_ts` to use the current thread. With no 
 2. Confirm the selected ID with `read_channel_info` (`channel: "C…"`), checking its name, topic/purpose, and archive status before sending.
 3. If the destination is missing, ambiguous, inaccessible, archived, or incompletely discovered, stop and report the unresolved destination to the human or via `submit_feedback`. Never guess a name or ID, choose a nearby channel, or send a probe.
 
-If a stray post has already been published, report its channel ID and message timestamp to the human or via `submit_feedback`. No exposed delete tool exists; use this reporting path until one ships.
+If a stray post has already been published, use `delete_message(channel, ts)` to remove that exact message only when cleanup is intended. The tool verifies that the authenticated bot authored it and refuses uncertain ownership. If cleanup fails, report the channel ID, message timestamp and error to the human or via `submit_feedback`. Deletion does not retract notifications or undo sessions already started.
 
 ## Tools
 
@@ -27,6 +27,19 @@ If a stray post has already been published, report its channel ID and message ti
 - `text` (required): Message text with Slack markdown
 - `channel`: Override channel (default: current)
 - `thread_ts`: Override thread (default: current, if available); `null` for a deliberate channel-root post
+- `dry_run`: Boolean, default `false`. With `true`, returns the effective `channel`, `thread_ts`, `mode` (`thread` or `root`), transformed initial `payload`, transformation echo and advisory validation limits. Makes no API calls or writes: no post/update, uploads, modal registration or session creation.
+
+Preflight uses the same table auto-conversion, bold-URL repairs and text/block assembly as publication. Modal definitions are returned as a deferred plan; generated button IDs and the subsequent update require real registration and are not part of the initial payload. The preview resolves arguments/session defaults, not channel names, access, archive state or thread existence. Full Block Kit/modal validation and post-send warnings are not evaluated; later delivery can still fail. Preflight does not replace read-only destination discovery or authorize publication.
+
+### delete_message — Delete one message authored by this bot
+- `channel` (required): Explicit Slack conversation ID; no session default
+- `ts` (required): Exact message timestamp, including six fractional digits
+
+Checks fresh `auth.test` bot/user identity against the exact message from `conversations.history` or `conversations.replies`. Every present `user`/`bot_id` must match. Unknown, conflicting, unreadable or incomplete ownership fails closed; caller ownership assertions, credentials and recursive deletion flags are rejected. Deletes only the named message, including when it has replies.
+
+Tool failures set MCP `isError` and return `ok: false` with stable `error`: `not_found`, `permission_denied`, `ownership_unverified`, or `delete_failed` (the last includes uncertain delete outcomes; read the message again before deciding to retry). Each validated attempt emits one JSON stderr audit line with event `slack.delete_message`, destination, verified actor IDs when available, outcome and any Slack error code; it omits credentials and message content.
+
+Required permissions: [`chat:write`](https://docs.slack.dev/reference/methods/chat.delete/) plus the applicable [`channels:history`, `groups:history`, `im:history`, or `mpim:history`](https://docs.slack.dev/reference/methods/conversations.history/) for ownership reads. [`auth.test`](https://docs.slack.dev/reference/methods/auth.test/) requires no additional scope. Thread lookup can be restricted by conversation/token type; never substitute broader credentials when it fails. Before rollout, the platform owner must confirm installed scopes, audit capture and handling of Slack [`message_deleted`](https://docs.slack.dev/reference/events/message/message_deleted/) events; this wrapper does not implement the platform event consumer.
 
 ### add_reaction — Add emoji reaction
 - `name` (required): Emoji name without colons (e.g., `eyes`, `white_check_mark`)

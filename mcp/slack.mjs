@@ -280,7 +280,7 @@ function computeThreadOverrideWarning({ explicitThreadTs, sessionThreadTs, trigg
       `You passed thread_ts=${target}, but this session's current thread is ${session}, ` +
       `and the message that woke you does not reference ${target}. The reply landed in a thread the ` +
       `user may not be reading. If that was unintentional, report the stray post (channel ID and message ts) ` +
-      `to the human or via submit_feedback. No exposed delete tool exists; use this reporting path until one ships. ` +
+      `to the human or via submit_feedback. If cleanup is intended, delete_message can remove only that exact message after verifying bot ownership. ` +
       `Ignore this warning if the override was deliberate — a handoff into a thread you were recently ` +
       `woken from is legitimate and is not yet detected here.`,
     session_thread_ts: session,
@@ -624,6 +624,124 @@ function buildSendPayload(args, { hasModals = false } = {}) {
   return { blocks, effectiveText, transformed, tableWarning, agentSuppliedBlocks }
 }
 
+// Wrapper preflight only: no API calls, modal IDs, or delivery guarantees.
+// Payload is the initial post body; buttons require later registration IDs.
+function buildSendPreflight(args, body, { thread_ts, hasModals, transformed }) {
+  const suppressed = shouldSuppressSentinel(args)
+  const response = {
+    ok: true,
+    dry_run: true,
+    channel: body.channel,
+    thread_ts: thread_ts || null,
+    mode: thread_ts ? 'thread' : 'root',
+    payload: suppressed ? null : body,
+  }
+  if (suppressed) response.suppressed = 'sentinel'
+  if (transformed) response.transformed = transformed
+  if (args.modals?.length) {
+    response.modals = {
+      enabled: Boolean(hasModals),
+      definitions: args.modals,
+      registration: 'deferred',
+      thread_context: thread_ts || 'sent_message_ts',
+    }
+  }
+  response.validation = {
+    checked: ['argument_schema', 'session_routing', 'payload_transforms'],
+    limits: {
+      message_blocks: 50,
+      section_text_characters: 3000,
+      cumulative_markdown_text_characters: 12000,
+      recommended_text_characters: 4000,
+      text_truncation_characters: 40000,
+    },
+    limitations: [
+      'Limits are advisory; full Block Kit and modal view validation is performed by Slack only on publication.',
+      'Channel is resolved from the explicit argument or session default; names, access, archive state and thread existence are not verified.',
+      'No delivery, permission, rendering or later send success is guaranteed; post-send warnings are not evaluated.',
+      'Payload previews the initial post. Modal registration, generated button IDs and the subsequent update are deferred; enabled modals add one actions block.',
+      'No Slack or platform writes, uploads, modal registrations or session creation are performed.',
+    ],
+  }
+  return response
+}
+
+// Do not use resolveSelfIds(): that best-effort warning helper permits env
+// fallbacks after failed auth. Destruction requires fresh authenticated IDs.
+async function deleteOwnMessage(channel, ts) {
+  const audit = { event: 'slack.delete_message', channel, ts, outcome: 'ownership_unverified' }
+  let stage = 'identity'
+  try {
+    const self = await slackApi('auth.test', {})
+    if (self.ok !== true || typeof self.user_id !== 'string' || !/^[UW][A-Z0-9]+$/.test(self.user_id) ||
+        typeof self.bot_id !== 'string' || !/^B[A-Z0-9]+$/.test(self.bot_id)) {
+      throw new Error('Authenticated bot identity is incomplete')
+    }
+    audit.actor_user_id = self.user_id
+    audit.actor_bot_id = self.bot_id
+    stage = 'lookup'
+    let lookup = await slackApi('conversations.history', {
+      channel, oldest: ts, latest: ts, inclusive: true, limit: 1,
+    })
+    if (lookup.ok !== true || !Array.isArray(lookup.messages)) throw new Error('Message lookup is incomplete')
+    let matches = lookup.messages.filter(m => m?.ts === ts)
+    if (!matches.length) {
+      // Slack accepts a parent or reply ts. Bound the lookup to the exact
+      // timestamp; never infer ownership from a parent or nested event data.
+      lookup = await slackApi('conversations.replies', {
+        channel, ts, oldest: ts, latest: ts, inclusive: true, limit: 2,
+      })
+      if (lookup.ok !== true || !Array.isArray(lookup.messages)) throw new Error('Message lookup is incomplete')
+      matches = lookup.messages.filter(m => m?.ts === ts)
+    }
+    if (!matches.length) {
+      if (lookup.has_more || lookup.response_metadata?.next_cursor) throw new Error('Message lookup is truncated')
+      audit.outcome = 'not_found'
+      throw new Error('Exact message was not found')
+    }
+    if (matches.length !== 1) throw new Error('Message lookup is ambiguous')
+    const message = matches[0]
+    if ((message.type && message.type !== 'message') ||
+        (message.subtype && !['bot_message', 'file_share', 'thread_broadcast'].includes(message.subtype))) {
+      throw new Error('Unsupported message type or subtype')
+    }
+    const hasUser = Object.hasOwn(message, 'user')
+    const hasBot = Object.hasOwn(message, 'bot_id')
+    if (!hasUser && !hasBot) throw new Error('Message author is unknown')
+    // Every present author field must agree, even when the other matches.
+    if ((hasUser && message.user !== self.user_id) || (hasBot && message.bot_id !== self.bot_id)) {
+      audit.outcome = 'permission_denied'
+      throw new Error('Message author does not match the authenticated bot')
+    }
+    stage = 'delete'
+    const deleted = await slackApi('chat.delete', { channel, ts })
+    if (deleted.ok !== true || deleted.channel !== channel || deleted.ts !== ts) {
+      throw new Error('Delete response is uncertain')
+    }
+    audit.outcome = 'deleted'
+    return { ok: true, channel, ts }
+  } catch (error) {
+    const slackError = /^Slack API [\w.]+: ([\w_]+)$/.exec(error.message)?.[1]
+    if (slackError) {
+      audit.slack_error = slackError
+      if (['message_not_found', 'thread_not_found', 'channel_not_found'].includes(slackError)) {
+        audit.outcome = 'not_found'
+      } else if (['missing_scope', 'not_in_channel', 'cant_delete_message', 'no_permission',
+        'access_denied', 'restricted_action', 'not_authed', 'invalid_auth', 'token_revoked',
+        'token_expired', 'account_inactive', 'is_archived'].includes(slackError)) {
+        audit.outcome = 'permission_denied'
+      }
+    }
+    if (stage === 'delete' && audit.outcome === 'ownership_unverified') audit.outcome = 'delete_failed'
+    const failure = new Error(`delete_message: ${audit.outcome}${slackError ? ` (${slackError})` : ''}`)
+    failure.slackDeleteCode = audit.outcome
+    throw failure
+  } finally {
+    // Metadata only: no token, message text, or arbitrary remote error text.
+    console.error(JSON.stringify(audit))
+  }
+}
+
 // Resolve a Slack user_id to a friendly display name. Caches per-process for
 // the session lifetime since display names rarely change mid-conversation.
 const _userInfoCache = new Map()
@@ -655,7 +773,7 @@ async function resolveDisplayName(userId) {
 const TOOLS = [
   {
     name: 'send_message',
-    description: 'Send a message to Slack; publishes immediately. Never post placeholder/probe messages to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. With no session thread context, an explicit channel and omitted thread_ts produces a channel-root post. For deliberate root posts use thread_ts: null; otherwise omit thread_ts to use the current thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
+    description: 'Send a message to Slack; publishes immediately unless dry_run: true requests a zero-write wrapper preflight. Never post placeholder/probe messages to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. With no session thread context, an explicit channel and omitted thread_ts produces a channel-root post. For deliberate root posts use thread_ts: null; otherwise omit thread_ts to use the current thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -664,6 +782,7 @@ const TOOLS = [
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions, or a `markdown` block for tables/GFM). See https://api.slack.com/block-kit. Providing blocks OPTS OUT of table auto-convert — your blocks are sent as-is and `text` is prepended as a visible section block. Omit blocks to let a GFM table in `text` auto-convert.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread, if available). Without session thread context, an explicit channel and omitted thread_ts posts at channel root. Use thread_ts: null for a deliberate root post even when in a thread session.' },
+        dry_run: { type: 'boolean', description: 'Wrapper preflight only: returns the effective channel, thread/root mode, transformed initial payload, deferred modal plan and validation limits with ZERO writes. Does not verify destination access or guarantee later delivery. Default: false (publishes immediately).' },
         modals: {
           type: 'array',
           description: 'Modal form definitions to attach as buttons. Each opens a Slack modal when clicked.',
@@ -679,6 +798,19 @@ const TOOLS = [
         },
       },
       required: ['text'],
+    },
+  },
+  {
+    name: 'delete_message',
+    description: 'Delete exactly one message authored by the authenticated bot. Verifies fresh auth.test identity against the exact message user/bot_id; fails closed on unknown, conflicting or unreadable ownership. Requires explicit channel and ts. Never recursively deletes replies. Audits the outcome. Cannot retract notifications or undo sessions already started.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        channel: { type: 'string', pattern: '^[CDG][A-Z0-9]+$', description: 'Explicit Slack conversation ID containing the message; no session default.' },
+        ts: { type: 'string', pattern: '^[0-9]+\\.[0-9]{6}$', description: 'Exact timestamp of the message to delete (not its parent unless deleting the parent itself).' },
+      },
+      required: ['channel', 'ts'],
     },
   },
   {
@@ -970,7 +1102,7 @@ const TOOLS = [
 async function handleTool(name, args) {
   switch (name) {
     case 'send_message': {
-      if (shouldSuppressSentinel(args)) {
+      if (!args.dry_run && shouldSuppressSentinel(args)) {
         return { ok: true, suppressed: 'sentinel', detail: 'Nothing was posted to Slack.' }
       }
       const channel = args.channel || DEFAULT_CHANNEL
@@ -1001,6 +1133,9 @@ async function handleTool(name, args) {
       }
       if (blocks.length) body.blocks = blocks
       if (thread_ts) body.thread_ts = thread_ts
+      if (args.dry_run === true) {
+        return buildSendPreflight(args, body, { thread_ts, hasModals, transformed })
+      }
       const result = await slackApi('chat.postMessage', body)
 
       // Register modal definitions after sending — use message ts as thread context
@@ -1071,6 +1206,9 @@ async function handleTool(name, args) {
       if (!transformed && tableWarning) warnings.push(tableWarning)
       return buildSendResponse({ ts: result.ts, transformed, warnings })
     }
+
+    case 'delete_message':
+      return deleteOwnMessage(args.channel, args.ts)
 
     case 'add_reaction': {
       const channel = args.channel || DEFAULT_CHANNEL
@@ -1581,7 +1719,7 @@ async function handleRequest(req) {
         })
       } catch (e) {
         return jsonrpcResponse(id, {
-          content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }],
+          content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.slackDeleteCode || e.message, ...(e.slackDeleteCode ? { detail: e.message } : {}) }) }],
           isError: true,
         })
       }
