@@ -295,6 +295,14 @@ idle agent. Opt in only when the output is useful before the task ends:
 - `--checkpoint-interval N`: flush new output no more often than every N seconds.
 - `--eager-checkpoints`: flush after a quiet period or at the TTL-derived ceiling.
 
+Checkpoint-driven custom `set_status` text cannot provide a persistent live progress
+indicator: subsequent tool calls overwrite it, and checkpoints do not keep a session
+active between wakes. Making `set_status` the final tool call of the turn only avoids
+that later tool-call overwrite; it does not guarantee persistence after the turn ends
+(see the Slack skill's [set_status section](../slack/SKILL.md#set_status--set-typing-indicator)).
+Keep quiet checkpoints as the default; opt in for useful interim output and send a normal
+progress reply only when appropriate to the task's output instructions.
+
 **Tasks awaiting device authentication or confirmation must explicitly request interim
 visibility** with notify, eager, or interval checkpoints; otherwise the prompt stays in
 `output.log` until the terminal result. For example:

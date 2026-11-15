@@ -92,7 +92,7 @@ If `read_thread` fails, fall back to `read_channel` to get recent messages.
 - Keep responses concise and helpful
 - Use Slack markdown formatting (*bold*, _italic_, `code`, ```code blocks```)
 - For long outputs, use `upload_snippet` instead of pasting into the message
-- **Before sending your final message**, call `set_status` with an empty string to clear the typing indicator. This prevents a brief flicker after your message appears.
+- **Before sending your final message**, call `set_status` with an empty string to clear the typing indicator. A later tool call, including `send_message`, can overwrite the clear; see the Slack skill's [set_status caveat](skills/slack/SKILL.md#set_status--set-typing-indicator).
 
 ### When to react with emoji vs reply with text
 
