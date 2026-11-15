@@ -29,6 +29,50 @@ export function normalizeSummary(bytes) {
   return Buffer.from(text.slice(text.indexOf('\n') + 1))
 }
 
+// Exact allowlist for plain, date-headed daily bullet logs. A suffix, MEM tag,
+// unknown maintenance message, malformed time, or unfinished line is source
+// content, never bookkeeping. Multi-line/Markdown contexts are uncertain and
+// must search rather than risk filtering a quoted/example/continued entry.
+// Return null only for sections containing verified maintenance and nothing
+// else; their date headers, blank scaffolding and file availability add no input.
+export function normalizeDaily(bytes, date) {
+  const text = bytes.toString('utf8')
+  if (!Buffer.from(text).equals(bytes)) throw new Error('daily normalization uncertain: invalid UTF-8')
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g) || []
+  const clock = '(?:[01][0-9]|2[0-3]):[0-5][0-9]'
+  const maintenance = new RegExp(`^- (?:${clock} — |\\[${clock}\\] )(?:memory consolidation (?:started|completed)|maintenance: consolidation session)\\r?\\n$`)
+  if (!lines.some(line => maintenance.test(line))) return bytes
+  if (!isoTime(`${date}T00:00:00.000Z`) || /[`<>]|~{3}|\u0000|\r(?!\n)/.test(text)) {
+    throw new Error('daily normalization uncertain: date or Markdown context')
+  }
+  const sections = []
+  let section
+  let prefix = ''
+  for (const [index, line] of lines.entries()) {
+    if (line === `# ${date}\n` || line === `# ${date}\r\n`) {
+      // Step 0/log rollover appends "\n# DATE\n". That one separator belongs
+      // to the new section, not to the preceding substantive entry.
+      if (section && /^\r?\n$/.test(lines[index - 1])) prefix = section.kept.pop()
+      section = { kept: [prefix, line], maintenance: false, source: false }
+      prefix = ''
+      sections.push(section)
+    } else if (/^\r?\n$/.test(line)) {
+      if (section) section.kept.push(line)
+      else prefix += line
+    } else {
+      if (!section || !line.startsWith('- ')) {
+        throw new Error('daily normalization uncertain: expected date-headed single-line bullets')
+      }
+      if (maintenance.test(line)) section.maintenance = true
+      else { section.source = true; section.kept.push(line) }
+    }
+  }
+  // Preserve all bytes of source-bearing sections except allowlisted lines.
+  // Header-only/empty sections remain inputs; only proven maintenance vanishes.
+  const kept = sections.filter(s => s.source || !s.maintenance).map(s => s.kept.join(''))
+  return kept.length ? Buffer.from(kept.join('')) : null
+}
+
 export function fingerprint(root, target, { coverageConfirmed = false, dependencies = [], policyRoot = configRoot } = {}) {
   if (!Object.hasOwn(CAPS, target)) throw new Error('unsupported target')
   if (!coverageConfirmed) throw new Error('dependency coverage unconfirmed')
@@ -43,6 +87,7 @@ export function fingerprint(root, target, { coverageConfirmed = false, dependenc
     // Symlinks/special files can escape the inventory or change behind it.
     if (stat.isSymbolicLink()) throw new Error('dependency symlink requires normal search')
     if (stat.isDirectory()) {
+      const start = inputs.length
       inputs.push([label, 'directory'])
       for (const name of readdirSync(path).sort()) {
         if (label === 'memory' && ['TODAY.md', '.last_consolidation'].includes(name)) continue
@@ -50,15 +95,23 @@ export function fingerprint(root, target, { coverageConfirmed = false, dependenc
         if (label === 'memory/episodic' && /^consolidation-progress-\d{4}-\d\d-\d\d\.md$/.test(name)) continue
         collect(resolve(path, name), `${label}/${name}`)
       }
+      // Creating the first maintenance-only archive must also be a no-op.
+      if (label === 'memory/daily' && inputs.length === start + 1) inputs.pop()
     } else if (stat.isFile()) {
       let bytes = readFileSync(path)
       if (label === 'memory/SUMMARY.md') bytes = normalizeSummary(bytes)
+      const daily = /^memory\/daily\/(\d{4}-\d\d-\d\d)\.md$/.exec(label)
+      if (daily) {
+        bytes = normalizeDaily(bytes, daily[1])
+        if (bytes === null) return
+      }
       inputs.push([label, hash(bytes)])
     } else throw new Error('unsupported dependency type')
   }
   // Broad inventory deliberately invalidates on new sources, even unrelated
   // ones. Include root registry/index files as well as every source tier.
-  // TODAY, the publication marker and progress ledgers are not sources.
+  // TODAY, the publication marker, progress ledgers and verified maintenance-
+  // only daily sections are not sources. All other daily content is retained.
   for (const path of ['CLAUDE.md', 'memory']) collect(resolve(root, path), path)
   for (const path of [...new Set(dependencies.map(p => resolve(root, p)))].sort()) {
     collect(path, `extra:${relative(root, path)}`)

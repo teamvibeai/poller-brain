@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { advise, completedReport, decide, fingerprint, parseRetryBlock, POLICY_VERSION, WEEK_MS, CAPS } from '../consolidation-retry.mjs'
+import { advise, completedReport, decide, fingerprint, normalizeDaily, parseRetryBlock, POLICY_VERSION, WEEK_MS, CAPS } from '../consolidation-retry.mjs'
 
 const repo = fileURLToPath(new URL('../../', import.meta.url))
 const summary = 'memory/SUMMARY.md'
@@ -98,6 +98,113 @@ test('same-size target edits invalidate; SUMMARY timestamp alone does not', t =>
   f.write(summary, original)
   f.write(claude, readFileSync(join(f.dir, claude), 'utf8').replace('Identity', 'identity'))
   assert.equal(advise(f.dir, claude, f.opts()).decision, 'search')
+})
+
+test('Step 0 maintenance-only archival and SUMMARY refresh preserve both weekly stalls; new daily knowledge searches', t => {
+  const f = fixture(t)
+  const targets = [claude, summary]
+  const yesterday = 'memory/daily/2026-11-14.md'
+  const today = 'memory/daily/2026-11-15.md'
+  f.write('memory/TODAY.md', '# 2026-11-14\n\n- 01:00 — memory consolidation started\n')
+  f.write(yesterday, '# 2026-11-14\n\n- 00:59 — maintenance: consolidation session\n')
+  const entries = Object.fromEntries(targets.map(target => [target, f.stall(target)]))
+  f.report(entries, { checkpoint: true })
+  const completedAt = f.git('rev-parse', 'HEAD')
+  for (const target of targets) {
+    assert.equal(advise(f.dir, target, f.opts({ completedAt, now: attempted })).decision, 'deferred')
+  }
+  f.write(yesterday, readFileSync(join(f.dir, yesterday), 'utf8') +
+    '\n# 2026-11-14\n\n- 01:00 — memory consolidation started\n- 01:15 — memory consolidation completed\n')
+  // Use log-write.ts's bracketed timestamp for the required maintenance entry.
+  f.write(today, '# 2026-11-15\n\n- [00:59] maintenance: consolidation session\n')
+  f.write('memory/TODAY.md', '# 2026-11-15\n\n- 01:00 — memory consolidation started\n')
+  f.write(summary, readFileSync(join(f.dir, summary), 'utf8').replace('2026-11-14 01:00', '2026-11-15 01:00'))
+  f.git('add', 'memory'); f.git('commit', '-qm', 'chore: consolidate memory checkpoint (2026-11-15) — step 0')
+  for (const target of targets) {
+    const result = advise(f.dir, target, f.opts({ completedAt }))
+    assert.equal(result.decision, 'deferred', `${target}: ${result.reason}`)
+    assert.deepEqual(result.entry, { ...entries[target], status: 'deferred' })
+  }
+  f.write(today, readFileSync(join(f.dir, today), 'utf8') + '- [02:00] New decision: retain customer audit evidence for 90 days.\n')
+  for (const target of targets) {
+    const result = advise(f.dir, target, f.opts({ completedAt }))
+    assert.equal(result.decision, 'search')
+    assert.equal(result.reason, 'decision inputs changed')
+  }
+})
+
+test('daily filter has an exact allowlist and preserves substantive bytes in mixed archives', () => {
+  const date = '2026-11-14'
+  const normalize = text => normalizeDaily(Buffer.from(text), date)
+  for (const ending of ['\n', '\r\n']) {
+    for (const stamp of ['00:00 — ', '23:59 — ', '[01:30] ']) {
+      for (const message of ['memory consolidation started', 'memory consolidation completed', 'maintenance: consolidation session']) {
+        assert.equal(normalize(`# ${date}${ending}${ending}- ${stamp}${message}${ending}`), null)
+      }
+    }
+  }
+  const source = `# ${date}\n\n- [MEM-12] Preserve this **rule** exactly.\n\n- [02:00] A second source entry.\n`
+  const mixed = source + '- [02:15] maintenance: consolidation session\n' +
+    `\n# ${date}\n\n- 02:30 — memory consolidation started\n`
+  assert.equal(normalize(mixed).toString(), source)
+  assert.notDeepEqual(normalize(mixed.replace('this **rule**', 'that **rule**')), normalize(mixed))
+  assert.notDeepEqual(normalize(mixed.replace('exactly.\n\n', 'exactly.\n')), normalize(mixed))
+  for (const line of [
+    '- [02:15] maintenance: consolidation session — learned a new rule\n',
+    '- [02:15] maintenance: reflection session\n',
+    '- [MEM-12] memory consolidation started\n',
+    '- 24:00 — memory consolidation started\n',
+    '- 01:60 — memory consolidation completed\n',
+    '- 01:00 — memory consolidation started [REMEMBER]\n',
+    '- 01:00 — Memory consolidation started\n',
+    '- 01:00 — memory consolidation started',
+  ]) {
+    const text = `# ${date}\n\n${line}`
+    assert.equal(normalize(text).toString(), text)
+  }
+})
+
+test('daily uncertainty searches; only verified daily maintenance content and availability are excluded', t => {
+  const f = fixture(t)
+  const targets = [claude, summary]
+  const path = 'memory/daily/2026-11-15.md'
+  const maintenance = '# 2026-11-15\n\n- [00:59] maintenance: consolidation session\n'
+  f.report(Object.fromEntries(targets.map(target => [target, f.stall(target)])))
+  // Even creating the daily directory and its first maintenance-only file is inert.
+  f.write(path, maintenance)
+  for (const target of targets) assert.equal(advise(f.dir, target, f.opts()).decision, 'deferred')
+  for (const text of [
+    '# 2026-11-15\n', '', // absence of content is not proof of maintenance
+    maintenance + '- [MEM-12] New knowledge\n',
+    maintenance.replace('session\n', 'session: new policy\n'),
+    maintenance.replace('2026-11-15', '2026-11-14'),
+    maintenance.replace('# 2026-11-15\n\n', ''),
+    maintenance.replace('- [00:59]', '```\n- [00:59]') + '```\n',
+    maintenance + '- Detail\n  continued line\n',
+    maintenance + '- <!--\n',
+    maintenance + '- <script>\n',
+    maintenance + '- ~~~\n',
+    maintenance + '- `multi-line code\n',
+    Buffer.concat([Buffer.from(maintenance), Buffer.from([0xff])]),
+  ]) {
+    f.write(path, text)
+    for (const target of targets) assert.equal(advise(f.dir, target, f.opts()).decision, 'search', String(text))
+  }
+  for (const date of ['2026-02-30', '2026-99-99']) {
+    assert.throws(() => normalizeDaily(Buffer.from(`# ${date}\n\n- [00:59] maintenance: consolidation session\n`), date), /uncertain/)
+  }
+  f.write(path, maintenance)
+  // Extra dependencies are intentionally opaque, even if pointing at the same archive.
+  assert.equal(advise(f.dir, summary, f.opts({ dependencies: [path] })).decision, 'search')
+  for (const other of ['memory/daily/custom.md', 'memory/semantic/2026-11-15.md', 'memory/daily/nested/2026-11-15.md']) {
+    f.write(other, maintenance)
+    assert.equal(advise(f.dir, summary, f.opts()).decision, 'search')
+    rmSync(join(f.dir, other))
+  }
+  rmSync(join(f.dir, 'memory/daily/nested'), { recursive: true })
+  rmSync(join(f.dir, path))
+  symlinkSync(join(f.dir, 'memory/TODAY.md'), join(f.dir, path))
+  assert.equal(advise(f.dir, summary, f.opts()).decision, 'search')
 })
 
 test('source content, source availability and extra referenced/imported dependencies invalidate', t => {
