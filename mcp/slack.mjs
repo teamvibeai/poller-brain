@@ -910,14 +910,19 @@ const TOOLS = [
   },
   {
     name: 'read_thread',
-    description: 'Read message history from the current thread.',
+    description: 'Read one page of thread history in Slack order (oldest first; the parent may be included). Returns messages, resolved channel/thread_ts, has_more and next_cursor when present. Continue with cursor=next_cursor, keeping the same destination and time bounds. oldest/latest are exclusive unless inclusive=true. No automatic traversal. has_more=false only describes the end of the requested range at read time, not a stable snapshot or proof of delivery/non-delivery. A message missing from one page does NOT prove it was not sent.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'number', description: 'Max messages to return (default: 20)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
-        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
+        thread_ts: { type: 'string', maxLength: 19, pattern: '^\\d{1,12}\\.\\d{1,6}$(?![\\s\\S])', description: 'Thread timestamp as a string (default: current thread)' },
+        // The final lookahead enforces true end-of-input, even for a trailing newline.
+        cursor: { type: 'string', minLength: 1, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$(?![\\s\\S])', description: 'Opaque next_cursor from a previous page; pass unchanged, without whitespace or control characters' },
+        oldest: { type: 'string', maxLength: 19, pattern: '^\\d{1,12}\\.\\d{1,6}$(?![\\s\\S])', description: 'Lower message timestamp bound (exclusive unless inclusive=true)' },
+        latest: { type: 'string', maxLength: 19, pattern: '^\\d{1,12}\\.\\d{1,6}$(?![\\s\\S])', description: 'Upper message timestamp bound (exclusive unless inclusive=true)' },
+        inclusive: { type: 'boolean', description: 'Include messages exactly at oldest/latest (Slack default: false)' },
       },
     },
   },
@@ -1317,7 +1322,13 @@ async function handleTool(name, args) {
       const limit = args.limit || 20
       if (!channel) throw new Error('channel required')
       if (!ts) throw new Error('thread_ts required')
-      const result = await slackApi('conversations.replies', { channel, ts, limit })
+      const result = await slackApi('conversations.replies', {
+        channel, ts, limit,
+        cursor: args.cursor,
+        oldest: args.oldest,
+        latest: args.latest,
+        inclusive: args.inclusive,
+      })
       const messages = (result.messages || []).map((m) => ({
         user: m.user || m.bot_id || 'unknown',
         text: m.text || '',
@@ -1337,7 +1348,16 @@ async function handleTool(name, args) {
           })),
         }),
       }))
-      return { ok: true, messages }
+      const nextCursor = result.response_metadata?.next_cursor
+      return {
+        ok: true,
+        messages,
+        channel,
+        thread_ts: ts,
+        // A continuation cursor also signals more pages, even if has_more is absent/false.
+        has_more: Boolean(result.has_more || nextCursor),
+        ...(nextCursor && { next_cursor: nextCursor }),
+      }
     }
 
     case 'get_permalink': {
