@@ -38,18 +38,43 @@ function checkpoint(date: string, boundary: string): void {
   const result = spawnSync("bash", [path.join(repo, "scripts/consolidation-commit.sh"), root, date, boundary], { cwd: root, env, encoding: "utf8" });
   assert.equal(result.status, 0, result.stdout + result.stderr);
 }
+// The checkpoint requires the durable marker and this cycle's history append (#516).
+const startedCycles = new Map<string, string>();
+function startCycle(date: string): string {
+  const known = startedCycles.get(date);
+  if (known) return known;
+  const marker = spawnSync("bash", [path.join(repo, "scripts/consolidation-marker.sh"), "start", root, date], { cwd: root, env, encoding: "utf8" });
+  assert.equal(marker.status, 0, marker.stdout + marker.stderr);
+  const head = git("rev-parse", "HEAD");
+  startedCycles.set(date, head);
+  openCycle = date;
+  return head;
+}
+let openCycle: string | undefined;
 let cycle = 0;
+function nextDate(): string {
+  let date: string;
+  do date = `2026-11-${String(++cycle).padStart(2, "0")}`; while (startedCycles.has(date));
+  return date;
+}
 function complete(consume = false): string {
-  cycle++;
-  const date = `2026-11-${String(cycle).padStart(2, "0")}`;
+  // Finish an already-started cycle (as production does) before starting a new one.
+  const date = openCycle ?? nextDate();
+  const startingHead = startCycle(date);
+  const history = path.join(root, "memory/episodic/archive/consolidation-history-2026-H2.md");
+  fs.mkdirSync(path.dirname(history), { recursive: true });
+  fs.appendFileSync(history, `\n## Consolidation ${date} / ${startingHead}\nStatus: in progress\nWork performed: Reviewed trim proposals; zero promotions.\n<!-- /consolidation-history -->\n`);
   write(`reports/${date}-memory-consolidation.md`, "# Completed fixture\n");
-  write(`reports/${date}-memory-consolidation.json`, "{}\n");
+  write(`reports/${date}-memory-consolidation.json`, JSON.stringify({ operationType: "consolidation", consolidationHistory: { version: 1, cycleDate: date, startingHead } }) + "\n");
   checkpoint(date, "steps 10-12");
   if (consume) {
     fs.unlinkSync(path.join(root, `reports/${date}-memory-consolidation.json`));
     git("add", "-u"); git("commit", "-qm", "consume report JSON");
   }
   checkpoint(date, "final");
+  const cleared = spawnSync("bash", [path.join(repo, "scripts/consolidation-marker.sh"), "clear", root, date], { cwd: root, env, encoding: "utf8" });
+  assert.equal(cleared.status, 0, cleared.stdout + cleared.stderr);
+  openCycle = undefined;
   return git("rev-parse", "HEAD");
 }
 const key = "MEM-2026-11-01-120000-550e8400-e29b-41d4-a716-446655440000";
@@ -76,6 +101,7 @@ try {
     check(read(kind === "learnings" ? learning : registry) === bytes, `${kind}: rejection never trims source`);
     check(refs(cached(kind, 0)).length === 2, `${kind}: pending state never suppresses review`);
   }
+  startCycle("2026-11-01");
   checkpoint("2026-11-01", "steps 8-9");
   check(git("show", `HEAD:${REVIEW_STATE_PATH}`) === read(REVIEW_STATE_PATH).trimEnd(), "normal memory checkpoint persists the exact ledger");
   for (const kind of ["learnings", "registry"]) cached(kind, 0);
@@ -229,7 +255,9 @@ try {
 
   // Active checkpoints fail open by default; the uninterrupted invocation may
   // explicitly use its already-recorded pre-Step-0 HEAD (same as #466).
-  git("add", "."); git("commit", "-qm", "chore: consolidate memory checkpoint (2026-11-10) — step 0");
+  const pending = nextDate();
+  startCycle(pending);
+  git("add", "."); git("commit", "-qm", `chore: consolidate memory checkpoint (${pending}) — step 0`);
   cached("learnings", 0);
   cached("learnings", 2, "--completed-at", completedAt);
   cached("learnings", 0, "--completed-at", "not-a-commit");
@@ -243,7 +271,8 @@ try {
   complete();
   write(REVIEW_STATE_PATH, valid);
   cached("learnings", 0);
-  git("add", "."); git("commit", "-qm", "chore: consolidate memory (2026-11-30)");
+  const reportless = nextDate();
+  git("add", "."); git("commit", "-qm", `chore: consolidate memory (${reportless})`);
   cached("learnings", 0);
 
   // Original #530 incidental citation is reviewable but #505 still rejects it

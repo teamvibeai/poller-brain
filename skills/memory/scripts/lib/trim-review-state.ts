@@ -284,7 +284,10 @@ export function collectTrimDestinations(root: string, dirs: string[]): Destinati
     for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
       const file = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(file);
+      // consolidation-history archives get a mandatory append every cycle (#516);
+      // they are a log, never a trim destination, and must not churn the cache.
       else if (entry.name.endsWith(".md") && !/^episodic\/archive\/mistakes-.*\.md$/.test(file) &&
+        !/^episodic\/archive\/consolidation-history-\d{4}-H[12]\.md$/.test(file) &&
         !/^episodic\/consolidation-progress-\d{4}-\d\d-\d\d\.md$/.test(file)) {
         out.push({ file, text: fs.readFileSync(path.join(abs, entry.name), "utf8") });
       }
