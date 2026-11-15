@@ -32,7 +32,7 @@ try {
     const prelude = src.split('// --- stdio transport ---')[0]
       // Also loads the old TeamVibe server, before it has a transport marker.
       .split('\nconst rl = createInterface(')[0]
-      .replace("'./lib/validate-args.mjs'", JSON.stringify(validatorUrl))
+      .replace(/'\.\/lib\/([^']+)'/g, (_, file) => JSON.stringify(validatorUrl.replace('validate-args.mjs', file)))
     const { handleRequest } = await import('data:text/javascript,' + encodeURIComponent(prelude + '\nexport { handleRequest }\n'))
     const request = async (name, args) => JSON.parse(await handleRequest({ jsonrpc: '2.0', id: 553, method: 'tools/call', params: { name, arguments: args } }))
     const listed = JSON.parse(await handleRequest({ id: 1, method: 'tools/list' })).result.tools
