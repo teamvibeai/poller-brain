@@ -47,7 +47,7 @@
  * propose/apply split as mem-registry-trim.ts and mem-learnings-trim.ts.
  *
  * Entry-parsing (bullet `- ` / heading `## `/`### `) is intentionally
- * duplicated from mem-learnings-trim-core.ts rather than factored into a
+ * kept local rather than shared with mem-learnings-trim-core.ts through a
  * shared module — the two files' entry models are similar but not identical
  * (different destination scoping, different apply-time side effect), and
  * keeping this file self-contained avoids widening the review surface of
@@ -65,10 +65,11 @@
  * entry's body was sliced out, archived as if it were its own mistake, and
  * left the file 100 B LARGER while the grow-guard still printed a false
  * "no growth ✅" (see `verifyMistakesTrimStats` growth-invariant note). A
- * heading entry, once opened, stays open (governs all bullets under it)
- * until the next heading or end of file — matching how these files are
- * actually written (a heading title, prose, then supporting `- ` detail
- * bullets, all one entry).
+ * heading carrying an identity tag in its title or introductory prose
+ * governs its supporting bullets until the next heading or end of file.
+ * Keyless headings with no introductory prose instead contain independently
+ * keyed bullet entries (poller-brain#463). Unresolved ownership is reported
+ * and excluded from trimming, independently of the byte-coverage guard.
  *
  * Intentionally fs-free — pure string fixtures, unit-testable without a
  * real brain's memory/. The CLI resolves the current half-year bucket name
@@ -109,6 +110,7 @@ interface Entry {
 
 const HEADING_START_RE = /^(#{2,3})\s+/;
 const BULLET_START_RE = /^-\s+/;
+const IDENTITY_TAG_RE = new RegExp(String.raw`\[${MEM_CITATION_PATTERN}(?::obsolete)?\]`);
 
 /** Matches an already-trimmed pointer entry — same shape as Step 5d's LEARNINGS.md pointer. */
 const POINTER_BULLET_RE = new RegExp(String.raw`^-\s*\[${MEM_ID_PATTERN}(?::obsolete)?\]\s*→\s*see\s+\S`);
@@ -116,19 +118,22 @@ const POINTER_HEADING_RE = new RegExp(String.raw`^#{2,3}\s*\[${MEM_ID_PATTERN}(?
 /** Extracts the key from a matched pointer line (either marker, either heading level). */
 const POINTER_KEY_RE = new RegExp(String.raw`^(?:-|#{2,3})\s*\[(${MEM_ID_PATTERN})(?::obsolete)?\]\s*→\s*see\s`);
 
-function entryStartOf(line: string): { format: EntryFormat; marker: string } | null {
-  const heading = HEADING_START_RE.exec(line);
-  if (heading) return { format: "heading", marker: heading[1] };
-  if (BULLET_START_RE.test(line)) return { format: "bullet", marker: "-" };
-  return null;
+export interface MistakesStructureDiagnostic {
+  /** 1-indexed inclusive span left untouched because entry ownership is unresolved. */
+  startLine: number;
+  endLine: number;
+  /** 1-indexed keyed bullet starts without a resolved entry owner. */
+  keyedBulletLines: number[];
+  reason: string;
 }
 
 /**
- * Split `text` into top-level entries. A heading (`##`/`###`) always starts a
- * new entry. A bullet (`- `) starts a new entry ONLY when no heading entry is
- * currently open — once any heading has been seen, every subsequent `- `
- * line is that heading entry's body content, never a sibling entry (see
- * module doc for the real-data failure this prevents).
+ * Resolve sections before entries. An identity tag in a heading's title or
+ * prose before its first bullet makes it a heading entry, including all its
+ * supporting bullets. A keyless heading followed only by whitespace and
+ * independently keyed top-level bullets is a category container. Other
+ * bullet-bearing sections are ambiguous and never yield candidates. A bare
+ * key reference alone does not establish a heading's identity.
  *
  * The trailing aggregate stub line (`STUB_RE`, see `buildStub`) is never
  * folded into the last entry's citable content — it's a file-level trailer
@@ -137,33 +142,67 @@ function entryStartOf(line: string): { format: EntryFormat; marker: string } | n
  * its own citation and spuriously read as multi-key on re-scan, blocking a
  * legitimately single-key last entry from ever being proposed again.
  */
-function parseEntries(text: string): { entries: Entry[]; lines: string[] } {
+function parseEntries(text: string): {
+  entries: Entry[];
+  lines: string[];
+  diagnostics: MistakesStructureDiagnostic[];
+} {
   const lines = text.split("\n");
-  const starts: { idx: number; format: EntryFormat; marker: string }[] = [];
-  let headingOpen = false;
-  lines.forEach((line, idx) => {
-    const start = entryStartOf(line);
-    if (!start) return;
-    if (start.format === "heading") {
-      starts.push({ idx, ...start });
-      headingOpen = true;
-    } else if (!headingOpen) {
-      starts.push({ idx, ...start });
-    }
-    // else: a bullet under an open heading entry — body content, not a new entry.
+  const entries: Entry[] = [];
+  const diagnostics: MistakesStructureDiagnostic[] = [];
+  const headings = lines.flatMap((line, idx) => {
+    const match = HEADING_START_RE.exec(line);
+    return match ? [{ idx, marker: match[1] }] : [];
   });
-  const entries: Entry[] = starts.map((s, i) => {
-    const endLine = i + 1 < starts.length ? starts[i + 1].idx : lines.length;
+  function addEntry(startLine: number, endLine: number, format: EntryFormat, marker: string): void {
     let contentEndLine = endLine;
     while (
-      contentEndLine > s.idx + 1 &&
+      contentEndLine > startLine + 1 &&
       (lines[contentEndLine - 1].trim() === "" || STUB_RE.test(lines[contentEndLine - 1]))
     ) {
       contentEndLine--;
     }
-    return { format: s.format, marker: s.marker, startLine: s.idx, contentEndLine, endLine };
+    entries.push({ format, marker, startLine, contentEndLine, endLine });
+  }
+  function bulletStarts(start: number, end: number): number[] {
+    const starts: number[] = [];
+    for (let i = start; i < end; i++) if (BULLET_START_RE.test(lines[i])) starts.push(i);
+    return starts;
+  }
+  function addBullets(starts: number[], end: number): void {
+    starts.forEach((start, i) => addEntry(start, starts[i + 1] ?? end, "bullet", "-"));
+  }
+
+  // Heading-free entries retain their existing grammar.
+  const preambleEnd = headings[0]?.idx ?? lines.length;
+  addBullets(bulletStarts(0, preambleEnd), preambleEnd);
+  headings.forEach((heading, i) => {
+    const end = headings[i + 1]?.idx ?? lines.length;
+    const bullets = bulletStarts(heading.idx + 1, end);
+    const intro = lines.slice(heading.idx, bullets[0] ?? end);
+    if (intro.some((line) => IDENTITY_TAG_RE.test(line))) {
+      addEntry(heading.idx, end, "heading", heading.marker);
+      return;
+    }
+    const keyedBullets = bullets.filter((idx) => distinctCitedKeysInLine(lines[idx]).length > 0);
+    const keylessTitle = distinctCitedKeysInLine(lines[heading.idx]).length === 0;
+    const noIntro = intro.slice(1).every((line) => line.trim() === "" || STUB_RE.test(line));
+    if (keylessTitle && noIntro && keyedBullets.length === bullets.length) {
+      addBullets(bullets, end);
+      return;
+    }
+    // Keyless prose without bullets has nothing to extract. Bare-key prose
+    // or unresolved bullet ownership still merits investigation.
+    if (bullets.length > 0 || intro.some((line) => distinctCitedKeysInLine(line).length > 0)) {
+      diagnostics.push({
+        startLine: heading.idx + 1,
+        endLine: end,
+        keyedBulletLines: keyedBullets.map((idx) => idx + 1),
+        reason: "heading has no identity tag, but has introductory prose, a bare key reference, or unkeyed bullets",
+      });
+    }
   });
-  return { entries, lines };
+  return { entries, lines, diagnostics };
 }
 
 function entryText(lines: string[], entry: Entry): string {
@@ -228,6 +267,7 @@ export interface FindMistakesCandidatesResult {
    * sub-bullets still count as "entries").
    */
   coverageRatio: number;
+  structuralDiagnostics: MistakesStructureDiagnostic[];
 }
 
 /**
@@ -251,7 +291,7 @@ export function findMistakesTrimCandidates(
   }
 
   const { citations, indexRejections } = firstCitations(destinations);
-  const { entries, lines } = parseEntries(mistakes);
+  const { entries, lines, diagnostics } = parseEntries(mistakes);
   const candidates: MistakesTrimCandidate[] = [];
   const unreliableHooks: UnreliableHook[] = [];
   let alreadyPointer = 0;
@@ -316,6 +356,7 @@ export function findMistakesTrimCandidates(
     indexRejections,
     unreliableHooks,
     coverageRatio,
+    structuralDiagnostics: diagnostics,
   };
 }
 
@@ -349,10 +390,18 @@ export interface MistakesTrimResult {
 }
 
 function countDistinctEntryKeys(mistakes: string): number {
-  const { entries, lines } = parseEntries(mistakes);
+  const { entries, lines, diagnostics } = parseEntries(mistakes);
   const keys = new Set<string>();
   for (const entry of entries) {
     for (const k of entryCitedKeys(lines, entry)) keys.add(k);
+  }
+  // Unresolved spans stay untouched, but their identities still count in
+  // the before/after preservation invariant.
+  for (const span of diagnostics) {
+    for (let i = span.startLine - 1; i < span.endLine; i++) {
+      if (STUB_RE.test(lines[i])) continue;
+      for (const k of distinctCitedKeysInLine(lines[i])) keys.add(k);
+    }
   }
   return keys.size;
 }
@@ -432,6 +481,12 @@ export function applyMistakesTrimCandidates(
 ): MistakesTrimResult {
   const { entries, lines } = parseEntries(mistakes);
   const byStartLine = new Map(candidates.map((c) => [c.entryStartLine, c]));
+  for (const candidate of candidates) {
+    const entry = entries.find((e) => e.startLine + 1 === candidate.entryStartLine);
+    if (!entry || entry.contentEndLine !== candidate.entryEndLine || entryText(lines, entry) !== candidate.originalText) {
+      throw new Error(`Unresolved or stale entry boundary for ${candidate.key} at line ${candidate.entryStartLine}. Aborting, no write performed.`);
+    }
+  }
 
   const trimmedKeys: string[] = [];
   const archivedKeys: string[] = [];
@@ -485,6 +540,8 @@ export function applyMistakesTrimCandidates(
       ? `${marker} [${candidate.key}] → see ${candidate.file}:${candidate.line} — ${candidate.hook} (Source: ${source})`
       : `${marker} [${candidate.key}] → see ${candidate.file}:${candidate.line} — ${candidate.hook}`;
     outLines.push(pointer);
+    // Separators belong to the surrounding layout, not the archived prose.
+    for (let i = entry.contentEndLine; i < entry.endLine; i++) outLines.push(lines[i]);
     cursor = entry.endLine;
   }
   for (let i = cursor; i < lines.length; i++) outLines.push(lines[i]);

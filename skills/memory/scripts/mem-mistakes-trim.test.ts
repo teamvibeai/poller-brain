@@ -594,5 +594,178 @@ for (const key of ["MEM-1", DATED_A]) {
   }
 }
 
+
+// ===========================================================================
+// Issue #463: category containers, heading-owned body bullets, and unresolved
+// ownership. These fixtures are synthetic; the issue supplied no source file.
+// ===========================================================================
+
+const detail = "The incident repeated because stale evidence was accepted before the freshness check. ";
+const groupedFlat = `- [MEM-619] Flat mistake before any category. ${detail.repeat(8)}`;
+const groupedLegacy = `- **Stale evidence** [MEM-610] ${detail.repeat(50)}\n  Continued incident detail, including non-ASCII text: příčina.\n  - Indented supporting detail belongs to this entry.`;
+const groupedDated = `- [${DATED_B}] Another independent incident. ${detail.repeat(8)}\n  Continuation retained with its own entry.`;
+const groupedMissing = "- [MEM-612] No promotion evidence; preserve this sibling.\n  Preserve this continuation too.";
+const groupedMulti = "- [MEM-613] One incident also references MEM-614; keep single-key rejection.";
+const groupedIndex = "- [MEM-615] Listed only in an index, never promoted.";
+const groupedUnreliable = "- [MEM-616] Destination lacks a governing heading.";
+const groupedSemantic = `- [MEM-617] Eligible but unapproved sibling. ${detail.repeat(6)}`;
+const groupedHeading = "### Actual incident [MEM-620]\nIncident prose belongs to the heading.\n- Supporting detail mentioning [MEM-621] is not a sibling.";
+const GROUPED = [
+  "# Mistakes", "", groupedFlat, "", "## Operations", "", groupedLegacy,
+  "", groupedDated, groupedMissing, groupedMulti, groupedIndex, groupedUnreliable,
+  "", "### Communication", "", groupedSemantic, "", groupedHeading, "",
+].join("\n");
+const GROUPED_DESTINATIONS: DestinationFile[] = [
+  { file: "core/LEARNINGS.md", text: `### Fresh evidence discipline\nUse fresh evidence [MEM-610]\nUse current evidence [${DATED_B}]\n| [MEM-615] | semantic/reference.md |` },
+  { file: "semantic/communication.md", text: "## Preserve communication context\nRetain context [MEM-617]" },
+  { file: "procedural/check.md", text: "## Check before reporting\nCheck the result [MEM-619]\nRelated incident [MEM-621]" },
+  { file: "semantic/no-heading.md", text: "A lesson without a reliable heading [MEM-616]" },
+];
+const groupedFound = findMistakesTrimCandidates(GROUPED, GROUPED_DESTINATIONS);
+assert(groupedFound.totalEntries === 9, "grouped: category headings are containers, with nine real entries");
+assert(groupedFound.structuralDiagnostics.length === 0, "grouped: every bullet has a resolved entry owner");
+assert(groupedFound.candidates.map((c) => c.key).join(",") === `MEM-610,MEM-617,MEM-619,${DATED_B}`, "grouped: eligible legacy/dated bullets use all three destination types");
+assert(groupedFound.multiKeyEntries === 2, "grouped: multi-key bullet and genuine heading remain ineligible");
+assert(groupedFound.indexRejections.some((r) => r.key === "MEM-615"), "grouped: index-only destination remains ineligible");
+assert(groupedFound.unreliableHooks.some((r) => r.key === "MEM-616"), "grouped: unreliable destination remains ineligible");
+const groupedCandidate = groupedFound.candidates.find((c) => c.key === "MEM-610")!;
+assert(groupedCandidate.originalText === groupedLegacy, "grouped: original includes continuation and indented body bullet verbatim");
+assert(groupedCandidate.entryStartLine === GROUPED.split("\n").indexOf(groupedLegacy.split("\n")[0]) + 1, "grouped: candidate starts on the actual bullet line");
+const groupedApplied = applyMistakesTrimCandidates(GROUPED, "", [groupedCandidate], "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+const groupedChecks = verifyMistakesTrimStats(groupedApplied.stats);
+assert(groupedChecks.length > 0 && groupedApplied.stats.distinctKeysBefore === 11 && groupedApplied.stats.distinctKeysAfter === 11, "grouped: shared boundaries preserve every distinct key");
+const groupedPointer = "- [MEM-610] → see core/LEARNINGS.md:2 — Fresh evidence discipline";
+const expectedGroupedBody = GROUPED.replace(groupedLegacy, groupedPointer).trimEnd();
+assert(groupedApplied.mistakes.split("\n\n> 📦")[0] === expectedGroupedBody, "grouped: exact category text, separators, markers, and all untouched siblings survive");
+assert(groupedApplied.archive.includes(`\n${groupedLegacy}\n`), "grouped: archive retains the complete original entry verbatim");
+assert(!groupedApplied.archive.includes(groupedDated) && !groupedApplied.archive.includes("## Operations"), "grouped: archive contains only the approved entry, not its category or siblings");
+assert(groupedApplied.stats.mistakesBytesAfter < groupedApplied.stats.mistakesBytesBefore, "grouped: total bytes shrink after approved-subset apply");
+const groupedRescan = findMistakesTrimCandidates(groupedApplied.mistakes, GROUPED_DESTINATIONS);
+assert(groupedRescan.alreadyPointer === 1 && groupedRescan.candidates.length === 3 && groupedRescan.structuralDiagnostics.length === 0, "grouped: re-scan resolves pointers and still proposes unapproved eligible siblings");
+const groupedRepeat = applyMistakesTrimCandidates(groupedApplied.mistakes, groupedApplied.archive, [], "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+assert(groupedRepeat.mistakes === groupedApplied.mistakes && groupedRepeat.archive === groupedApplied.archive, "grouped: repeat apply with no newly approved entries is byte-identical");
+const datedGroupedCandidate = groupedRescan.candidates.find((c) => c.key === DATED_B)!;
+const datedGroupedApplied = applyMistakesTrimCandidates(groupedApplied.mistakes, groupedApplied.archive, [datedGroupedCandidate], "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+verifyMistakesTrimStats(datedGroupedApplied.stats);
+const datedGroupedRescan = findMistakesTrimCandidates(datedGroupedApplied.mistakes, GROUPED_DESTINATIONS);
+assert(datedGroupedRescan.alreadyPointer === 2 && datedGroupedRescan.structuralDiagnostics.length === 0, "grouped: dated and legacy pointers remain resolved under their category on re-scan");
+assert(datedGroupedApplied.archive.includes(`\n${groupedDated}\n`), "grouped: dated entry continuation archived verbatim");
+
+// Either heading level and either identity location must retain supporting
+// bullets, including bracketed cross-references and bare key mentions.
+for (const marker of ["##", "###"]) {
+  for (const identityInTitle of [false, true]) {
+    const text = `${marker} Genuine incident${identityInTitle ? " [MEM-630]" : ""}\nIntroductory incident prose${identityInTitle ? "" : " [MEM-630]"}.\n- Supporting detail [MEM-631]\n- Another detail mentioning MEM-632\n`;
+    const found = findMistakesTrimCandidates(text, [{ file: "semantic/lesson.md", text: "## Proper supporting lesson\nRestatement [MEM-631]" }]);
+    assert(found.totalEntries === 1 && found.multiKeyEntries === 1 && found.candidates.length === 0 && found.structuralDiagnostics.length === 0, `${marker}, identityInTitle=${identityInTitle}: body keys have a resolved heading owner, never become candidates`);
+  }
+}
+
+// Empty category headings and nested heading entries preserve their own
+// markers, even when only the child incident is trimmed.
+const nestedHeading = `### Child incident [MEM-640]\n${detail.repeat(10)}`;
+const nested = `## Category\n\n${nestedHeading}\n\n## Empty category\n`;
+const nestedFound = findMistakesTrimCandidates(nested, [{ file: "semantic/lesson.md", text: "## Fresh nested lesson\nRestatement [MEM-640]" }]);
+const nestedApplied = applyMistakesTrimCandidates(nested, "", nestedFound.candidates, "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+verifyMistakesTrimStats(nestedApplied.stats);
+assert(nestedFound.totalEntries === 1 && nestedApplied.mistakes.startsWith("## Category\n\n### [MEM-640] → see ") && nestedApplied.mistakes.includes("\n\n## Empty category\n"), "nested: parent category and following empty category survive a child heading trim");
+
+// Prose with no identity, an unkeyed supporting bullet, and a bare heading
+// reference all leave ownership unresolved, independently of byte coverage.
+const ambiguousSections = [
+  "## Unresolved prose\nIncident prose with no own identity.\n- [MEM-650] May belong to the prose above.\n  Continuation must stay.",
+  "### Unresolved bullets\n\n- Supporting detail with no key\n- [MEM-650] May be a sibling or supporting detail.",
+  "## Related to MEM-649\n\n- [MEM-650] A bare heading reference alone cannot establish ownership.",
+  "## Late identity\n\n- Unkeyed bullet first\n  Identity appears only in continuation [MEM-650]",
+];
+for (const section of ambiguousSections) {
+  const found = findMistakesTrimCandidates(section, GROUPED_DESTINATIONS);
+  assert(found.candidates.length === 0 && found.structuralDiagnostics.length === 1, "ambiguous: unresolved section is skipped and reported");
+  const expectedLines = section.split("\n").flatMap((line, i) => line.startsWith("- [MEM-650]") ? [i + 1] : []);
+  assert(JSON.stringify(found.structuralDiagnostics[0].keyedBulletLines) === JSON.stringify(expectedLines), "ambiguous: diagnostics identify exact unresolved keyed bullet starts");
+}
+const ambiguous = ambiguousSections[0];
+const highCoverageAmbiguous = `## Real incident [MEM-660]\n${detail.repeat(100)}\n\n${ambiguous}\n`;
+const highFound = findMistakesTrimCandidates(highCoverageAmbiguous, []);
+assert(highFound.coverageRatio > 0.9 && highFound.structuralDiagnostics.length === 1, "ambiguous: high byte coverage cannot hide unresolved bullet ownership");
+const lowCoverageAmbiguous = `${"Unsupported prose. ".repeat(400)}\n${ambiguous}\n`;
+const lowFound = findMistakesTrimCandidates(lowCoverageAmbiguous, []);
+assert(lowFound.coverageRatio < 0.5 && lowFound.structuralDiagnostics.length === 1, "ambiguous: structural diagnostics accompany low byte coverage");
+
+// A candidate from a heading-free scan must never be silently accepted once
+// its bullet becomes part of an unresolved section.
+const formerlyFlat = "# Mistakes\n\n- [MEM-650] May belong to the prose above.\n  Continuation must stay.";
+const ambiguityDest = [{ file: "semantic/lesson.md", text: "## Reliable promoted lesson\nRestatement [MEM-650]" }];
+const formerlyFlatFound = findMistakesTrimCandidates(formerlyFlat, ambiguityDest);
+let ambiguousApplyThrew = false;
+try {
+  applyMistakesTrimCandidates(ambiguous, "", formerlyFlatFound.candidates, "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
+} catch {
+  ambiguousApplyThrew = true;
+}
+assert(formerlyFlatFound.candidates.length === 1 && ambiguousApplyThrew, "ambiguous: core apply rejects a candidate whose boundary no longer resolves");
+
+// Exercise propose, approved-subset apply, and repeat apply through the CLI
+// against scratch brains, verifying on-disk source and archive bytes.
+function withMistakeFixture(source: string, destinations: DestinationFile[], run: (root: string, sourcePath: string) => void): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-mistakes-grouped-"));
+  try {
+    fs.mkdirSync(path.join(root, "memory/core"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "fixture");
+    const sourcePath = path.join(root, "memory/core/MISTAKES.md");
+    fs.writeFileSync(sourcePath, source);
+    for (const dest of destinations) {
+      const destPath = path.join(root, "memory", dest.file);
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      fs.writeFileSync(destPath, dest.text);
+    }
+    run(root, sourcePath);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+function runMistakeCli(root: string, args: string[] = []) {
+  return spawnSync(process.execPath, [...process.execArgv, path.resolve("skills/memory/scripts/mem-mistakes-trim.ts"), ...args],
+    { encoding: "utf8", env: { ...process.env, BRAIN_ROOT: root } });
+}
+withMistakeFixture(GROUPED, GROUPED_DESTINATIONS, (root, sourcePath) => {
+  const propose = runMistakeCli(root);
+  assert(propose.status === 0 && propose.stdout.includes("candidates=4"), `grouped CLI: proposes individual entries: ${propose.stderr}`);
+  assert(fs.readFileSync(sourcePath, "utf8") === GROUPED && !fs.existsSync(path.join(root, "memory/episodic")), "grouped CLI: propose writes neither source nor archive");
+  const apply = runMistakeCli(root, ["--apply", "--only", "MEM-610"]);
+  assert(apply.status === 0 && apply.stdout.includes("trimmed:        MEM-610"), `grouped CLI: applies only approved subset: ${apply.stderr}`);
+  const after = fs.readFileSync(sourcePath, "utf8");
+  assert(after === groupedApplied.mistakes, "grouped CLI: disk source matches exact expected layout and untouched siblings");
+  const archiveDir = path.join(root, "memory/episodic/archive");
+  const archiveFile = path.join(archiveDir, fs.readdirSync(archiveDir)[0]);
+  const archive = fs.readFileSync(archiveFile, "utf8");
+  assert(archive.includes(`\n${groupedLegacy}\n`) && !archive.includes(groupedDated), "grouped CLI: disk archive contains approved entry verbatim");
+  assert(Buffer.byteLength(after) < Buffer.byteLength(GROUPED), "grouped CLI: source size shrinks");
+  const repeat = runMistakeCli(root, ["--apply", "--only", "MEM-610"]);
+  assert(repeat.status === 1 && fs.readFileSync(sourcePath, "utf8") === after && fs.readFileSync(archiveFile, "utf8") === archive, "grouped CLI: repeat approval of an existing pointer leaves source and archive byte-identical");
+});
+for (const source of [ambiguous, highCoverageAmbiguous, lowCoverageAmbiguous]) {
+  withMistakeFixture(source, ambiguityDest, (root, sourcePath) => {
+    const propose = runMistakeCli(root);
+    const expectedLines = findMistakesTrimCandidates(source, []).structuralDiagnostics[0].keyedBulletLines.join(", ");
+    assert(propose.status === 0 && propose.stderr.includes("Investigate unresolved entry ownership") && propose.stderr.includes(`(lines): ${expectedLines}.`) && !propose.stdout.includes("No-op."), "ambiguous CLI: investigation warning with line numbers replaces clean no-op at any size/coverage");
+    const apply = runMistakeCli(root, ["--apply", "--only", "MEM-650"]);
+    assert(apply.status === 1 && fs.readFileSync(sourcePath, "utf8") === source && !fs.existsSync(path.join(root, "memory/episodic")), "ambiguous CLI: affected span cannot be applied or archived");
+    if (source === lowCoverageAmbiguous) {
+      assert(propose.stderr.includes("entry-format mismatch") && apply.stderr.includes("entry-format mismatch"), "ambiguous CLI: existing MIN_COVERAGE_RATIO guard still runs on propose and apply");
+    }
+  });
+}
+// Unaffected entries may still be approved while unresolved spans are intact.
+const safeWithAmbiguous = `## Safe incident [MEM-610]\n${detail.repeat(50)}\n\n${ambiguous}\n\n> 📦 1 mistake archived — full original text in \`memory/episodic/archive/mistakes-*.md\` (grep for the key) — Keys: MEM-999\n`;
+withMistakeFixture(safeWithAmbiguous, GROUPED_DESTINATIONS, (root, sourcePath) => {
+  const propose = runMistakeCli(root);
+  assert(propose.stdout.includes("1 trim candidate(s)") && propose.stderr.includes("Investigate"), "mixed ambiguity: safe candidates remain reviewable beside structural warnings");
+  const apply = runMistakeCli(root, ["--apply", "--only", "MEM-610"]);
+  const after = fs.readFileSync(sourcePath, "utf8");
+  assert(apply.status === 0 && after.includes(ambiguous), `mixed ambiguity: safe apply preserves affected span exactly: ${apply.stderr}`);
+  assert(apply.stdout.includes("2 distinct MEM-N keys preserved"), "mixed ambiguity: accounting includes unresolved keys and excludes aggregate stub keys");
+});
+
 console.log(`${passed} assertions passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

@@ -32,6 +32,7 @@ import {
   type DestinationFile,
   type MistakesTrimCandidate,
   type UnreliableHook,
+  type MistakesStructureDiagnostic,
 } from "./lib/mem-mistakes-trim-core.js";
 import type { IndexRejection } from "./lib/citation-detect.js";
 
@@ -171,6 +172,16 @@ function printUnreliableHooks(unreliableHooks: UnreliableHook[]): void {
   console.log();
 }
 
+function printStructuralDiagnostics(diagnostics: MistakesStructureDiagnostic[]): void {
+  for (const d of diagnostics) {
+    console.warn(
+      `⚠️  Investigate unresolved entry ownership at MISTAKES.md:${d.startLine}-${d.endLine}: ${d.reason}. ` +
+      `Keyed bullet starts without a resolved owner (lines): ${d.keyedBulletLines.join(", ") || "none"}. ` +
+      `This span is excluded from proposals and cannot be applied.`
+    );
+  }
+}
+
 function main(): void {
   const apply = process.argv.includes("--apply");
   const onlyKeys = parseOnlyFlag();
@@ -189,12 +200,13 @@ function main(): void {
 
   const mistakesBefore = fs.readFileSync(MISTAKES_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, unreliableHooks, coverageRatio } =
+  const { candidates, totalEntries, multiKeyEntries, alreadyPointer, indexRejections, unreliableHooks, coverageRatio, structuralDiagnostics } =
     findMistakesTrimCandidates(mistakesBefore, destinations);
 
   const bucket = halfYearBucket(new Date());
   const archiveAbsPath = archivePath(bucket);
   const archiveLabel = `episodic/archive/mistakes-${bucket}.md`;
+  printStructuralDiagnostics(structuralDiagnostics);
 
   if (!apply) {
     printParseSummary({ totalEntries, multiKeyEntries, alreadyPointer, candidates });
@@ -207,6 +219,10 @@ function main(): void {
       return;
     }
     if (candidates.length === 0) {
+      if (structuralDiagnostics.length > 0) {
+        console.log("Investigation required: unresolved entry ownership; no safe trim candidates. Nothing written.");
+        return;
+      }
       console.log(
         `No promoted entries to propose (${alreadyPointer} already pointers out of ${totalEntries} entries, ` +
           `checked against ${destinations.length} destination file(s)). No-op.`

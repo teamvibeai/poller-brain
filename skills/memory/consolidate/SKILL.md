@@ -679,12 +679,15 @@ If the Memory Metrics table (Step 9b) shows `MISTAKES.md` exceeding 5000 bytes, 
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-mistakes-trim.ts"
 ```
 
+**Entry boundaries:** a `##`/`###` heading with a bracketed identity tag in its title or introductory prose owns its supporting bullets, including references to other keys. A keyless category heading with no introductory prose contains independent top-level `- ` entries when every bullet start carries a key. Continuation lines stay with their bullet. Category text and untouched siblings are preserved. Flat bullet entries remain supported; see the memory skill's **MISTAKES.md Entry Format** for examples. A bare key reference alone does not establish heading ownership.
+
 1. **Run it** and read the printed parse summary (`entries=N, multi-key=M, pointers=P, candidates=C`) plus the index-rejection and unreliable-hook lists, then the candidate list itself (key, `MISTAKES.md` entry span, destination `file:line`, full citing line, proposed pointer). An over-cap file containing `MEM-` keys where recognized entries cover only a small fraction of the file's bytes is flagged as a likely entry-format mismatch, not treated as a clean result — this catches a misparse even when `entries > 0` (e.g. a stray sub-bullet misread as its own entry), not just a 0-entries result.
+   Read structural warnings too: unresolved ownership is reported with the affected span and keyed bullet start line numbers even at high byte coverage or below cap. Investigate these spans; they produce no candidates and cannot be applied. Safe entries outside them may still be reviewed and approved when the byte-coverage guard passes. An investigation warning is never a clean `No-op.` result.
 2. **Review each candidate** — does the citing line actually restate/condense this entry's lesson, or does it just mention the key in passing? Reject anything that isn't clearly the former (same judgment call as Step 9e).
 3. **Apply the approved subset:** `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-mistakes-trim.ts" --apply --only MEM-1,MEM-5,...`. There is no "apply everything found" mode — you always name the keys. The script count-verifies before writing — it aborts (exit 1) without writing if the round-trip/archival counts don't add up.
 4. **Log it** in the markdown report under `## MISTAKES.md Promoted-Entry Trim`: proposed count, approved/applied keys, rejected candidates (with a one-line reason), archive bucket, size delta, and the verify checks.
 5. **Report tracking:** add `memory/core/MISTAKES.md` and the touched `memory/episodic/archive/mistakes-YYYY-Hn.md` to `filesChanged` when anything was applied (skip both when nothing was proposed, or nothing was approved).
-6. If `MISTAKES.md` is under 5000 bytes, or nothing is proposed, skip logging this step.
+6. If `MISTAKES.md` is under 5000 bytes, or nothing is proposed, skip logging this step unless a parse/structural warning was reported. Record warnings and the required investigation even when no entries can be trimmed.
 
 An entry the script cannot find cited anywhere (or only ever cited ambiguously, or bundles multiple keys) is left with its full narrative — that's expected, not a failure.
 
