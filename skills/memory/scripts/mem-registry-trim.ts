@@ -38,6 +38,11 @@
  * no-op for that key. Count-verified: aborts (exit 1) on any invariant
  * break — no silent drop.
  *
+ * Rejected-review ledger (propose only): --reject <printed-review-ref>
+ * --reason <explanation> records a pending explicit rejection. Only a completed
+ * consolidation with its report pair makes it reusable. --completed-at <HEAD>
+ * selects the pre-Step-0 HEAD; --reconsider requests fresh review of all entries.
+ *
  * Usage:
  *   npx tsx mem-registry-trim.ts                          # propose: list candidates, write nothing
  *   npx tsx mem-registry-trim.ts --apply --only MEM-1,MEM-5  # apply exactly these approved keys
@@ -45,8 +50,8 @@
 
 import { isMemId } from "./lib/mem-id.js";
 import * as fs from "fs";
-import * as path from "path";
-import { brainPath } from "./lib/brain-root.js";
+import { brainPath, resolveBrainRoot } from "./lib/brain-root.js";
+import { collectTrimDestinations, reviewProposals, checkReviewApplyFlags } from "./lib/trim-review-state.js";
 import {
   findTrimCandidates,
   applyTrimCandidates,
@@ -61,38 +66,10 @@ import {
 const REGISTRY_PATH = brainPath("memory/MEM_REGISTRY.md");
 const DEST_DIRS = ["core", "semantic", "episodic", "procedural"];
 
-// episodic/archive/mistakes-*.md holds relocated, dead history from Step 9f
-// — a key cited there is evidence it USED to live somewhere, not that it's
-// currently promoted. poller-brain#328 review round 1 (DevGuru): measured a
-// live registry row's citation getting spuriously matched against the new
-// mistakes archive this same PR introduces. Scoped to mistakes-*.md
-// specifically (round 2 fix) — excluding the whole episodic/archive/
-// directory also dropped episodic/archive/learnings-*.md (Step 5c's own
-// archive) as a destination, breaking 4 already-live reduction paths on a
-// real 261KB over-cap MEM_REGISTRY.md (measured: 26 -> 22 candidates on the
-// DevGuru brain).
-const MISTAKES_ARCHIVE_RE = /^episodic\/archive\/mistakes-.*\.md$/;
-
-function walk(absDir: string, relDir: string, out: DestinationFile[]): void {
-  if (!fs.existsSync(absDir)) return;
-  for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-    const relPath = path.join(relDir, entry.name);
-    const absPath = path.join(absDir, entry.name);
-    if (entry.isDirectory()) {
-      walk(absPath, relPath, out);
-    } else if (entry.name.endsWith(".md")) {
-      if (MISTAKES_ARCHIVE_RE.test(relPath)) continue;
-      out.push({ file: relPath, text: fs.readFileSync(absPath, "utf-8") });
-    }
-  }
-}
-
+// Shared scan preserves the mistakes-archive exclusion and excludes generated
+// consolidation progress bookkeeping from evidence and review fingerprints.
 function collectDestinations(): DestinationFile[] {
-  const destinations: DestinationFile[] = [];
-  for (const dir of DEST_DIRS) {
-    walk(brainPath("memory", dir), dir, destinations);
-  }
-  return destinations;
+  return collectTrimDestinations(resolveBrainRoot(), DEST_DIRS);
 }
 
 function parseOnlyFlag(): string[] | null {
@@ -181,6 +158,7 @@ function printUnreliableHooks(unreliableHooks: UnreliableHook[]): void {
 }
 
 function main(): void {
+  checkReviewApplyFlags();
   const apply = process.argv.includes("--apply");
   const onlyKeys = parseOnlyFlag();
 
@@ -212,6 +190,8 @@ function main(): void {
   if (!apply) {
     printIndexRejections(indexRejections);
     printUnreliableHooks(unreliableHooks);
+    const review = reviewProposals(resolveBrainRoot(), "memory/MEM_REGISTRY.md", registryBefore, candidates, destinations);
+    if (review === null) return;
     if (candidates.length === 0) {
       console.log(
         `No promoted rows to propose (${alreadyPointer} already pointers out of ${totalDataRows} data rows, ` +
@@ -219,7 +199,7 @@ function main(): void {
       );
       return;
     }
-    printProposals(candidates);
+    if (review.length > 0) printProposals(review);
     return;
   }
 
