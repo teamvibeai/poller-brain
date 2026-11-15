@@ -5,6 +5,7 @@ export const expectedEncoding = {
   'assistant.threads.setStatus': 'json',
   'auth.test': 'json',
   'bookmarks.list': 'json',
+  'chat.delete': 'form', // default transport; no JSON exception/live probe required
   'chat.getPermalink': 'form',
   'chat.postMessage': 'json',
   'chat.update': 'json',

@@ -51,7 +51,7 @@ try {
     // TeamVibe has no send_message tool. Use its channel-filtering tool with
     // the identical #553 arguments to prove validation runs there as well.
     const tool = server === 'slack' ? 'send_message' : 'list_scheduled_messages'
-    const allowed = server === 'slack' ? 'text, blocks, channel, thread_ts, modals' : 'channelId'
+    const allowed = server === 'slack' ? 'text, blocks, channel, thread_ts, dry_run, modals' : 'channelId'
     const suggestion = server === 'slack' ? 'channel' : 'channelId'
     await rejected('#553 payload', tool, { channel_id: 'C0CA0CBLA7R', text: 'x' },
       `Unknown parameter \`channel_id\` for ${tool}. Allowed parameters: ${allowed}. Did you mean \`${suggestion}\`?`)

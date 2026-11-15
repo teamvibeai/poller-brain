@@ -280,7 +280,7 @@ function computeThreadOverrideWarning({ explicitThreadTs, sessionThreadTs, trigg
       `You passed thread_ts=${target}, but this session's current thread is ${session}, ` +
       `and the message that woke you does not reference ${target}. The reply landed in a thread the ` +
       `user may not be reading. If that was unintentional, report the stray post (channel ID and message ts) ` +
-      `to the human or via submit_feedback. No exposed delete tool exists; use this reporting path until one ships. ` +
+      `to the human or via submit_feedback. If cleanup is intended, delete_message can remove only that exact message after verifying bot ownership. ` +
       `Ignore this warning if the override was deliberate — a handoff into a thread you were recently ` +
       `woken from is legitimate and is not yet detected here.`,
     session_thread_ts: session,
@@ -624,6 +624,179 @@ function buildSendPayload(args, { hasModals = false } = {}) {
   return { blocks, effectiveText, transformed, tableWarning, agentSuppliedBlocks }
 }
 
+// Wrapper preflight only: no API calls, modal IDs, or delivery guarantees.
+// Payload is the initial post body; buttons require later registration IDs.
+function buildSendPreflight(args, body, { thread_ts, hasModals, transformed }) {
+  const suppressed = shouldSuppressSentinel(args)
+  const response = {
+    ok: true,
+    dry_run: true,
+    channel: body.channel,
+    thread_ts: thread_ts || null,
+    mode: thread_ts ? 'thread' : 'root',
+    payload: suppressed ? null : body,
+  }
+  if (suppressed) response.suppressed = 'sentinel'
+  if (transformed) response.transformed = transformed
+  if (args.modals?.length) {
+    response.modals = {
+      enabled: Boolean(hasModals),
+      definitions: args.modals,
+      registration: 'deferred',
+      thread_context: thread_ts || 'sent_message_ts',
+    }
+  }
+  response.validation = {
+    checked: ['argument_schema', 'session_routing', 'payload_transforms'],
+    limits: {
+      message_blocks: 50,
+      section_text_characters: 3000,
+      cumulative_markdown_text_characters: 12000,
+      recommended_text_characters: 4000,
+      text_truncation_characters: 40000,
+    },
+    limitations: [
+      'Limits are advisory; full Block Kit and modal view validation is performed by Slack only on publication.',
+      'Channel is resolved from the explicit argument or session default; names, access, archive state and thread existence are not verified.',
+      'No delivery, permission, rendering or later send success is guaranteed; post-send warnings are not evaluated.',
+      'Payload previews the initial post. Modal registration, generated button IDs and the subsequent update are deferred; enabled modals add one actions block.',
+      'No Slack or platform writes, uploads, modal registrations or session creation are performed.',
+    ],
+  }
+  return response
+}
+
+const DELETE_ID_PATTERN = /^[A-Z0-9]{1,21}$/
+const DELETE_TS_PATTERN = /^\d{1,12}\.\d{1,6}$/
+const DELETE_AUDIT_REASONS = new Set([
+  'invalid_arguments', 'identity_incomplete', 'identity_failed',
+  'lookup_incomplete', 'lookup_truncated', 'lookup_ambiguous', 'lookup_failed',
+  'exact_message_not_found', 'unsupported_message_type', 'author_unknown',
+  'author_mismatch', 'delete_response_uncertain', 'delete_failed', 'slack_api_error',
+])
+
+function deleteAuditValue(value, pattern) {
+  // Comparing the whole match also excludes the final newline allowed by `$`.
+  return typeof value === 'string' && pattern.exec(value)?.[0] === value ? value : null
+}
+
+// Null actor IDs mean no complete identity was authenticated.
+function createDeleteAudit(args, outcome = 'ownership_unverified') {
+  return {
+    event: 'slack.delete_message',
+    channel: deleteAuditValue(args?.channel, DELETE_ID_PATTERN),
+    ts: deleteAuditValue(args?.ts, DELETE_TS_PATTERN),
+    actor_user_id: null,
+    actor_bot_id: null,
+    outcome,
+    reason: outcome === 'invalid_arguments' ? 'invalid_arguments' : null,
+    at: new Date().toISOString(),
+  }
+}
+
+// The first key must survive the poller's 200-character tool_result limit.
+// Bounded ASCII fields, fixed outcomes/reasons and toISOString() keep the
+// entire quoted audit prefix within 172 characters, even at all field maxima.
+function buildDeleteResponse(audit, result) {
+  const compact = [
+    'del', audit.outcome, DELETE_AUDIT_REASONS.has(audit.reason) ? audit.reason : null,
+    audit.at, audit.channel, audit.ts, audit.actor_user_id, audit.actor_bot_id,
+  ].map(value => value ?? '-').join('|')
+  return { audit: compact, ...result, audit_details: audit }
+}
+
+// Do not use resolveSelfIds(): that best-effort warning helper permits env
+// fallbacks after failed auth. Destruction requires fresh authenticated IDs.
+async function deleteOwnMessage(channel, ts) {
+  const audit = createDeleteAudit({ channel, ts })
+  const reject = (reason) => {
+    audit.reason = reason
+    throw new Error(reason)
+  }
+  let stage = 'identity'
+  try {
+    if (audit.channel !== channel || audit.ts !== ts) {
+      audit.outcome = 'invalid_arguments'
+      reject('invalid_arguments')
+    }
+    const self = await slackApi('auth.test', {})
+    if (self.ok !== true || !deleteAuditValue(self.user_id, DELETE_ID_PATTERN) ||
+        !deleteAuditValue(self.bot_id, DELETE_ID_PATTERN)) {
+      reject('identity_incomplete')
+    }
+    audit.actor_user_id = self.user_id
+    audit.actor_bot_id = self.bot_id
+    stage = 'lookup'
+    let lookup = await slackApi('conversations.history', {
+      channel, oldest: ts, latest: ts, inclusive: true, limit: 1,
+    })
+    if (lookup.ok !== true || !Array.isArray(lookup.messages)) reject('lookup_incomplete')
+    let matches = lookup.messages.filter(m => m?.ts === ts)
+    if (!matches.length) {
+      // Slack accepts a parent or reply ts. Bound the lookup to the exact
+      // timestamp; never infer ownership from a parent or nested event data.
+      lookup = await slackApi('conversations.replies', {
+        channel, ts, oldest: ts, latest: ts, inclusive: true, limit: 2,
+      })
+      if (lookup.ok !== true || !Array.isArray(lookup.messages)) reject('lookup_incomplete')
+      matches = lookup.messages.filter(m => m?.ts === ts)
+    }
+    if (!matches.length) {
+      if (lookup.has_more || lookup.response_metadata?.next_cursor) reject('lookup_truncated')
+      audit.outcome = 'not_found'
+      reject('exact_message_not_found')
+    }
+    if (matches.length !== 1) reject('lookup_ambiguous')
+    const message = matches[0]
+    if ((message.type && message.type !== 'message') ||
+        (message.subtype && !['bot_message', 'file_share', 'thread_broadcast'].includes(message.subtype))) {
+      reject('unsupported_message_type')
+    }
+    const hasUser = Object.hasOwn(message, 'user')
+    const hasBot = Object.hasOwn(message, 'bot_id')
+    if (!hasUser && !hasBot) reject('author_unknown')
+    // Every present author field must agree, even when the other matches.
+    if ((hasUser && message.user !== self.user_id) || (hasBot && message.bot_id !== self.bot_id)) {
+      audit.outcome = 'permission_denied'
+      reject('author_mismatch')
+    }
+    stage = 'delete'
+    const deleted = await slackApi('chat.delete', { channel, ts })
+    if (deleted.ok !== true || deleted.channel !== channel || deleted.ts !== ts) {
+      reject('delete_response_uncertain')
+    }
+    audit.outcome = 'deleted'
+    return buildDeleteResponse(audit, { ok: true, channel, ts })
+  } catch (error) {
+    const permissionErrors = ['missing_scope', 'not_in_channel', 'cant_delete_message', 'no_permission',
+      'access_denied', 'restricted_action', 'not_authed', 'invalid_auth', 'token_revoked',
+      'token_expired', 'account_inactive', 'is_archived']
+    const notFoundErrors = ['message_not_found', 'thread_not_found', 'channel_not_found']
+    const code = /^Slack API [\w.]+: ([\w_]{1,64})$/.exec(error?.message)?.[1]
+    // Only known Slack codes may cross the audit boundary, never remote text.
+    const slackError = [...permissionErrors, ...notFoundErrors, 'ratelimited'].includes(code) ? code : null
+    if (slackError) {
+      audit.slack_error = slackError
+      audit.reason = 'slack_api_error'
+      if (notFoundErrors.includes(slackError)) {
+        audit.outcome = 'not_found'
+      } else if (permissionErrors.includes(slackError)) {
+        audit.outcome = 'permission_denied'
+      }
+    }
+    audit.reason ||= { identity: 'identity_failed', lookup: 'lookup_failed', delete: 'delete_failed' }[stage]
+    if (stage === 'delete' && audit.outcome === 'ownership_unverified') audit.outcome = 'delete_failed'
+    const failure = new Error(`delete_message: ${audit.outcome}${slackError ? ` (${slackError})` : ''}`)
+    failure.slackDeleteCode = audit.outcome
+    failure.slackDeleteAudit = audit
+    throw failure
+  } finally {
+    // Supplemental only: the poller retains the MCP tool result, not this
+    // child's stderr. Both successful and failed results must carry audit.
+    console.error(JSON.stringify(audit))
+  }
+}
+
 // Resolve a Slack user_id to a friendly display name. Caches per-process for
 // the session lifetime since display names rarely change mid-conversation.
 const _userInfoCache = new Map()
@@ -655,7 +828,7 @@ async function resolveDisplayName(userId) {
 const TOOLS = [
   {
     name: 'send_message',
-    description: 'Send a message to Slack; publishes immediately. Never post placeholder/probe messages to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. With no session thread context, an explicit channel and omitted thread_ts produces a channel-root post. For deliberate root posts use thread_ts: null; otherwise omit thread_ts to use the current thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
+    description: 'Send a message to Slack; publishes immediately unless dry_run: true requests a zero-write wrapper preflight. Never post placeholder/probe messages to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. With no session thread context, an explicit channel and omitted thread_ts produces a channel-root post. For deliberate root posts use thread_ts: null; otherwise omit thread_ts to use the current thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -664,6 +837,7 @@ const TOOLS = [
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions, or a `markdown` block for tables/GFM). See https://api.slack.com/block-kit. Providing blocks OPTS OUT of table auto-convert — your blocks are sent as-is and `text` is prepended as a visible section block. Omit blocks to let a GFM table in `text` auto-convert.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
         thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread, if available). Without session thread context, an explicit channel and omitted thread_ts posts at channel root. Use thread_ts: null for a deliberate root post even when in a thread session.' },
+        dry_run: { type: 'boolean', description: 'Wrapper preflight only: returns the effective channel, thread/root mode, transformed initial payload, deferred modal plan and validation limits with ZERO writes. Does not verify destination access or guarantee later delivery. Default: false (publishes immediately).' },
         modals: {
           type: 'array',
           description: 'Modal form definitions to attach as buttons. Each opens a Slack modal when clicked.',
@@ -679,6 +853,19 @@ const TOOLS = [
         },
       },
       required: ['text'],
+    },
+  },
+  {
+    name: 'delete_message',
+    description: 'Delete exactly one message authored by the authenticated bot. Verifies fresh auth.test identity against the exact message user/bot_id; fails closed on unknown, conflicting or unreadable ownership. Requires explicit channel and ts. Never recursively deletes replies. Returns audit first as del|outcome|reason|UTC time|channel|ts|actor user|actor bot (missing values: -), followed by structured audit_details. Cannot retract notifications or undo sessions already started.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        channel: { type: 'string', maxLength: 21, pattern: DELETE_ID_PATTERN.source, description: 'Explicit Slack conversation ID containing the message; no session default.' },
+        ts: { type: 'string', maxLength: 19, pattern: DELETE_TS_PATTERN.source, description: 'Exact timestamp of the message to delete (not its parent unless deleting the parent itself).' },
+      },
+      required: ['channel', 'ts'],
     },
   },
   {
@@ -970,7 +1157,7 @@ const TOOLS = [
 async function handleTool(name, args) {
   switch (name) {
     case 'send_message': {
-      if (shouldSuppressSentinel(args)) {
+      if (!args.dry_run && shouldSuppressSentinel(args)) {
         return { ok: true, suppressed: 'sentinel', detail: 'Nothing was posted to Slack.' }
       }
       const channel = args.channel || DEFAULT_CHANNEL
@@ -1001,6 +1188,9 @@ async function handleTool(name, args) {
       }
       if (blocks.length) body.blocks = blocks
       if (thread_ts) body.thread_ts = thread_ts
+      if (args.dry_run === true) {
+        return buildSendPreflight(args, body, { thread_ts, hasModals, transformed })
+      }
       const result = await slackApi('chat.postMessage', body)
 
       // Register modal definitions after sending — use message ts as thread context
@@ -1071,6 +1261,9 @@ async function handleTool(name, args) {
       if (!transformed && tableWarning) warnings.push(tableWarning)
       return buildSendResponse({ ts: result.ts, transformed, warnings })
     }
+
+    case 'delete_message':
+      return deleteOwnMessage(args.channel, args.ts)
 
     case 'add_reaction': {
       const channel = args.channel || DEFAULT_CHANNEL
@@ -1580,8 +1773,16 @@ async function handleRequest(req) {
           content: [{ type: 'text', text: JSON.stringify(result) }],
         })
       } catch (e) {
+        const failure = {
+          ok: false,
+          error: e.slackDeleteCode || e.message,
+          ...(e.slackDeleteCode ? { detail: e.message } : {}),
+        }
+        const result = name === 'delete_message'
+          ? buildDeleteResponse(e.slackDeleteAudit || createDeleteAudit(args, 'invalid_arguments'), failure)
+          : failure
         return jsonrpcResponse(id, {
-          content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
           isError: true,
         })
       }

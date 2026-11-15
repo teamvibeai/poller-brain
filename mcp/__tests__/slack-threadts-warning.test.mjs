@@ -52,7 +52,8 @@ const BRIEFING = '1780637428.794809' // thread recalled from memory
   ok('#1 detail reports the stray post with identifying context',
     w?.detail.includes('report the stray post (channel ID and message ts)'))
   ok('#1 detail offers human or submit_feedback reporting', w?.detail.includes('to the human or via submit_feedback'))
-  ok('#1 detail explains that no delete tool is exposed', w?.detail.includes('No exposed delete tool exists'))
+  ok('#1 detail offers exact-message cleanup with verified bot ownership',
+    w?.detail.includes('delete_message') && w?.detail.includes('only that exact message after verifying bot ownership'))
   ok('#1 detail does not recommend chat.delete', !w?.detail.includes('chat.delete'))
   ok('#1 detail admits the missing recent-wake signal', w?.detail.includes('recently'))
 }
