@@ -345,13 +345,27 @@ When you learn something new, route it:
 Each entry should include enough context for promotion:
 
 ```markdown
-## YYYY-MM-DD — short description
+## YYYY-MM-DD — short description [MEM-NNN]
 
 **What happened:** one-liner describing the mistake
 **Root cause:** why it happened
 **Impact:** what went wrong as a result
 **Status:** new | promoted → {destination}
 ```
+
+For Step 9f trimming, use a bracketed identity tag (legacy `[MEM-NNN]` or a full dated ID) in the `##`/`###` title or in prose before its first top-level bullet. That heading owns its entire incident, including supporting bullets that mention other keys; those mentions still make the entry multi-key and ineligible for trimming.
+
+Flat `- ` entries are also supported. To group independent bullet entries, use a keyless `##`/`###` category heading, then whitespace and top-level bullets that each carry their own key on the starting line:
+
+```markdown
+## Communication
+
+- [MEM-101] First incident and its lesson.
+  Continuation lines belong to this incident.
+- [MEM-102] Another independent incident.
+```
+
+Keep incident prose inside its keyed entry. A heading without an identity tag that has introductory prose, a bare key reference, or unkeyed top-level bullets has unresolved ownership; Step 9f reports its span and keyed bullet line numbers, skips it, and requires investigation. Category headings, sibling entries, and continuation lines are retained during a trim.
 
 When an entry is promoted, update its status and leave it for one consolidation cycle so the promotion is visible, then remove it. This keeps MISTAKES.md small and active — it's a to-do list, not a journal.
 
