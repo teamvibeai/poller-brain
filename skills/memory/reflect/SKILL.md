@@ -13,6 +13,8 @@ Before any heartbeat, scheduled maintenance, or reflection action (including Bas
 
 ## Checklist
 
+After the opt-out check, inspect `git status --short` and record the starting HEAD and original reflection date (keep that date across midnight). Identify pre-existing work before mutating memory; never include another task's edits. Keep a cumulative list of reviewed created/modified/deleted paths and, for every deletion, the specific preservation destination or named redundant source. Keep working manifests and report drafts in session scratch outside `memory/episodic/` and `reports/`; do not create `memory/episodic/reflection-YYYY-MM-DD.md` during the checklist. Its filename is the reflection guard's completion/cadence signal.
+
 ### 0. Previous Recommendations Review
 
 Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Read its recommendations (the `recommendations` array in JSON) before writing the current draft. Record `review_mode` for the check below: `required` when prior recommendations exist, `first-run` when no prior reflection exists, or `empty-prior` when the prior recommendations list is explicitly empty. An unreadable prior report or an unknown/missing list is not an empty list; resolve it or report `[blocked]`.
@@ -41,7 +43,7 @@ Also retain the legacy `implemented`, `partially addressed`, or `pending` summar
 
 Keep named-recommendation JSON entries and the legacy summary; assess lifecycle and legacy status from evidence rather than assuming a one-to-one mapping. Keep `processImprovements` within MAINTENANCE.md's **five-entry cap**, including the required prefixes; use Markdown for the complete per-recommendation review. Keep both reports consistent without adding evaluator keys. The `previous-recommendations-reviewed` eval criterion still requires a named prior recommendation and legacy status; generic "reviewed prior recommendations" fails.
 
-**Mechanical sub-check (required after writing the current episodic report, before finalization):** Run the grep-based helper with the mode determined above, substituting the current report date:
+**Mechanical sub-check (required on the episodic draft before publication, and again on the published file before the final commit):** Run the grep-based helper with the mode determined above, substituting the scratch draft path first and the current report date after publication:
 
 ```bash
 bash "$CLAUDE_CONFIG_DIR/skills/memory/reflect/scripts/check-previous-recommendations.sh" \
@@ -115,11 +117,41 @@ Carry an existing split task forward with its source fingerprint, inventory/plan
 
 **`MEM_REGISTRY.md` inline policy prose:** if the registry carries inline policy-prose sections (e.g. a HOLD-lifecycle rule) rather than just `[MEM-NNN]` rows, that is live content, not the dead REMOVED rows the automated archival (Step 9d in `consolidate/SKILL.md`, poller-brain#217) relocates — deciding whether/where to move it is a manual reflection judgment. Relocate such prose verbatim to `memory/procedural/{topic}.md` and leave a one-line pointer in the registry (e.g. `> 📖 [section names] relocated to [procedural/{topic}.md](procedural/{topic}.md)`). Do not fold this into the automated consolidate step (poller-brain#217).
 
+### Checklist checkpoint — required before Output
+
+After Steps 1–4, review the complete diff for each reflection path, including both sides of moves and every preservation destination. Resolve integrity alarms before committing or proceeding. Prepare a JSON manifest in session scratch containing **only exact reviewed memory file paths**, never `memory/`, globs, or unrelated work. For example:
+
+```json
+{
+  "paths": ["memory/semantic/old-topic.md", "memory/procedural/topic.md"],
+  "deletionPreservation": {
+    "memory/semantic/old-topic.md": "Content preserved verbatim in memory/procedural/topic.md"
+  }
+}
+```
+
+Use an empty `paths` array only when the checklist made no changes. Recheck the root maintenance opt-out before invoking:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/scripts/reflection-commit.mjs" \
+  . YYYY-MM-DD checklist "$reflection_manifest"
+```
+
+The reflection-specific helper isolates the index, commits only these reviewed files, and preserves unrelated staged/unstaged work. It rejects staged work overlapping the reviewed paths; resolve ownership explicitly, never reset or sweep it. Hooks are disabled for isolation, so complete content/integrity validation before invocation. The subject is `chore: memory reflection checkpoint (YYYY-MM-DD) — checklist`. Do not call `consolidation-commit.sh` for reflection.
+
+**Require exit 0 with `result: committed` or a genuine `result: no-change` before entering Output.** Any command/commit failure stops progression: retain the diff and diagnostics for inspection; do not produce completed reports, advance cadence, or silently fall back to a broad commit. The helper also refuses opted-out runs without writes. It must not be used to commit the dated episodic report at this boundary.
+
+If index publication fails after HEAD moves, the helper exits nonzero and names the published commit SHA in stderr. It attempts to restore only its own HEAD update with compare-and-swap and reports whether HEAD was restored. If that fails, it retains the prepared `index.lock` at the diagnostic path, preserving unrelated staging. Inspect HEAD and reconcile the retained index before further Git writes; do not delete that lock or rerun blindly. This is recovery evidence, not completion evidence or automatic lifecycle repair.
+
+Retain the helper's JSON evidence and checkpoint SHA. The same `Reflection-Evidence:` JSON is stored in the checkpoint commit body (`git show -s --format=%B <checkpoint-SHA>`), including the pre-checkpoint baseline, changed paths/statuses and each deletion's preservation explanation. Carry these entries into cumulative `filesChanged`, `operationCounts`, and the per-file deletion entries in `decisions`/`observations`; union later reviewed changes without double-counting paths. A clean post-checkpoint diff does **not** mean zero work. After interruption, inspect that commit and its diff to recover this evidence before resuming; the checkpoint proves checklist changes were saved, not that reflection completed. A no-change result makes no commit and needs no fabricated changes.
+
 ## Output
+
+Enter Output only after the checklist checkpoint succeeds. Prepare and validate all three report drafts in session scratch first. Keep the cadence-bearing episodic filename absent until all drafts are ready to finalize; recheck maintenance opt-out before publishing them. Carry forward the checkpoint evidence when filling the reports, even if no memory edits remain uncommitted.
 
 ### 1. Episodic reflection file
 
-Write a reflection report to `memory/episodic/reflection-YYYY-MM-DD.md`:
+Prepare the episodic draft with this content; publish to `memory/episodic/reflection-YYYY-MM-DD.md` only at finalization:
 
 ```markdown
 # Memory Reflection — YYYY-MM-DD
@@ -143,7 +175,7 @@ Write a reflection report to `memory/episodic/reflection-YYYY-MM-DD.md`:
 - [list of identified gaps for future capture]
 ```
 
-Always include the canonical review section. Repeat its recommendation block for every prior recommendation; for a first run or an empty prior list, replace the blocks with the exact not-applicable line from Step 0. After writing this file, run Step 0's mechanical sub-check before finalizing the maintenance reports or committing.
+Always include the canonical review section. Repeat its recommendation block for every prior recommendation; for a first run or an empty prior list, replace the blocks with the exact not-applicable line from Step 0. Run Step 0's mechanical sub-check on the draft before publication and on the published file before committing. An unresolved integrity/validation failure stops finalization; do not publish a completed reflection.
 
 ### 2. Maintenance reports (required)
 
@@ -181,7 +213,11 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
 
 ## Commit
 
-After reflection, commit all changes (memory files + both report files) in one commit:
+Once all drafts pass validation, publish the episodic file and both maintenance reports, review their complete diffs, and prepare a final manifest with those three exact paths plus any additional reviewed memory changes since the checkpoint. Include deletion-preservation evidence for any new deletions. Recheck opt-out and commit through the same scoped helper:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/scripts/reflection-commit.mjs" \
+  . YYYY-MM-DD final "$reflection_final_manifest"
 ```
-chore: memory reflection (YYYY-MM-DD)
-```
+
+The helper requires all three reports to exist and be explicitly reviewed in the manifest, then verifies all three are regular files in the private staged index. The final subject remains `chore: memory reflection (YYYY-MM-DD)`. Require a successful commit or verified no-change; failure stops completion claims and requires inspection. Preserve the checkpoint's cumulative file/count/deletion accounting in both reports; do not replace it with only the final commit's diff. This boundary does not implement automatic repair of interrupted publication or concurrent Git changes.
