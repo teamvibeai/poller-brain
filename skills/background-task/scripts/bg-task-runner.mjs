@@ -24,6 +24,22 @@ const KILL_GRACE_MS = 5000
 const TIMEOUT_RC = 124 // same code GNU `timeout` uses, so docs and habits carry over
 const INBOX_DROP_ATTEMPTS = 5
 
+// Only a pgid captured from our detached spawn is authority to signal a workload.
+// In particular, -1 would target every process we can signal, and a missing spawn pid
+// must never fall back to the runner's group or to an individual descendant.
+export function signalProcessGroup(pgid, signal, kill = process.kill) {
+  if (!Number.isSafeInteger(pgid) || pgid <= 1) return { error: 'invalid-pgid' }
+  try {
+    kill(-pgid, signal)
+    return { sent: true }
+  } catch (e) {
+    if (e.code === 'ESRCH') return { gone: true }
+    // EPERM on signal 0 means the group exists but we cannot signal it. Keep the
+    // bounded cleanup path and report the failure rather than claiming it is gone.
+    return { error: e.code || e.message }
+  }
+}
+
 // TTL-derived ceiling for opt-in eager checkpoints: clamp(ttl/8, floor, ceiling).
 // Default quiet mode suppresses automatic checkpoints regardless of task duration.
 // Overridable only for tests — production always uses the 60s/600s bounds. Derived from
@@ -172,7 +188,7 @@ export function noteOf(dir, limit = NOTE_CHARS) {
 
 export function buildPrompt({
   name, state, rc, ttl, dir, tail, cmd = [], elapsedSec, siblings = 0,
-  note = '', fence = 'bg-task-output', killedBy, signalSent, childRc,
+  note = '', fence = 'bg-task-output', killedBy, signalSent, childRc, residualCleanup,
 }) {
   const why = state === 'timed-out'
     ? `hit its ${ttl}s TTL and was killed`
@@ -194,6 +210,9 @@ export function buildPrompt({
         (childRc === null || childRc === undefined ? '' : ` with ${childRc}`)
       : ''
   const rcLine = rc === null || rc === undefined ? '' : ` (rc=${rc})`
+  const cleanup = residualCleanup
+    ? `\nResidual descendants: found; group cleanup ${residualCleanup}`
+    : ''
   const also = siblings > 0
     ? `\n\nStill running: ${siblings} other background task${siblings === 1 ? '' : 's'} — expect further wake messages.`
     : ''
@@ -212,7 +231,7 @@ export function buildPrompt({
 
 Task: ${name}
 Command: ${cmd.join(' ') || '(unknown)'}
-State: ${state}${rcLine}${killed}${elapsed}
+State: ${state}${rcLine}${killed}${elapsed}${cleanup}
 Directory: ${dir}   (full output: ${join(dir, 'output.log')})${intent}
 
 Pick the work back up from here. Report the real outcome — if it failed or timed out,
@@ -335,7 +354,7 @@ async function main() {
   if (checkpointIntervalMs > 0) note([`checkpoint_interval=${checkpointIntervalSec}s`])
   if (eagerCheckpointsOn) note(['eager_checkpoints=1'])
 
-  const finish = ({ rc, timedOut = false, killedBy, signalSent, childRc, command = cmd }) => {
+  const finish = ({ rc, timedOut = false, killedBy, signalSent, childRc, residualCleanup, command = cmd }) => {
     const state = timedOut ? 'timed-out' : 'finished'
     note([
       `state=${state}`,
@@ -350,7 +369,7 @@ async function main() {
       elapsedSec: Math.round((Date.now() - startedAt) / 1000),
       siblings: countRunningSiblings(dirname(dir), dir), note: noteOf(dir),
       fence: `bg-task-output-${randomBytes(4).toString('hex')}`,
-      killedBy, signalSent, childRc,
+      killedBy, signalSent, childRc, residualCleanup,
     })
     const result = writeInboxMessage(threadId, finalPrompt, dir, dry)
     note([
@@ -391,9 +410,11 @@ async function main() {
     }
   }
   const out = openSync(logPath, 'a')
-  // detached so the command gets its own process group: on TTL we can then kill the
-  // whole tree, not just the direct child (GNU timeout kills only the child).
+  // detached so the command gets its own process group, cleaned up on leader exit
+  // as well as TTL. Descendants that create a new session escape this group.
   const child = spawn(cmd[0], cmd.slice(1), { cwd, stdio: [stdinFile ? 'pipe' : 'ignore', out, out], detached: true })
+  const pgid = child.pid // Capture once; never read a pgid from the spec/status files.
+  if (pgid) note([`workload_pgid=${pgid}`])
   closeSync(out)
   if (stdinFile) {
     // The buffer survives removal and session teardown. EPIPE is normal if the
@@ -480,15 +501,43 @@ async function main() {
 
   let timedOut = false
   let signalSent   // what we actually delivered — recorded when sent, never guessed later
+  let leaderExited = false
   let killTimer
+  let resolveEscalation
+  const escalationDone = new Promise(resolve => { resolveEscalation = resolve })
+  const groupSignals = new Set()
+  const groupErrors = new Set()
+  let groupGone = false
+  const signalGroup = (signal) => {
+    // Once ESRCH is observed, retire this pgid permanently. A later group reusing
+    // that numeric id would not be ours.
+    if (groupGone) return { gone: true }
+    const result = signalProcessGroup(pgid, signal)
+    if (result.gone) groupGone = true
+    if (result.error) {
+      groupErrors.add(`${signal}:${result.error}`)
+      note([`group_cleanup_error=${signal}:${result.error}`])
+    }
+    if (result.sent && signal !== 0) {
+      groupSignals.add(signal)
+      note([`group_signal=${signal}`])
+      // Signals sent after the leader exited describe descendant cleanup, not how
+      // the leader died. Its actual exit/signal stays authoritative below.
+      if (timedOut && !leaderExited) signalSent = signal
+    }
+    return result
+  }
+  const groupRemains = () => !signalGroup(0).gone
+  const escalate = () => {
+    if (killTimer) return // Reuse the TTL deadline; leader exit must not reset it.
+    killTimer = setTimeout(() => {
+      if (groupRemains()) signalGroup('SIGKILL')
+      resolveEscalation()
+    }, KILL_GRACE_MS)
+  }
   const ttlTimer = setTimeout(() => {
     timedOut = true
-    signalSent = 'SIGTERM'
-    try { process.kill(-child.pid, 'SIGTERM') } catch { /* already gone */ }
-    killTimer = setTimeout(() => {
-      signalSent = 'SIGKILL'
-      try { process.kill(-child.pid, 'SIGKILL') } catch { /* already gone */ }
-    }, KILL_GRACE_MS)
+    if (!signalGroup('SIGTERM').gone) escalate()
   }, ttl * 1000)
 
   const { rc, killedBy, childRc } = await new Promise((resolve) => {
@@ -509,11 +558,30 @@ async function main() {
       resolve({ rc: code, killedBy: signal || undefined })
     })
   })
+  leaderExited = true
   clearTimeout(ttlTimer)
-  clearTimeout(killTimer)
   clearInterval(checkTimer)
 
-  finish({ rc, timedOut, killedBy, signalSent, childRc })
+  let residualCleanup
+  if (pgid && groupRemains()) {
+    note(['residual_descendants=found'])
+    if (!killTimer) {
+      if (!signalGroup('SIGTERM').gone) escalate()
+    }
+    // Do not finalize on direct-child exit while group escalation is still pending.
+    if (killTimer) await escalationDone
+    const signals = [...groupSignals].join(',')
+    const errors = [...groupErrors].join(',')
+    note([`residual_cleanup_signals=${signals || 'none'}`])
+    residualCleanup = (signals ? `sent ${signals}` : 'sent no signals') +
+      (errors ? `; errors: ${errors}` : '')
+  } else {
+    // ESRCH is the only probe result that proves the group is gone. Spawn failure
+    // has no pgid and must not signal anything at all.
+    clearTimeout(killTimer)
+  }
+
+  finish({ rc, timedOut, killedBy, signalSent, childRc, residualCleanup })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
