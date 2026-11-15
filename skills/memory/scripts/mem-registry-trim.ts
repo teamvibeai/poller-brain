@@ -50,6 +50,7 @@
 
 import { isMemId } from "./lib/mem-id.js";
 import * as fs from "fs";
+import { printExhaustion } from "./lib/trim-exhaustion.js";
 import { brainPath, resolveBrainRoot } from "./lib/brain-root.js";
 import { collectTrimDestinations, reviewProposals, checkReviewApplyFlags } from "./lib/trim-review-state.js";
 import {
@@ -192,6 +193,10 @@ function main(): void {
     printUnreliableHooks(unreliableHooks);
     const review = reviewProposals(resolveBrainRoot(), "memory/MEM_REGISTRY.md", registryBefore, candidates, destinations);
     if (review === null) return;
+    printExhaustion(resolveBrainRoot(), "registry", registryBefore, candidates.length - review.length, review.length, {
+      completedAt: process.argv[process.argv.indexOf("--completed-at") + 1] && process.argv.includes("--completed-at")
+        ? process.argv[process.argv.indexOf("--completed-at") + 1] : undefined,
+    });
     if (candidates.length === 0) {
       console.log(
         `No promoted rows to propose (${alreadyPointer} already pointers out of ${totalDataRows} data rows, ` +

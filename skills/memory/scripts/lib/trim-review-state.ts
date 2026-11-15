@@ -211,7 +211,7 @@ export function reviewItems<T extends ReviewCandidate>(root: string, source: str
   const policyFiles = ["CLAUDE.md", "MAINTENANCE.md", "scripts/consolidation-retry.mjs",
     "skills/memory/SKILL.md", "skills/memory/consolidate/SKILL.md",
     ...["mem-learnings-trim.ts", "mem-registry-trim.ts", "lib/trim-review-state.ts", "lib/mem-id.ts",
-      "lib/brain-root.ts", "lib/citation-detect.ts", "lib/mem-learnings-trim-core.ts", "lib/mem-registry-trim-core.ts"]
+      "lib/brain-root.ts", "lib/citation-detect.ts", "mem-condense.ts", "lib/mem-condense-core.ts", "lib/trim-exhaustion.ts", "lib/mem-learnings-trim-core.ts", "lib/mem-registry-trim-core.ts"]
       .map(p => `skills/memory/scripts/${p}`)];
   const policyDigest = digest([
     ...policyFiles.map(p => [p, hash(fs.readFileSync(path.join(policyRoot, p)))]),
