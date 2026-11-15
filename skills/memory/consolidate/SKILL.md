@@ -780,6 +780,18 @@ Example entries:
 - `"[self-critique] The same team project facts are re-extracted each cycle because they're not being promoted to semantic memory"`
 - `"[self-critique] Consolidation is running but memory retrieval quality hasn't been validated — promoted facts may not be surfaced in practice"`
 
+### 11a. Detect and Escalate Own Rescue Refs
+
+Before generating reports, execute [MAINTENANCE.md — Rescue Branch Detection](../../../MAINTENANCE.md#rescue-branch-detection)
+(`$CLAUDE_CONFIG_DIR/MAINTENANCE.md` at runtime): run push-health and the own-ref
+query, evaluate each ref at seven elapsed days, and apply the durable per-ref
+ledger's submission/reconciliation rules with checkpoints before submission and
+after its result. Preserve `memory/rescue-ref-escalations.md` across trimming,
+archival, and removal of Step 10a's temporary progress ledger; carry changed
+ledger paths and detection/escalation outcomes into the reports. Follow the
+section's uncertainty rules if the remote query, age, ledger, or submission
+cannot be confirmed. Do not automatically resolve rescue refs.
+
 ### 12. Produce Report
 
 **Required top-level field — `operationType` (set FIRST, verify before commit):** The JSON report MUST contain `"operationType": "consolidation"` as a top-level field (NOT inside `selfAssessment`). This is the *single hard-required* field: the poller **permanently deletes** any report missing it — no retry, and the run never reaches the eval pipeline. After writing the JSON, grep the file for `"operationType"` and confirm (a) the value is exactly `consolidation` and (b) the match is a *top-level* key — same indentation as `"filesChanged"`/`"selfAssessment"`, not nested inside `selfAssessment` (a nested match still gets the report deleted). If absent or nested, fix it before committing.
