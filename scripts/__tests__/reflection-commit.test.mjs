@@ -229,6 +229,114 @@ test('final requires explicitly reviewed episodic and both maintenance reports',
   failed(f.run('final', { paths: reports }), /final requires reviewed report/)
 })
 
+for (const tracked of [false, true]) {
+  for (const missing of reports) {
+    test(`final rejects report removed before staging: ${missing}, ${tracked ? 'tracked' : 'untracked'}`, t => {
+      const f = fixture(t)
+      for (const path of reports) f.write(path, 'report\n')
+      if (tracked) {
+        f.git('add', ...reports)
+        f.git('commit', '-qm', 'existing reports')
+      }
+      userWork(f)
+      const before = f.snapshot()
+      const preload = join(f.dir, 'remove-report.cjs')
+      writeFileSync(preload, `
+const cp = require('node:child_process')
+const spawn = cp.spawnSync
+cp.spawnSync = function (command, args, options) {
+  if (command === 'git' && args.includes('read-tree')) require('node:fs').unlinkSync(${JSON.stringify(join(f.brain, missing))})
+  return spawn(command, args, options)
+}
+require('node:module').syncBuiltinESMExports()
+`)
+      const result = f.run('final', { paths: reports, deletionPreservation: { [missing]: 'Removal injected by regression test' } },
+        { NODE_OPTIONS: `--require=${JSON.stringify(preload)}` })
+      failed(result, /final requires staged regular report/)
+      assert.ok(result.stderr.includes(missing))
+      assert.equal(f.git('rev-parse', 'HEAD'), before.head)
+      assert.deepEqual(f.snapshot().index, before.index)
+      assertNoIndexScratch(f)
+    })
+  }
+}
+
+for (const boundary of ['checklist', 'final']) {
+  test(`index publication failure after update-ref restores HEAD with recovery diagnostics: ${boundary}`, t => {
+    const f = fixture(t)
+    userWork(f)
+    const paths = boundary === 'final' ? reports : [target]
+    for (const path of paths) f.write(path, 'reviewed reflection\n')
+    const before = f.snapshot()
+    const index = resolve(f.brain, f.git('rev-parse', '--git-path', 'index'))
+    const preload = join(f.dir, 'rename-failure.cjs')
+    writeFileSync(preload, `
+const fs = require('node:fs')
+const rename = fs.renameSync
+fs.renameSync = function (from, to) {
+  if (to === ${JSON.stringify(index)}) throw new Error('injected index publication failure')
+  return rename(from, to)
+}
+require('node:module').syncBuiltinESMExports()
+`)
+    const result = f.run(boundary, { paths }, { NODE_OPTIONS: `--require=${JSON.stringify(preload)}` })
+    failed(result, /injected index publication failure/)
+    const commit = result.stderr.match(/published commit ([0-9a-f]{40,64})/)?.[1]
+    assert.ok(commit, result.stderr)
+    assert.equal(f.git('rev-parse', `${commit}^`), before.head)
+    assert.match(result.stderr, /HEAD restored.*recovery:/)
+    assert.deepEqual(f.snapshot(), before)
+    assertNoIndexScratch(f)
+  })
+}
+
+test('index publication rollback rejects concurrent HEAD and retains the prepared index for recovery', t => {
+  const f = fixture(t, { worktree: true })
+  const user = userWork(f)
+  f.write(target, 'reviewed reflection\n')
+  const before = f.snapshot()
+  const index = resolve(f.brain, f.git('rev-parse', '--git-path', 'index'))
+  const preload = join(f.dir, 'concurrent-rename-failure.cjs')
+  writeFileSync(preload, `
+const fs = require('node:fs')
+const cp = require('node:child_process')
+const rename = fs.renameSync
+fs.renameSync = function (from, to) {
+  if (to === ${JSON.stringify(index)}) {
+    const git = args => {
+      const result = cp.spawnSync('git', ['-c', 'core.hooksPath=/dev/null', ...args],
+        { cwd: ${JSON.stringify(f.brain)}, env: process.env, encoding: 'utf8' })
+      if (result.status !== 0) throw new Error(result.stderr)
+      return result.stdout.trim()
+    }
+    const published = git(['rev-parse', 'HEAD'])
+    const concurrent = git(['commit-tree', 'HEAD^{tree}', '-p', published, '-m', 'concurrent commit'])
+    git(['update-ref', 'HEAD', concurrent, published])
+    throw new Error('injected index publication failure with concurrent HEAD')
+  }
+  return rename(from, to)
+}
+require('node:module').syncBuiltinESMExports()
+`)
+  const result = f.run('checklist', { paths: [target] }, { NODE_OPTIONS: `--require=${JSON.stringify(preload)}` })
+  failed(result, /HEAD rollback failed/)
+  const published = result.stderr.match(/published commit ([0-9a-f]{40,64})/)?.[1]
+  assert.ok(published, result.stderr)
+  assert.equal(f.git('rev-parse', 'HEAD^'), published, 'concurrent HEAD must survive the CAS rollback')
+  assert.equal(f.git('rev-parse', `${published}^`), before.head)
+  assert.ok(result.stderr.includes(`recovery: prepared index preserved at ${index}.lock`))
+  assert.deepEqual(f.snapshot().index, before.index)
+  assert.equal(existsSync(`${index}.lock`), true)
+  const prepared = (...args) => {
+    const r = spawnSync('git', args, { cwd: f.brain, env: { ...f.env, GIT_INDEX_FILE: `${index}.lock` }, encoding: 'utf8' })
+    assert.equal(r.status, 0, r.stderr)
+    return r.stdout.trim()
+  }
+  assert.equal(prepared('diff', '--cached', '--binary'), user.staged, 'prepared index must contain no reflection reversal')
+  assert.equal(prepared('diff', '--binary'), user.unstaged)
+  assert.deepEqual(readdirSync(dirname(index)).filter(name => name.startsWith('reflection-index-')), [])
+})
+
 test('missing deletion evidence stops the checkpoint without changing HEAD/index', t => {
   const f = fixture(t)
   rmSync(join(f.brain, old))

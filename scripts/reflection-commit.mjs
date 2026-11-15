@@ -73,6 +73,14 @@ try {
     if (stat(join(root, path)) || git(['ls-files', '-z', '--', path]).length) git(['add', '-A', '--', path])
   }
   for (const path of paths) safePath(path, boundary === 'final' ? reports : [])
+  if (boundary === 'final') {
+    const required = [episodic, ...reports]
+    const regularReports = new Set(git(['ls-files', '--stage', '-z', '--', ...required]).toString().split('\0')
+      .filter(entry => /^100(644|755) [0-9a-f]+ 0\t/.test(entry)).map(entry => entry.slice(entry.indexOf('\t') + 1)))
+    for (const path of required) {
+      if (!regularReports.has(path)) fail(`final requires staged regular report: ${path}`)
+    }
+  }
   if (paths.length && git(['diff', '--name-only', '-z', '--', ...paths]).length) fail('reviewed working files changed during staging')
   git(['diff', '--cached', '--check'])
   const fields = git(['diff', '--cached', '--name-status', '--no-renames', '-z', head]).toString().split('\0')
@@ -107,7 +115,19 @@ try {
     // Prepare the index before publishing. CAS rejects a concurrent HEAD change.
     renameSync(nextIndex, lock)
     git(['update-ref', '-m', subject, 'HEAD', commit, head])
-    renameSync(lock, index)
+    try {
+      renameSync(lock, index)
+    } catch (error) {
+      // Roll back only our own publication; never overwrite concurrent work.
+      try {
+        git(['update-ref', '-m', 'reflection index publication rollback', 'HEAD', head, commit])
+      } catch (rollbackError) {
+        const recoveryIndex = lock
+        lock = undefined // Retain the prepared index, including unrelated staging.
+        fail(`index publication failed after published commit ${commit}: ${error.message}; HEAD rollback failed: ${rollbackError.message}; recovery: prepared index preserved at ${recoveryIndex}; inspect HEAD and reconcile this index before further Git writes`)
+      }
+      fail(`index publication failed after published commit ${commit}: ${error.message}; HEAD restored to ${head}; recovery: original index retained; inspect the failure before retrying`)
+    }
     lock = undefined
     evidence.result = 'committed'
     evidence.commit = commit
