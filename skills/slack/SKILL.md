@@ -55,12 +55,19 @@ Gracefully handles `already_reacted`.
 
 Gracefully handles `no_reaction`.
 
-### read_thread — Read thread history
-- `limit`: Max messages (default: 20)
-- `channel`: Override channel
-- `thread_ts`: Override thread
+### read_thread — Read one page of thread history
+- `limit`: Max messages per page (default: 20); Slack may return fewer
+- `channel`: Override channel (default: current)
+- `thread_ts`: Override thread (default: current); timestamp string with 1–12 integer digits and 1–6 fractional digits
+- `cursor`: Opaque `next_cursor` from the previous response; pass unchanged, without whitespace or control characters
+- `oldest`, `latest`: Optional lower/upper timestamp strings, in the same format as `thread_ts`; excluded by default
+- `inclusive`: Boolean (default: `false`); include messages exactly at `oldest`/`latest`
 
-Returns messages with `user`, `text`, `ts`, `is_bot`, `blocks` (raw Block Kit array if present), `attachments` (legacy attachments if present), `files` (metadata + `url`; fetch content via `download_file`).
+Returns `ok`, `messages`, the resolved `channel` and `thread_ts`, boolean `has_more`, and `next_cursor` when nonempty. Messages retain `user`, `text`, `ts`, `is_bot`, `reactions` when present, `blocks` (raw Block Kit array if present), `attachments` (legacy attachments if present), and `files` (metadata + `url`; fetch content via `download_file`).
+
+Each call makes exactly one `conversations.replies` request and preserves Slack's chronological order (oldest first); the thread parent may appear. This is not a newest-messages view. To continue, call `read_thread` with `cursor` set to the returned `next_cursor`, using the returned `channel` and `thread_ts` and the same `oldest`, `latest`, and `inclusive` settings. For example, after a first call with `{"limit":20}`, continue with `{"channel":"C…","thread_ts":"1790081797.452189","limit":20,"cursor":"<returned next_cursor>"}` using the actual returned destination and cursor.
+
+**A message missing from one page does NOT prove it was not sent.** A short or empty page can still have a continuation cursor. `has_more: true` means the read is incomplete; a nonempty cursor also sets `has_more: true`. If Slack reports more messages without a cursor, the result is still incomplete. `has_more: false` with no cursor indicates the end of the requested range at read time, not a stable snapshot, an exhaustive read outside the supplied bounds, or proof of delivery/non-delivery. Messages can be added or deleted while paging. Continuation errors (including expired/invalid cursors, rate limits and access failures) return MCP `isError` with `ok: false`; they never establish completeness. The tool does no automatic traversal. Keep any caller-driven traversal bounded by pages/time and report incomplete coverage when stopped or failed.
 
 ### read_channel — Read channel history
 - `limit`: Max messages (default: 20)
