@@ -279,8 +279,9 @@ function computeThreadOverrideWarning({ explicitThreadTs, sessionThreadTs, trigg
     detail:
       `You passed thread_ts=${target}, but this session's current thread is ${session}, ` +
       `and the message that woke you does not reference ${target}. The reply landed in a thread the ` +
-      `user may not be reading. If that was unintentional, delete it with chat.delete(ts) and re-send without ` +
-      `thread_ts. Ignore this warning if the override was deliberate — a handoff into a thread you were recently ` +
+      `user may not be reading. If that was unintentional, report the stray post (channel ID and message ts) ` +
+      `to the human or via submit_feedback. No exposed delete tool exists; use this reporting path until one ships. ` +
+      `Ignore this warning if the override was deliberate — a handoff into a thread you were recently ` +
       `woken from is legitimate and is not yet detected here.`,
     session_thread_ts: session,
     override_thread_ts: target,
@@ -654,7 +655,7 @@ async function resolveDisplayName(userId) {
 const TOOLS = [
   {
     name: 'send_message',
-    description: 'Send a message to the Slack thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
+    description: 'Send a message to Slack; publishes immediately. Never post placeholder/probe messages to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. With no session thread context, an explicit channel and omitted thread_ts produces a channel-root post. For deliberate root posts use thread_ts: null; otherwise omit thread_ts to use the current thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -662,7 +663,7 @@ const TOOLS = [
         text: { type: 'string', description: 'Message text (supports Slack markdown: *bold*, _italic_, `code`, ```code blocks```, > quotes). AUTO-CONVERT: if this contains a GFM pipe-table and you provide NO `blocks`, the table is automatically moved into a `markdown` block (which renders columns) and this field becomes a plain-text notification fallback — the response echoes what changed under `transformed`. To opt out and control layout yourself, supply your own `blocks`. When you DO provide `blocks`, this text is prepended as a visible section block AND used as the notification/accessibility fallback. AUTO-REPAIR: a bare URL wrapped in bold as its own span (`*https://...*`) is auto-stripped to a plain URL — Slack mangles that pattern\'s link (see `transformed.bold_url_stripped`). A bare URL wrapped in bold ALONGSIDE other text (`*see https://...*`) is auto-wrapped as `*see <https://...>*` instead, since stripping would also lose the intended bold (see `transformed.bold_url_wrapped`). Prefer a bare URL or `<url|label>` yourself rather than relying on either repair.' },
         blocks: { type: 'array', description: 'Optional Block Kit blocks array (e.g. sections, actions, or a `markdown` block for tables/GFM). See https://api.slack.com/block-kit. Providing blocks OPTS OUT of table auto-convert — your blocks are sent as-is and `text` is prepended as a visible section block. Omit blocks to let a GFM table in `text` auto-convert.', items: { type: 'object' } },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
-        thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread). Pass null to send a top-level channel message even when in a thread session.' },
+        thread_ts: { type: ['string', 'null'], description: 'Thread timestamp (default: current thread, if available). Without session thread context, an explicit channel and omitted thread_ts posts at channel root. Use thread_ts: null for a deliberate root post even when in a thread session.' },
         modals: {
           type: 'array',
           description: 'Modal form definitions to attach as buttons. Each opens a Slack modal when clicked.',
@@ -854,7 +855,7 @@ const TOOLS = [
   },
   {
     name: 'upload_snippet',
-    description: 'Upload a code or text snippet to the thread. Use for long outputs, code blocks, logs, or structured data instead of pasting into a message.',
+    description: 'Upload a code or text snippet to the thread; publishes immediately. Never post placeholder/probe messages or uploads to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. Requires an explicit or current thread timestamp; deliberate root posts with thread_ts: null are supported only by send_message. Use for long outputs, code blocks, logs, or structured data instead of pasting into a message.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -863,7 +864,7 @@ const TOOLS = [
         content: { type: 'string', description: 'Snippet content' },
         filetype: { type: 'string', description: 'File type (default: "text"). Common: javascript, python, json, markdown, csv' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
-        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
+        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread; required explicitly when session thread context is absent). Root posts with thread_ts: null are supported only by send_message.' },
       },
       required: ['title', 'content'],
     },
@@ -882,7 +883,7 @@ const TOOLS = [
   },
   {
     name: 'upload_file',
-    description: 'Upload a local file to the Slack thread.',
+    description: 'Upload a local file to the Slack thread; publishes immediately, including any initial_comment. Never post placeholder/probe messages or uploads to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. Requires an explicit or current thread timestamp; deliberate root posts with thread_ts: null are supported only by send_message.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -891,7 +892,7 @@ const TOOLS = [
         title: { type: 'string', description: 'File title (default: filename)' },
         initial_comment: { type: 'string', description: 'Text message posted alongside the file (appears as one message instead of separate file + text)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
-        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
+        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread; required explicitly when session thread context is absent). Root posts with thread_ts: null are supported only by send_message.' },
       },
       required: ['filepath'],
     },
