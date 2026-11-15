@@ -150,7 +150,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 | `heartbeatStatus` | `object` | Self-reported state of the brain's `HEARTBEAT.md` file at consolidation time. `present` (bool): file exists. `nonEmpty` (bool): file contains at least one line that is not blank, a heading, an HTML comment, or a completed `- [x]` task. `itemCount` (int): number of unchecked task lines (`- [ ]`). Used by eval pipeline to track heartbeat deprecation progress (`teamvibeai/teamvibe.ai#102`). |
 | `reflectionStatus` | `object` | Self-reported reflection cadence, computed by `scripts/reflection-guard.sh` (poller-brain#157). `lastReflectionDate` (string \| null): date parsed from the newest `memory/episodic/reflection-*.md` filename, or `null` if none exists yet. `daysSinceReflection` (int \| null): days elapsed since that date. `overdueThresholdDays` (int): the threshold used, from `REFLECTION_OVERDUE_THRESHOLD_DAYS` (default 3). `isOverdue` (bool): normally `daysSinceReflection >= overdueThresholdDays` (or `true` when no reflection has ever run), **except** when `idleSkipped` is `true` — an idle-skip forces `isOverdue: false` even past the threshold (poller-brain#391). `nonConformingReflectionFiles` (int): count of `reflection-*.md` files that don't match the strict `reflection-YYYY-MM-DD.md` shape (e.g. a stray `reflection-template.md` or a split `reflection-2026-08-12-part2.md`) — lets the fleet metric distinguish "reflects, but under an unparseable filename" from "never reflected" when `lastReflectionDate` is `null`. `idleSkipped` (bool): `true` only when the guard skipped an otherwise-overdue reflection because no consolidation report since the last reflection promoted anything (`poller-brain#391`, mirrors `#168`'s consolidation idle-skip) — distinguishes "healthy idle, nothing new to reflect on" from "genuinely 3+ days lagging" for the fleet metric; always `false` when `isOverdue` is `true`. Used by the eval pipeline to track fleet-wide reflection lag. |
 | `pushHealth` | `object` | Required in every consolidation report: copy `PUSH_HEALTH_JSON` from `scripts/push-health.sh`. Local tracking-ref snapshot only, with no network calls: `branch`, configured full `upstream` ref (or null), `unpushedCommits` (HEAD commits absent from upstream, or null if missing), `upstreamRefMissing` (true when no upstream ref), `lastPushOkAt` (upstream tip commit ISO committer time, the last state known to reach the remote, not actual push time), `oldestUnpushedAt` (earliest unpushed ISO committer time, or null). Git errors yield all nulls plus `error`, exit 0. |
-| `rescueBranches` | `object` | Self-reported state of this brain's own outstanding git "rescue" branches — `conflict/<brainId>-<timestamp>` refs the platform pushes to `origin` when a brain's push hits a real (non-auto-rebasable) conflict, so no commits are lost (`teamvibeai/teamvibe.ai#247`). Populated by running `git ls-remote origin 'refs/heads/conflict/<own-brainId>-*'` — **not** `git branch -r --list`, which only sees already-fetched refs and misses branches pushed by the platform since the brain's last fetch. `count` (int): number of matching refs found for this brain's own `<brainId>` prefix (never another brain's — see "Rescue Branch Detection" below). `oldestAgeDays` (int \| null): age in days of the oldest match, derived from the `<timestamp>` segment embedded in its ref name; `null` when `count` is 0. `refs` (string[]): the matching ref names, so the aggregator/consumer can act on individual branches. Detection only — see "Rescue Branch Detection" for the non-goal of automated resolution and the cleanup convention. Used by the eval pipeline's fleet-wide "outstanding rescue branches" signal (count + oldest age). |
+| `rescueBranches` | `object` | Self-reported state of this brain's own outstanding git "rescue" branches — `conflict/<brainId>-<timestamp>` refs the platform pushes to `origin` when a brain's push hits a real (non-auto-rebasable) conflict, so no commits are lost (`teamvibeai/teamvibe.ai#247`). Populated by running `git ls-remote origin 'refs/heads/conflict/<own-brainId>-*'` — **not** `git branch -r --list`, which only sees already-fetched refs and misses branches pushed by the platform since the brain's last fetch. `count` (int): number of matching refs found for this brain's own `<brainId>` prefix (never another brain's — see "Rescue Branch Detection" below). `oldestAgeDays` (int \| null): age in days of the oldest match, derived from the `<timestamp>` segment embedded in its ref name; `null` when `count` is 0 or any matching timestamp is uncertain. `refs` (string[]): the full matching ref names. Omit this object if the remote query fails; record the failure in `observations` instead of reporting zero refs. Detection and required age-based escalation — see "Rescue Branch Detection" for the durable ledger, uncertainty handling, prohibition on automated resolution, and cleanup convention. Used by the eval pipeline's fleet-wide "outstanding rescue branches" signal (count + oldest age). |
 | `skills` | `object` | Output of `brain-skills report` (`data`): `counts` per state (`current`, `outdated`, `modified`, `waiting-upstream`, `own`, `not-discovered`) and `entries` with each skill's state and provenance. Run every maintenance session; see "Skills" below. |
 | `brainCommitSha` | `string` | Output of `git rev-parse HEAD` at the time of the report |
 
@@ -159,7 +159,7 @@ The JSON file is written at the same time as the markdown report, in the same co
 - The `brainCommitSha` MUST be obtained by running `git rev-parse HEAD` in the brain repo.
 - The `pushHealth` field is ALWAYS required in every consolidation report: run `bash "$CLAUDE_CONFIG_DIR/scripts/push-health.sh"` in the brain cwd and copy the `PUSH_HEALTH_JSON: {...}` object, including any `error`.
 - If `pushHealth.unpushedCommits > 50` or `pushHealth.upstreamRefMissing === true`, add an `observations` item.
-- The `rescueBranches` field MUST be obtained by running `git ls-remote origin 'refs/heads/conflict/<own-brainId>-*'` (not `git branch -r --list`) — populate it even when `count` is 0 (`refs: []`, `oldestAgeDays: null`). See "Rescue Branch Detection" below.
+- The `rescueBranches` field MUST be obtained by running `git ls-remote origin 'refs/heads/conflict/<own-brainId>-*'` (not `git branch -r --list`) — after a successful query, populate it even when `count` is 0 (`refs: []`, `oldestAgeDays: null`). On query failure, omit it and record uncertainty in `observations`; failure is not zero refs. See "Rescue Branch Detection" below.
 - The `selfAssessment` keys MUST match the criterion IDs defined in the Eval Criteria section below.
 - The JSON file MUST be valid JSON (no trailing commas, no comments).
 - Commit the JSON report in the same commit as the markdown report and the maintenance changes.
@@ -299,14 +299,12 @@ The goal is `HEARTBEAT.md` absent from every brain repo so the platform-side hea
 Tracks `teamvibeai/teamvibe.ai#247`. When a brain's git push hits a real
 (non-auto-rebasable) conflict, the platform pushes the local branch to
 `origin` as a `conflict/<brainId>-<timestamp>` ref before reporting the
-error, so no commits are lost. That rescue ref then still needs to be
-*resolved* — merged back or discarded — by a human or the brain itself;
-today this is fully ad-hoc and has no visibility over time. `rescueBranches`
-in the JSON report exists to make outstanding rescue refs visible instead of
-letting them silently rot on the remote forever.
+error, so no commits are lost. Outstanding rescue refs need visibility and,
+when stale, an accountable human triage request (`poller-brain#481`). Resolution
+remains a separate human/agent judgment call.
 
-During every consolidation, self-report this brain's own outstanding rescue
-branches:
+During every consolidation, detect, report, and evaluate escalation for this
+brain's own outstanding rescue refs before generating the reports:
 
 Before the rescue-branch steps, run `bash "$CLAUDE_CONFIG_DIR/scripts/push-health.sh"`
 in this brain's cwd and copy its `PUSH_HEALTH_JSON` object to `pushHealth` in
@@ -317,15 +315,20 @@ only local refs and never fetches or contacts GitHub.
    **not** `git branch -r --list`, which only sees refs already fetched into
    the local clone and would miss a branch the platform pushed since the
    brain's last fetch. `ls-remote` queries the remote directly regardless of
-   local clone state.
-2. Populate `rescueBranches` in the JSON report (always — even when no
-   matches are found):
+   local clone state. Check the exit status and retain only full refs with
+   this brain's exact prefix. A failed/unavailable query is **unknown, not zero
+   refs**: omit `rescueBranches`, record the failure/blocker in markdown and
+   JSON `observations`, and do not submit age-based feedback from that failed
+   query or a previous report. Preserve the escalation ledger unchanged and
+   continue other maintenance where existing guards permit.
+2. After a successful query, populate `rescueBranches` in the JSON report,
+   including when no matches are found:
 
    ```json
    "rescueBranches": {
      "count": <number of matching refs>,
-     "oldestAgeDays": <age in days of the oldest match, derived from the
-       ref name's <timestamp> segment; null if count is 0>,
+     "oldestAgeDays": <maximum valid ageDays; null if count is 0 or any
+       matching timestamp is uncertain>,
      "refs": [<matching ref names, e.g.
        "refs/heads/conflict/01K...-1788300000">]
    }
@@ -333,24 +336,96 @@ only local refs and never fetches or contacts GitHub.
 
    `<timestamp>` is **unix seconds** (not milliseconds) — matches how
    `teamvibeai/teamvibe.ai#247`'s `pushRescueRef` names the ref on the
-   platform side, so `oldestAgeDays` derivation agrees on both ends.
+   platform side. Capture `nowUnixSeconds` once for this query. For **each ref**,
+   parse the suffix after the exact own-brain prefix as nonnegative integer
+   Unix seconds and compute
+   `ageDays = floor((nowUnixSeconds - refUnixSeconds) / 86400)`.
+   Malformed, unrepresentable, or future timestamps are age uncertainty:
+   retain those refs in `count`/`refs`, set `oldestAgeDays` to `null`, and
+   describe the uncertainty in markdown and JSON `observations`. Do not guess,
+   clamp, or fabricate an age-based alert for those refs. Other valid own refs
+   still receive their individual evaluation.
 
-3. **Detection only.** Do not merge, cherry-pick, fast-forward, or delete a
-   rescue branch's content as part of this step. Automated resolution is an
-   explicit non-goal here — agreed too risky (silent behavior-drift
-   concern); resolving a rescue branch stays a separate human/agent
-   judgment call, informed by this signal but not triggered by it.
-4. **Cleanup convention:** whoever resolves a rescue branch (merges it back,
-   or confirms its content is safe to discard) is responsible for deleting
+3. **Escalate each eligible ref (required).** For every valid own ref with
+   `ageDays >= 7`, consult the durable ledger below and submit feedback if its
+   state permits a new attempt (no prior entry, or a retryable rejection).
+   Evaluate every ref independently: a previously escalated oldest ref must
+   not hide a second ref crossing seven days. Use
+   `submit_feedback` with `type: "improvement"`, `priority: "medium"`, and a
+   `context` beginning with the stable identifier
+   `rescue-ref:<compact JSON-encoded [workspaceId, brainId, fullRef]>` (no
+   whitespace between elements). Use that same identifier for all attempts and
+   reconciliation of this ref. Follow it with:
+
+   - workspace, channel, and brain identity;
+   - repository identity (owner/name or credential-free origin URL), and full ref;
+   - creation time from the ref (Unix seconds and UTC), query time, and `ageDays`;
+   - this cycle's planned markdown report path
+     (`reports/YYYY-MM-DD-memory-consolidation.md`, completed later this cycle);
+   - a request for central feedback triage to assign a **named human triage
+     owner** and record an explicit **retain / reconcile / discard** decision.
+
+   Do not invent an assignee or assume the feedback API assigns one. This runs
+   at consolidation time, so seven days is an eligibility threshold, not a
+   guaranteed notification deadline when maintenance is skipped or interrupted.
+4. **Persist per-ref delivery state.** Maintain
+   `memory/rescue-ref-escalations.md`, keyed by the exact tuple
+   `(workspaceId, brainId, fullRef)` above. Store identity, creation/query time,
+   observed age, report path, attempt time, submission status, and any returned
+   receipt/feedback ID or response evidence. Retain attempt outcomes and any
+   reconciliation evidence. Consult it every cycle; never use the previous JSON
+   report as the ledger because reports may be consumed/deleted. **Preserve all
+   entries and receipts across memory trimming and archival**, including when
+   a ref disappears; do not reset suppression by summarizing or moving entries
+   out of this lookup path. An unreadable or conflicting ledger blocks new
+   submissions until reconciled; report the blocker.
+
+   Apply the consolidation skill's **Checkpoint Rules** to ledger writes, using
+   `consolidation-commit.sh` with the cycle's original date and boundaries such
+   as `rescue escalation attempt` and `rescue escalation result`. Add the ledger
+   to cumulative `filesChanged` whenever changed.
+
+   - **Before calling the API**, write status `attempting` with the exact
+     context and attempt time, then checkpoint it successfully. If persistence
+     fails or a guard blocks the checkpoint, do not submit.
+   - **Immediately after the call**, persist and checkpoint the result with
+     returned receipt/ID if any (never invent one). A positive acknowledgement
+     confirms `submitted`; retain its response evidence even if no ID is
+     returned. **Confirmed success suppresses repeat submissions** for that
+     key while detection/reporting continues each cycle.
+   - A definite rejection that confirms non-acceptance becomes `rejected`, with
+     the reason. It is retryable at a later consolidation after the cause is
+     addressed, using the same identifier and a new persisted attempt; do not
+     retry in a loop this cycle.
+   - Timeout, crash during submission, lost acknowledgement/receipt, or an
+     `attempting` entry left by interruption means `uncertain`. Do not assume
+     failure or resubmit. Reconcile through central feedback triage using the
+     stable identifier; record its evidence/receipt before marking `submitted`,
+     or confirmed non-acceptance before allowing a later retry. If reconciliation
+     is unavailable, keep it blocked and report that fact. If the API succeeds
+     but the result checkpoint fails, preserve available evidence and treat the
+     durable attempt as uncertain on recovery.
+
+   Local bookkeeping **does not guarantee exactly-once delivery** across
+   concurrent clones or remote-success/local-write crashes. The current client
+   exposes neither server idempotency keys nor feedback lookup; stronger
+   guarantees require a separate API change. Do not invent a lookup endpoint.
+5. **Report outcomes; do not resolve automatically.** Record per-ref eligibility,
+   submission/suppression/rejection/uncertainty, receipts, and blockers in the
+   markdown report. Reuse JSON `decisions`, `observations`, `recommendations`,
+   and `processImprovements` as appropriate (respect their brevity limits); no
+   new report fields are needed. Escalation is required, but do not merge,
+   cherry-pick, fast-forward, or delete rescue refs/content during these steps.
+   A triage request permits no automatic resolution.
+6. **Cleanup convention:** whoever separately resolves a rescue branch (merges
+   it back, or confirms its content is safe to discard) is responsible for deleting
    the ref afterward (`git push origin --delete conflict/<brainId>-<timestamp>`).
-   Nothing else deletes it automatically, so `count` trending up over time
-   is itself a drift signal worth alerting on.
-5. **Scope:** only this brain's own `<brainId>` prefix — never another
+   Nothing in detection/escalation deletes it automatically.
+7. **Scope:** only this brain's own `<brainId>` prefix — never another
    brain's. Channel brain repos are private and distributed across customer
    GH orgs with no cross-brain repo read path (see CLAUDE.md "Channel Brain
    Isolation"); `rescueBranches` is one signal among others the eval
    pipeline aggregates into a fleet-wide "outstanding rescue branches"
-   metric (count + oldest age). That fleet aggregation, not any single
-   brain's own report, is what makes stale rescue branches visible — this
-   field alone does not require every brain's operator to inspect their own
-   report.
+   metric (count + oldest age). Own-brain escalation is required independently
+   of fleet aggregation. Follow the Reporting Convention; no unsolicited
+   Slack summary is needed.
