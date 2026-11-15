@@ -149,6 +149,42 @@ export function runTrimOwnershipTests(kind: Kind, assert: Assert): void {
       assert(fs.readFileSync(sourceFile, "utf8") === original && !fs.existsSync(path.join(root, "memory/episodic")),
         `${kind} #447 CLI: refused apply preserves source and creates no archive`);
     }
+
+    // review4: a Setext title can span several raw lines even when hidden
+    // from the AST. Put complete valid evidence BEFORE the hidden title so
+    // these exercise the independent whole-section veto through real apply.
+    for (const wrapper of ["comment", "fence"] as const) {
+      for (const position of ["first", "middle"] as const) {
+        const title = position === "first"
+          ? "Unrelated lesson [MEM-113]\nContinued unrelated title"
+          : "Unrelated lesson\nMiddle title [MEM-113]\nContinued unrelated title";
+        const hidden = wrapper === "comment" ? `<!--\n${title}\n----------------\n-->`
+          : `~~~md\n${title}\n----------------\n~~~`;
+        const label = `${kind} #447 review4 ${wrapper} Setext owner on ${position} line`;
+        const before = Buffer.from(source("MEM-53"));
+        fs.writeFileSync(sourceFile, before);
+        fs.writeFileSync(path.join(root, "memory/semantic/topic.md"),
+          `${heading("MEM-53")}\n${content("MEM-53")}\n\n${hidden}\n`);
+        const proposal = run([]);
+        const report = proposal.stdout.split("\n").find((line) => line.startsWith("ownershipRejections: "));
+        const rejections: OwnershipRejection[] = report ? JSON.parse(report.slice("ownershipRejections: ".length)) : [];
+        assert(proposal.status === 0 && rejections.some((r) => r.key === "MEM-53" &&
+          r.reason === "uncertain-section" && r.rawHeading?.owners.includes("MEM-113")),
+        `${label}: proposal reports uncertain foreign ownership`);
+        if (kind === "registry") {
+          const coverage = proposal.stdout.split("\n").find((line) => line.startsWith("contentCoverage: "));
+          assert(!!coverage && JSON.parse(coverage.slice("contentCoverage: ".length))
+            .some((c: { key: string; status: string }) => c.key === "MEM-53" && c.status === "rejected"),
+          `${label}: proposal marks coverage rejected`);
+        }
+        assert(fs.readFileSync(sourceFile).equals(before), `${label}: proposal preserves source bytes`);
+        const apply = run(["--apply", "--only", "MEM-53"]);
+        const unchanged = fs.readFileSync(sourceFile).equals(before);
+        assert(apply.status !== null && apply.status !== 0 && apply.stderr.includes("no write performed"),
+          `${label}: apply must refuse (actual exit=${apply.status}, source ${unchanged ? "preserved" : "REWRITTEN"})`);
+        assert(unchanged, `${label}: apply preserves source bytes (actual exit=${apply.status})`);
+      }
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
