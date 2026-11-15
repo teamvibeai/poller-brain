@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveBrainRoot } from "./lib/brain-root.js";
-import { buildCondensation, selectTopic, measure, sources, isCondensationDestination, type Mode } from "./lib/mem-condense-core.js";
+import { buildCondensation, selectTopic, measure, sources, isCondensationDestination, condensationDestination, type Mode } from "./lib/mem-condense-core.js";
 import { collectTrimDestinations, reviewItems, completedRejections } from "./lib/trim-review-state.js";
 import { findTrimCandidates } from "./lib/mem-registry-trim-core.js";
 import { findLearningsTrimCandidates } from "./lib/mem-learnings-trim-core.js";
@@ -88,24 +88,28 @@ function main() {
   console.log(`hot-path bytes: ${Buffer.byteLength(before)}; total corpus bytes (all memory/**/*.md): ${corpusBytes()}`);
   if (args.includes("--status")) return;
   if (!apply && budgetUsed()) { console.log("One-topic condensation budget already used this cycle; no further proposal. Keep any over-cap warning."); return; }
-  const { topic, refusals } = selectTopic(mode, before);
+  // Retain whether selection used per-key default paths. Replacing that policy
+  // with the chosen path at apply could make a different, longer-ID row eligible.
+  const options = { rule: apply ? plan.rule : value("--rule") ?? "", destination: apply ? plan.selectionDestination ?? undefined : value("--destination") };
+  const { topic, refusals } = selectTopic(mode, before, options);
   for (const refusal of refusals) console.log(`refused: ${refusal}`);
   if (!topic) {
     if (apply) throw new Error("no safe bounded topic to apply; proposal is stale or unsupported");
     console.log("No safe bounded topic; nothing changed. Keep the over-cap warning."); return;
   }
   if (!apply && status.pending && !args.includes("--exhausted")) throw new Error("normal trim proposals still need review; finish Steps 5d/9e first, then assert --exhausted after explicit review");
-  const destination = apply ? plan.destination : value("--destination") ?? `semantic/condensation-${topic.key.toLowerCase()}.md`;
+  const destination = condensationDestination(topic, options);
   // Validate path grammar before any filesystem access to the proposed destination.
   if (!isCondensationDestination(destination)) throw new Error("unsafe destination");
   if (safeMemory(`memory/${destination}`) !== null) throw new Error("destination must be a new dedicated file");
-  const rule = apply ? plan.rule : value("--rule") ?? "";
-  const result = buildCondensation(mode, before, topic, destination, rule);
+  const { rule } = options;
+  const result = buildCondensation(mode, before, topic, options);
   const baseline = git("rev-parse", "HEAD");
   const corpusBefore = corpusBytes();
   const metrics = { hotPathBefore: result.before, hotPathAfter: result.afterMetrics,
     corpusBefore, corpusAfter: corpusBefore - Buffer.byteLength(before) + Buffer.byteLength(result.after) + Buffer.byteLength(result.destinationText) };
   const prepared = { version: 1, mode, baseline, source, sourceDigest: hash(before), topic, destination, rule,
+    selectionDestination: options.destination ?? null,
     sourceAfter: result.after, destinationText: result.destinationText, metrics };
   if (!apply) {
     if (!value("--scratch")) throw new Error("--scratch required (outside the brain)");

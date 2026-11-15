@@ -9,6 +9,7 @@ import { collectTrimDestinations, reviewItems, recordRejection } from "./lib/tri
 import { findLearningsTrimCandidates } from "./lib/mem-learnings-trim-core.js";
 import { completedZeroCycles } from "./lib/trim-exhaustion.js";
 import { findTrimCandidates, parseRegistryCells } from "./lib/mem-registry-trim-core.js";
+import "./mem-condense-regression.test.js";
 const repo = process.cwd();
 const base = fs.mkdtempSync(path.join(os.tmpdir(), "condensation-530-"));
 let checks = 0;
@@ -31,8 +32,8 @@ function fixture(name: string, mode: Mode, text: string) {
 }
 try {
   for (const [mode, text] of [["learnings", learnings], ["registry", registry]] as [Mode, string][]) {
-    const topic = selectTopic(mode, text).topic!;
-    const result = buildCondensation(mode, text, topic, "procedural/release-safety.md", rule);
+    const topic = selectTopic(mode, text, { rule, destination: "procedural/release-safety.md" }).topic!;
+    const result = buildCondensation(mode, text, topic, { destination: "procedural/release-safety.md", rule });
     console.log(`${mode} ACTIVE fixture: hot bytes ${result.before.sizeBytes} -> ${result.afterMetrics.sizeBytes}; threshold ${result.before.threshold} -> ${result.afterMetrics.threshold}; overage ${result.before.overage} -> ${result.afterMetrics.overage}; corpus bytes ${Buffer.byteLength(text)} -> ${Buffer.byteLength(result.after) + Buffer.byteLength(result.destinationText)}`);
     check(result.afterMetrics.sizeBytes < result.before.sizeBytes && result.afterMetrics.overage < result.before.overage, `${mode}: strict byte and scaled overage reduction`);
     check(result.afterMetrics.entryCount === result.before.entryCount, `${mode}: entry count preserved`);
@@ -94,25 +95,25 @@ try {
     assert.deepEqual(f.snapshot(), afterOne);
   }
   const heading = "# Rules\r\n\r\n### Release safety\r\n\r\n" + body.repeat(10) + "\r\n(Source: release review, [MEM-1])\r\n\r\n";
-  const headingPlan = buildCondensation("learnings", heading, selectTopic("learnings", heading).topic!, "episodic/release.md", rule);
+  const headingPlan = buildCondensation("learnings", heading, selectTopic("learnings", heading, { rule }).topic!, { destination: "episodic/release.md", rule });
   check(headingPlan.after.includes("### [MEM-1] → see episodic/release.md:3"), "heading pointer preserves its level and resolves line 3");
-  check(headingPlan.destinationText.includes(selectTopic("learnings", heading).topic!.original), "CRLF original narrative preserved");
+  check(headingPlan.destinationText.includes(selectTopic("learnings", heading, { rule }).topic!.original), "CRLF original narrative preserved");
   const grouped = "# Rules\n\n- Keep both [MEM-1] and [MEM-2] together. " + body.repeat(10) + "\n";
-  check(selectTopic("learnings", grouped).topic === null && selectTopic("learnings", grouped).refusals.some(r => r.includes("multi-key")), "grouped entry refused and reported");
+  check(selectTopic("learnings", grouped, { rule }).topic === null && selectTopic("learnings", grouped, { rule }).refusals.some(r => r.includes("multi-key")), "grouped entry refused and reported");
   const linked = learnings.replaceAll("release review", "see semantic/other.md");
-  check(selectTopic("learnings", linked).topic === null, "linked narrative refused, preventing self/circular references");
+  check(selectTopic("learnings", linked, { rule }).topic === null, "linked narrative refused, preventing self/circular references");
   for (const destination of ["core/LEARNINGS.md", "../escape.md", "semantic/../bad.md", "episodic/archive/log.md", "episodic/consolidation-progress-2026-11-15.md"]) {
-    assert.throws(() => buildCondensation("learnings", learnings, selectTopic("learnings", learnings).topic!, destination, rule)); checks++;
+    assert.throws(() => buildCondensation("learnings", learnings, selectTopic("learnings", learnings, { rule }).topic!, { destination, rule })); checks++;
   }
   const tiny = "# Rules\n" + "preamble ".repeat(700) + "\n\n- Short rule [MEM-1]\n";
   const f = fixture("no-shrink", "learnings", tiny), before = f.snapshot();
   const noShrink = f.cli("--mode", "learnings", "--scratch", path.join(base, "no-shrink-plan"), "--rule", rule);
-  check(noShrink.status !== 0 && noShrink.stdout.includes("Keep the over-cap warning"), "no-shrink refuses with warning"); assert.deepEqual(f.snapshot(), before);
+  check(noShrink.status === 0 && noShrink.stdout.includes("Keep the over-cap warning"), "no-shrink refuses with warning"); assert.deepEqual(f.snapshot(), before);
   check(!fs.existsSync(path.join(base, "no-shrink-plan")), "unsafe proposal writes no scratch plan");
   const duplicate = registry + registry.split("\n").find(l => l.startsWith("| MEM-2 |")) + "\n";
-  check(selectTopic("registry", duplicate).refusals.some(r => r.includes("duplicate key")), "duplicate rows refused");
+  check(selectTopic("registry", duplicate, { rule }).refusals.some(r => r.includes("duplicate key")), "duplicate rows refused");
   const malformed = "| MEM-1 | ACTIVE | now | " + body + " | extra | too | many |\n";
-  check(selectTopic("registry", malformed).topic === null, "malformed table refused");
+  check(selectTopic("registry", malformed, { rule }).topic === null, "malformed table refused");
   // Original false-positive coverage contract remains fail closed.
   const row = `| MEM-1 | ACTIVE | now | ${body} |\n`;
   for (const destination of [`# Release safety\nIncidental comparison [MEM-1]: unrelated.\n`, `# Release safety\n[MEM-1] ${body.slice(0, 100)}\n`]) {

@@ -4,7 +4,7 @@
 import { distinctCitedKeysInLine } from "./citation-detect.js";
 import { MEM_ID_PATTERN, isMemId } from "./mem-id.js";
 import { learningsReviewSpans, findLearningsTrimCandidates, applyLearningsTrimCandidates,
-  verifyLearningsTrimStats, type LearningsTrimCandidate, countLearningsEntries } from "./mem-learnings-trim-core.js";
+  verifyLearningsTrimStats, pointerFor, type LearningsTrimCandidate, countLearningsEntries } from "./mem-learnings-trim-core.js";
 import { parseRegistryCells, isPointerDescription, findTrimCandidates, applyTrimCandidates,
   verifyTrimStats } from "./mem-registry-trim-core.js";
 import { evaluate, evaluateRegistry, LEARNINGS_OVERHEAD_BYTES, LEARNINGS_PER_ENTRY_BYTES } from "./mem-scaled-threshold-core.js";
@@ -21,7 +21,32 @@ export const measure = (mode: Mode, text: string) => {
   return { ...result, overage: Math.max(0, result.sizeBytes - result.threshold) };
 };
 export interface Topic { key: string; start: number; end: number; original: string; description?: string }
-export function selectTopic(mode: Mode, text: string): { topic: Topic | null; refusals: string[] } {
+export interface CondensationOptions { rule: string; destination?: string }
+export const condensationDestination = (topic: Topic, options: CondensationOptions) =>
+  options.destination ?? `semantic/condensation-${topic.key.toLowerCase()}.md`;
+function learningsCandidate(topic: Topic, options: CondensationOptions): LearningsTrimCandidate {
+  return { key: topic.key, format: topic.original.startsWith("-") ? "bullet" : "heading",
+    entryStartLine: topic.start, entryEndLine: topic.end, file: condensationDestination(topic, options), line: 3,
+    lineText: `[${topic.key}] ${options.rule}`, hook: options.rule };
+}
+function pointerText(mode: Mode, topic: Topic, options: CondensationOptions): string {
+  const candidate = learningsCandidate(topic, options);
+  return mode === "learnings" ? pointerFor(topic.original, candidate) :
+    applyTrimCandidates(topic.original, [candidate]).registry;
+}
+function usesExternalReference(lines: string[], topic: Topic): boolean {
+  // Conservative label scan, including bracketed prose/code and definitions in
+  // containers. Do not move/copy definitions or assume a renderer's context.
+  const normalize = (label: string) => label.replace(/\\(.)/g, "$1").trim().replace(/\s+/gu, " ").toUpperCase();
+  const external = new Set<string>();
+  for (const outside of [lines.slice(0, topic.start - 1), lines.slice(topic.end)]) {
+    for (const match of outside.join("\n").matchAll(/\[((?:\\[\s\S]|[^\[\]\\])+)\]:/g)) external.add(normalize(match[1]));
+  }
+  // The second label catches full references; the first catches collapsed and
+  // shortcut references. A bare [MEM-ID] is harmless without a definition.
+  return [...topic.original.matchAll(/\[((?:\\[\s\S]|[^\[\]\\])+)\]/g)].some(m => external.has(normalize(m[1])));
+}
+export function selectTopic(mode: Mode, text: string, options: CondensationOptions): { topic: Topic | null; refusals: string[] } {
   const lines = text.split("\n");
   const refusals: string[] = [];
   let topics: Topic[];
@@ -47,18 +72,21 @@ export function selectTopic(mode: Mode, text: string): { topic: Topic | null; re
     const occurrences = mode === "registry" ? lines.filter(l => l.match(new RegExp(String.raw`^\|\s*${t.key}\s*\|`))).length :
       (distinctCitedKeysInLine([...lines.slice(0, t.start - 1), ...lines.slice(t.end)].join("\n")).includes(t.key) ? 2 : 1);
     const reason = occurrences !== 1 ? "duplicate key" : Buffer.byteLength(t.original) > MAX_TOPIC_BYTES ? "topic exceeds 8192B bound" :
-      /\.md\b|\]\(|\[\[|href\s*=/i.test(t.original) ? "linked narrative needs separate pointer review" : null;
+      /\.md\b|\]\(|\[\[|href\s*=/i.test(t.original) ? "linked narrative needs separate pointer review" :
+      usesExternalReference(lines, t) ? "reference link definition outside topic needs separate pointer review" :
+      Buffer.byteLength(pointerText(mode, t, options)) >= Buffer.byteLength(t.original) ? "pointer cannot shrink topic" : null;
     if (reason) refusals.push(`${t.key}: ${reason}`);
     return !reason;
   });
   eligible.sort((a, b) => Buffer.byteLength(a.original) - Buffer.byteLength(b.original) || a.start - b.start);
   return { topic: eligible[0] ?? null, refusals };
 }
-export function buildCondensation(mode: Mode, before: string, topic: Topic, destination: string, rule: string) {
+export function buildCondensation(mode: Mode, before: string, topic: Topic, options: CondensationOptions) {
+  const destination = condensationDestination(topic, options), { rule } = options;
   if (!isMemId(topic.key) || !isCondensationDestination(destination)) throw new Error("unsafe destination; use a new dedicated tier file");
   if (rule !== rule.trim() || Buffer.byteLength(rule) < 20 || Buffer.byteLength(rule) > 240 ||
       /[\x00-\x1f\x7f|<>\[\]`#]|\.md\b|\bMEM-/i.test(rule)) throw new Error("provide one actionable rule, 20–240B, without links, MEM IDs or markup");
-  const selected = selectTopic(mode, before).topic;
+  const selected = selectTopic(mode, before, options).topic;
   if (!selected || JSON.stringify(selected) !== JSON.stringify(topic)) throw new Error("topic is stale or is not the one bounded selection");
   const pre = measure(mode, before);
   if (!pre.overCap) throw new Error("source is under its scaled cap; fallback not needed");
@@ -79,10 +107,7 @@ export function buildCondensation(mode: Mode, before: string, topic: Topic, dest
     const newCells = parseRegistryCells(after.split("\n")[topic.start - 1])!;
     if ([1, 2, 3].some(i => oldCells[i] !== newCells[i])) throw new Error("registry lifecycle cells changed");
   } else {
-    const first = topic.original.split("\n")[0];
-    const candidate: LearningsTrimCandidate = { key: topic.key, format: first.startsWith("-") ? "bullet" : "heading",
-      entryStartLine: topic.start, entryEndLine: topic.end, file: destination, line: 3,
-      lineText: `[${topic.key}] ${rule}`, hook: rule };
+    const candidate = learningsCandidate(topic, options);
     const result = applyLearningsTrimCandidates(before, [candidate]);
     verifyLearningsTrimStats(result.stats);
     after = result.learnings;
