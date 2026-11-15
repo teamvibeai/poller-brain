@@ -15,17 +15,42 @@ Before any heartbeat, scheduled maintenance, or reflection action (including Bas
 
 ### 0. Previous Recommendations Review
 
-Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Read its `recommendations` array.
+Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Read its recommendations (the `recommendations` array in JSON) before writing the current draft. Record `review_mode` for the check below: `required` when prior recommendations exist, `first-run` when no prior reflection exists, or `empty-prior` when the prior recommendations list is explicitly empty. An unreadable prior report or an unknown/missing list is not an empty list; resolve it or report `[blocked]`.
 
-**If no prior reflection exists:** Add to `processImprovements`: `"[self-critique] No prior reflection found — first reflection run; no prior recommendations to review."` This satisfies the `previous-recommendations-reviewed` criterion.
+**If no prior reflection exists:** Add to `processImprovements`: `"[self-critique] No prior reflection found — first reflection run; no prior recommendations to review."` This satisfies the `previous-recommendations-reviewed` criterion. In the episodic report's `## Previous Recommendations Review` section, write exactly `- Not applicable: first reflection run; no prior recommendations to review.`
 
-**If a prior reflection exists:** For each recommendation in that report, determine its status: `implemented`, `partially addressed`, or `pending`. Add **at least one entry** to `processImprovements` that names the specific recommendation text and its status. Required format:
+**If the prior recommendations list is empty:** Add `"[self-critique] Prior reflection has an empty recommendations list; no prior recommendations to review."` to `processImprovements`. In the same episodic section, write exactly `- Not applicable: prior recommendations list is empty.` Neither exemption needs a fabricated lifecycle status.
+
+**If prior recommendations exist:** Name every recommendation in the episodic review section and assign one lifecycle status with reason/evidence:
+
+| Lifecycle status | Reporting meaning |
+| --- | --- |
+| `Closed` | The recommendation has been completed, with evidence that its success condition was met. |
+| `Moot` | The recommendation no longer applies, with evidence explaining why. |
+| `Pending` | The recommendation remains actionable and unfinished, without a committed deadline. |
+| `Pending+Deadline` | The recommendation remains unfinished with an explicit deadline; record that date and the next action. |
+| `Failure-Mode` | Follow-through has become a recurring or systemic failure; name the observed failure and supporting evidence. |
+
+Consult the brain's recommendation lifecycle procedure, if available, for closure and transition rules; its absence does not disable this vocabulary check. Do not invent automatic transitions, deadlines, or recurrence thresholds from these labels.
+
+Also retain the legacy `implemented`, `partially addressed`, or `pending` summary in JSON. Add **at least one entry** to `processImprovements` naming a specific prior recommendation, its legacy status, and its lifecycle status. Required format:
 
 ```
-[self-critique] Prior rec: "<recommendation text>" — status: implemented/partially addressed/pending. <one-sentence reason>.
+[self-critique] Prior rec: "<recommendation text>" — status: <implemented/partially addressed/pending>; lifecycle: <label>; <reason>.
 ```
 
-All prior-recommendation review entries MUST appear in `processImprovements`. The `previous-recommendations-reviewed` eval criterion passes only when the report explicitly names at least one prior recommendation and states its status. A generic "reviewed prior recommendations" without naming one fails the criterion.
+Keep named-recommendation JSON entries and the legacy summary; assess lifecycle and legacy status from evidence rather than assuming a one-to-one mapping. Keep `processImprovements` within MAINTENANCE.md's **five-entry cap**, including the required prefixes; use Markdown for the complete per-recommendation review. Keep both reports consistent without adding evaluator keys. The `previous-recommendations-reviewed` eval criterion still requires a named prior recommendation and legacy status; generic "reviewed prior recommendations" fails.
+
+**Mechanical sub-check (required after writing the current episodic report, before finalization):** Run the grep-based helper with the mode determined above, substituting the current report date:
+
+```bash
+bash "$CLAUDE_CONFIG_DIR/skills/memory/reflect/scripts/check-previous-recommendations.sh" \
+  "memory/episodic/reflection-YYYY-MM-DD.md" "$review_mode"
+```
+
+The helper extracts only `## Previous Recommendations Review` and requires at least one standalone `- Status: <label>` field in `required` mode. Its `grep -E` expression matches exact, case-sensitive tokens, including escaped `Pending\+Deadline`; vocabulary lists, fenced examples, labels elsewhere, partial tokens, and legacy lowercase `pending` do not pass. Exempt modes require their exact not-applicable line in that section. A missing/duplicate section, missing/unreadable report, or command error fails even in exempt modes. The check verifies presence, not completeness or substantive closure: still review every recommendation and its evidence.
+
+On failure, repair the current draft and rerun the same check. If repair is blocked, put a visible `[blocked] Previous Recommendations Review validation failed: <reason>` in the maintenance Markdown and a terse `[blocked]` entry in `processImprovements`, respecting the five-entry cap; set `selfAssessment.previous-recommendations-reviewed` to `false` and do not claim validation passed. Do not edit past reports.
 
 ### 1. Staleness Check
 
@@ -102,12 +127,19 @@ Write a reflection report to `memory/episodic/reflection-YYYY-MM-DD.md`:
 - Gaps identified: N
 - Files pruned/archived: N
 
+## Previous Recommendations Review
+### Prior recommendation: <specific recommendation text>
+- Status: <one lifecycle label from Step 0>
+- Reason/evidence: <what happened, with a file/cycle reference; deadline and next action if applicable>
+
 ## Changes Made
 - [list of specific changes]
 
 ## Gaps to Fill
 - [list of identified gaps for future capture]
 ```
+
+Always include the canonical review section. Repeat its recommendation block for every prior recommendation; for a first run or an empty prior list, replace the blocks with the exact not-applicable line from Step 0. After writing this file, run Step 0's mechanical sub-check before finalizing the maintenance reports or committing.
 
 ### 2. Maintenance reports (required)
 
