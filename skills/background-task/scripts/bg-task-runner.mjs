@@ -4,8 +4,8 @@
 //
 //   bg-task-runner.mjs <private-spec-path>
 //
-// Contract: run the command with a TTL, coalescing its output into interim checkpoints
-// dropped into the launching thread's .inbox/, then drop exactly one terminal message when
+// Contract: run the command with a TTL, coalescing its output into opt-in interim
+// checkpoints in the launching thread's .inbox/, then drop exactly one terminal message when
 // it ends. Completion is EXPLICIT (this process reaching the terminal drop) — never
 // inferred from the command producing output, because a task may legitimately sit silent
 // for hours waiting on something external (an approval, an auth confirmation, a remote job).
@@ -24,15 +24,15 @@ const KILL_GRACE_MS = 5000
 const TIMEOUT_RC = 124 // same code GNU `timeout` uses, so docs and habits carry over
 const INBOX_DROP_ATTEMPTS = 5
 
-// clamp(ttl/8, floor, ceiling): a 2-minute task gets no checkpoint at all (only the
-// terminal drop); an hour-long task gets ~8 regardless of how long it actually runs.
+// TTL-derived ceiling for opt-in eager checkpoints: clamp(ttl/8, floor, ceiling).
+// Default quiet mode suppresses automatic checkpoints regardless of task duration.
 // Overridable only for tests — production always uses the 60s/600s bounds. Derived from
 // --ttl, the one number the launching agent already had to estimate honestly, rather than
 // a constant invented for this feature: an earlier "20-30s" guess for this same feature was
 // rejected on review for having no grounding (poller-brain#231).
 const MIN_FLUSH_SEC = Number(process.env.BG_TASK_MIN_FLUSH_SEC || 60)
 const MAX_FLUSH_SEC = Number(process.env.BG_TASK_MAX_FLUSH_SEC || 600)
-// A REAL debounce, not just a periodic flush (Jakub, poller-brain#231/#236, 2026-07-30):
+// Opt-in eager debounce, not just a periodic flush (Jakub, poller-brain#231/#236, 2026-07-30):
 // once new output goes quiet for QUIET_MS, flush immediately — that is what gets a device-
 // auth URL or a confirmation prompt out fast, because a command almost always pauses right
 // after printing something that needs a reply. 1500ms sits inside Jakub's own 1-2s range
@@ -52,8 +52,8 @@ const CHECK_INTERVAL_MS = Number(process.env.BG_TASK_CHECK_INTERVAL_MS || 300)
 // forced checkpoint at all (only the terminal drop), an hour-long task gets ~8 regardless
 // of how long it actually runs. Derived from --ttl — the one number the launching agent
 // already had to estimate honestly — rather than a constant invented for this feature
-// (poller-brain#231, MEM-182). Reused as the DEFAULT checkpoint cadence as of #489 (via
-// forceFlushMs in main()), not just as --eager-checkpoints' ceiling.
+// (poller-brain#231, MEM-182). Also retained for the legacy periodic fallback; current
+// launches default to quiet in bg-task.mjs (#549).
 export function flushIntervalSec(ttl) {
   return Math.min(MAX_FLUSH_SEC, Math.max(MIN_FLUSH_SEC, ttl / 8))
 }
@@ -402,9 +402,8 @@ async function main() {
     child.stdin.end(input)
   }
 
-  // --- interim checkpoints: a real debounce (flush after QUIET_MS of silence) with a
-  // ceiling for output that never goes quiet (flush at least every flushIntervalSec(ttl)),
-  // and never for an empty checkpoint. ---
+  // --- opt-in interim checkpoints: notify matches, explicit interval, or eager debounce
+  // with a TTL-derived ceiling. Default quiet mode permits only notify matches. ---
   let lastFlushOffset = 0
   let lastFlushAt = startedAt
   let lastWriteAt = startedAt   // last time the log actually grew
@@ -460,20 +459,13 @@ async function main() {
       return
     }
 
-    // --quiet-checkpoints (poller-brain#403): gate ONLY the quiet/ceiling/default-cadence
-    // triggers below, not flush() itself and not the terminal drop (that path is entirely
-    // separate). A command with frequent low-value output otherwise gets a checkpoint per
-    // burst — this opts out of that, leaving --notify-on (if given) and the terminal drop
-    // as the only wake sources.
+    // Quiet mode (default as of #549, or explicit --quiet-checkpoints) gates only the
+    // automatic triggers below, leaving notify matches above and the separate terminal
+    // path unaffected. The launcher derives effective quiet after validating mode flags.
     if (quietCheckpointsOn) return
 
-    // --eager-checkpoints (poller-brain#489): opt back into the pre-#489 default — flush
-    // on either a quiet period (QUIET_MS of silence) or the ttl-derived ceiling, whichever
-    // comes first. Right for a caller who actually reads along as the task runs. This is
-    // no longer the default because a wrapper script that polls-and-echoes on a steady
-    // short cadence (e.g. every ~20s) never goes quiet long enough for QUIET_MS to matter,
-    // so the ceiling — tuned as a rare backstop, not a cadence — ends up firing on nearly
-    // every burst instead (Jakub, poller-brain#489).
+    // --eager-checkpoints opts into a quiet-period debounce or TTL-derived ceiling,
+    // whichever comes first, for a caller who reads along as the task runs.
     if (eagerCheckpointsOn) {
       const quiet = Date.now() - lastWriteAt >= QUIET_MS
       const overCeiling = Date.now() - lastFlushAt >= forceFlushMs
@@ -481,13 +473,8 @@ async function main() {
       return
     }
 
-    // Default as of poller-brain#489: the same ttl-derived cadence --checkpoint-interval
-    // uses explicitly (flushIntervalSec(ttl) via forceFlushMs), just without requiring the
-    // caller to pass the flag. Checkpoints are primarily useful for tasks that surface key
-    // information via stdout mid-run — for the common "just wait until it's done" case,
-    // only the terminal message matters, so a slower periodic cadence beats the old
-    // debounce-on-every-burst behavior. --notify-on above remains the fast-signal escape
-    // hatch for output that can't wait; --eager-checkpoints restores the old default.
+    // Legacy periodic fallback for specs without effective quiet mode. Current launches
+    // select quiet, interval, or eager explicitly in bg-task.mjs and never reach this.
     if (Date.now() - lastFlushAt >= forceFlushMs) flush()
   }, CHECK_INTERVAL_MS)
 

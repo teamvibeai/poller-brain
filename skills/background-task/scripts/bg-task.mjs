@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bg-task.mjs — launch a long-running command detached from the current agent session
-// and get woken up in this thread when it ends (plus interim checkpoints while it runs).
+// and get woken up in this thread when it ends (interim checkpoints are opt-in).
 //
 //   node bg-task.mjs --name build --ttl 1800 -- npm run build
 //
@@ -47,32 +47,15 @@ export function parseArgs(argv, env = {}) {
     notifyOn: '',
     note: '',
     stdinFile: '',
-    // Suppresses the quiet-period and ceiling checkpoint triggers (see bg-task-runner.mjs)
-    // — opt-in, because losing interim visibility is a real cost, right for a known
-    // high-frequency-output task where only completion (or a --notify-on match) matters.
-    // See poller-brain#403.
+    // During parsing this tracks only explicit --quiet-checkpoints for conflict checks.
+    // Effective quiet mode is derived AFTER all explicit mode flags are validated (#549).
     quietCheckpoints: false,
-    // Replaces BOTH the quiet-debounce and the ttl-derived ceiling with a single "flush no
-    // more often than every N seconds" trigger — for a task with predictable short gaps
-    // between lines (the debounce always wins there, long before the ceiling could), where
-    // periodic status beats either the eager default or --quiet-checkpoints' total
-    // silence. 0 means "not set". See poller-brain#403 (round 2, Jakub).
+    // Opt into periodic checkpoints, no more often than every N seconds. 0 means unset.
     checkpointInterval: 0,
-    // Restores the pre-#489 default (quiet-period debounce + ttl-derived ceiling, both
-    // eager) — opt-in, because losing that fast interim visibility is a real cost, right
-    // for a task whose caller actually reads along as it runs. The DEFAULT as of #489 is
-    // instead a plain ttl-derived periodic cadence (see bg-task-runner.mjs's
-    // flushIntervalSec): a wrapper script that just polls-and-echoes every ~20s for a
-    // 30-minute wait was spamming a checkpoint on nearly every burst under the old eager
-    // default, for tasks where only the terminal result actually mattered (Jakub,
-    // poller-brain#489).
+    // Opt into quiet-period debounce + TTL-derived ceiling checkpoints.
     eagerCheckpoints: false,
-    // Separate from checkpointInterval's own truthiness on purpose (poller-brain#403 round
-    // 3, DevGuru): `--checkpoint-interval ""` (an unset shell var expanding to nothing,
-    // e.g. `--checkpoint-interval "$INTERVAL"`) consumes the flag with an empty string,
-    // which is falsy — checking `opts.checkpointInterval` alone would silently skip BOTH
-    // the validation below and the mutual-exclusion check, and fall through to the runner
-    // as "not set", reverting to the eager default with zero indication anything was wrong.
+    // Track presence separately: an explicitly empty interval must still be validated
+    // and rejected in mode conflicts, rather than silently treated as unset.
     checkpointIntervalGiven: false,
     cmd: [],
   }
@@ -135,7 +118,7 @@ export function parseArgs(argv, env = {}) {
   }
   // Checked against checkpointIntervalGiven, not opts.checkpointInterval's truthiness — see
   // the field's own comment above: an explicitly-passed empty value must still hit this
-  // validation, not silently read as "not set" and fall through to the eager default.
+  // validation, not silently read as "not set" and accepted as default quiet mode.
   if (opts.checkpointIntervalGiven) {
     // Same integer-string check as --ttl above, for consistency. 0 and negative are
     // rejected outright (a "flush every 0 seconds" interval is not a periodic trigger,
@@ -154,6 +137,10 @@ export function parseArgs(argv, env = {}) {
       }
     }
   }
+  // Omitted mode flags mean no automatic interim wakes; notify matches stay orthogonal.
+  // Derive this only after validation so implicit quiet does not conflict with opt-ins,
+  // and explicit conflicting or invalid flags cannot be silently accepted as quiet.
+  opts.quietCheckpoints = !(opts.checkpointIntervalGiven || opts.eagerCheckpoints)
   return { opts }
 }
 
@@ -436,5 +423,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   console.log(`bg-task launched: name=${opts.name} id=${id} ttl=${opts.ttl}s`)
   console.log(`dir=${dir} (status, output.log, cmd)`)
-  console.log('You will get interim checkpoints and a final result in this thread. Do not poll — end your turn.')
+  console.log('You will get a final result in this thread. Interim checkpoints are opt-in via --notify-on, --checkpoint-interval, or --eager-checkpoints. Do not poll — end your turn.')
 }
