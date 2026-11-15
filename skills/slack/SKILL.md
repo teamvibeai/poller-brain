@@ -7,14 +7,26 @@ description: |
 
 # Slack Communication Skill
 
-All Slack tools are available as MCP tools (prefixed `mcp__slack__`). Channel and thread context are automatically configured.
+All Slack tools are available as MCP tools (prefixed `mcp__slack__`). Channel and thread defaults come from the session when available; sessions from other origins (such as email) may have neither.
+
+`send_message`, `upload_snippet`, and `upload_file` publish immediately, including an upload's `initial_comment`. Never post placeholder/probe messages or uploads to discover or validate a destination.
+
+For ordinary Slack replies, omit `thread_ts` to use the current thread. With no session thread context, `send_message` with an explicit `channel` and omitted `thread_ts` creates a channel-root post. Use `thread_ts: null` for a deliberate root post, including from a thread session. Upload tools require an explicit or current thread timestamp and do not support `thread_ts: null`.
+
+## Finding a channel
+
+1. For an unknown channel name, call `list_channels` first. It returns conversations this bot belongs to, excludes archived channels, and caps results at 200 by default (maximum `limit: 1000`). Absence from results does not mean absence from the workspace; the list may be incomplete or the bot may lack access. You can request a higher limit up to 1000, but must not treat capped results as exhaustive.
+2. Confirm the selected ID with `read_channel_info` (`channel: "C…"`), checking its name, topic/purpose, and archive status before sending.
+3. If the destination is missing, ambiguous, inaccessible, archived, or incompletely discovered, stop and report the unresolved destination to the human or via `submit_feedback`. Never guess a name or ID, choose a nearby channel, or send a probe.
+
+If a stray post has already been published, report its channel ID and message timestamp to the human or via `submit_feedback`. No exposed delete tool exists; use this reporting path until one ships.
 
 ## Tools
 
 ### send_message — Send a message (primary response method)
 - `text` (required): Message text with Slack markdown
 - `channel`: Override channel (default: current)
-- `thread_ts`: Override thread (default: current)
+- `thread_ts`: Override thread (default: current, if available); `null` for a deliberate channel-root post
 
 ### add_reaction — Add emoji reaction
 - `name` (required): Emoji name without colons (e.g., `eyes`, `white_check_mark`)
@@ -47,6 +59,8 @@ Returns messages with `user`, `text`, `ts`, `is_bot`, `thread_ts`, `reply_count`
 - `title` (required): Snippet title
 - `content` (required): Snippet content
 - `filetype`: File type (default: `text`). Common: `javascript`, `python`, `json`, `markdown`, `csv`
+- `channel`: Override channel
+- `thread_ts`: Override thread (default: current; required explicitly without session thread context)
 
 Use for sharing code blocks, logs, or long text instead of pasting into a message.
 
@@ -59,7 +73,7 @@ Returns file content as text.
 - `filepath` (required): Absolute path to the local file
 - `title`: File title (default: filename)
 - `channel`: Override channel
-- `thread_ts`: Override thread
+- `thread_ts`: Override thread (default: current; required explicitly without session thread context)
 
 ### set_status — Set typing indicator
 - `text` (required): Status text (e.g., "Searching..."). Empty string clears.

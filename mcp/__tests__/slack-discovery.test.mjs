@@ -64,6 +64,33 @@ async function withMockedResponses(responses, fn) {
   ok('list_channels has no required fields (all optional)', !lc.inputSchema.required)
 }
 
+// Publishing tools must direct discovery through read-only tools, never posts
+// (poller-brain#565). These descriptions are shown to the agent before a call.
+{
+  for (const name of ['send_message', 'upload_snippet', 'upload_file']) {
+    const tool = TOOLS.find((t) => t.name === name)
+    const description = tool.description
+    ok(`${name} warns that publication is immediate`, description.includes('publishes immediately'))
+    ok(`${name} forbids placeholder/probe discovery posts`,
+      description.includes('Never post placeholder/probe messages') && description.includes('discover a destination'))
+    ok(`${name} requires listing then confirming the selected ID`,
+      description.includes('call list_channels first, then confirm the selected ID with read_channel_info'))
+    ok(`${name} stops on unresolved destinations without guessing`,
+      description.includes('missing, ambiguous, inaccessible, or discovery is incomplete') &&
+      description.includes('stop and report it; never guess'))
+
+    if (name === 'send_message') {
+      ok('send_message explains root posting without session thread context',
+        description.includes('With no session thread context, an explicit channel and omitted thread_ts produces a channel-root post'))
+      ok('send_message documents deliberate root posts', description.includes('For deliberate root posts use thread_ts: null'))
+    } else {
+      ok(`${name} requires a thread and reserves null root posts for send_message`,
+        description.includes('Requires an explicit or current thread timestamp') &&
+        description.includes('thread_ts: null are supported only by send_message'))
+    }
+  }
+}
+
 // --- list_channels ---
 
 // 1) filters to is_member !== false, keeps im/mpim without the field at all,

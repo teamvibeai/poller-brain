@@ -49,7 +49,11 @@ const BRIEFING = '1780637428.794809' // thread recalled from memory
   ok('#1 warning fires on unreferenced foreign thread_ts', w !== null)
   ok('#1 code is thread_ts_override_unjustified', w?.code === 'thread_ts_override_unjustified')
   ok('#1 carries both timestamps', w?.session_thread_ts === RUN && w?.override_thread_ts === BRIEFING)
-  ok('#1 detail gives the chat.delete recovery', w?.detail.includes('chat.delete'))
+  ok('#1 detail reports the stray post with identifying context',
+    w?.detail.includes('report the stray post (channel ID and message ts)'))
+  ok('#1 detail offers human or submit_feedback reporting', w?.detail.includes('to the human or via submit_feedback'))
+  ok('#1 detail explains that no delete tool is exposed', w?.detail.includes('No exposed delete tool exists'))
+  ok('#1 detail does not recommend chat.delete', !w?.detail.includes('chat.delete'))
   ok('#1 detail admits the missing recent-wake signal', w?.detail.includes('recently'))
 }
 
