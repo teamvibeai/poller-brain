@@ -23,7 +23,62 @@ If it's 1+ days old or missing, run consolidation.
 
 ## Algorithm
 
-**All steps below are mandatory on every consolidation run.** There is no "lightweight" or "partial" mode. Even when daily logs are empty or steps 2–4 produce zero promotions, Step 6 (Regenerate SUMMARY.md) MUST still execute. Never skip or abbreviate steps because a run "has nothing to process."
+**All steps below are mandatory on every consolidation run.** There is no "lightweight" or "partial" mode. Even when daily logs are empty or steps 2–4 produce zero promotions, Step 6 (Regenerate SUMMARY.md) MUST still execute. Never skip or abbreviate steps because a run "has nothing to process." **Narrow exception (#466):** only the reduction candidate searches in Step 6 and Step 9c may be deferred under the per-file retry contract below. Regeneration, validation, metrics, integrity audits, checkpoints, and reporting remain mandatory.
+
+### Per-file reduction retry contract (#466)
+
+This is per brain and independently per target: `memory/SUMMARY.md` (Step 6, 9000 B) and `CLAUDE.md` (Step 9c, 10000 B). It does not schedule maintenance, override `MAINTENANCE_DISABLED`/idle cadence, or authorize resuming an interrupted cycle. Run the existing whole-run and Pre-Step-0 completion/repair guards first. Use this invocation's recorded **pre-Step-0/session-start HEAD** (the marker's starting HEAD when maintenance already started this same invocation) for `START_HEAD` below; never substitute a checkpoint, draft, or an older convenient final.
+
+After required regeneration/validation, immediately before each over-cap target's candidate search, run the read-only helper from the brain root:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/scripts/consolidation-retry.mjs" . memory/SUMMARY.md --completed-at "$START_HEAD" --coverage-confirmed
+node "$CLAUDE_CONFIG_DIR/scripts/consolidation-retry.mjs" . CLAUDE.md --completed-at "$START_HEAD" --coverage-confirmed
+```
+
+Use `--coverage-confirmed` only after verifying the helper's inventory covers all decision inputs: both target files; the entire `memory/` file/availability inventory (including root registry/index files and every source tier); and the installed base CLAUDE, memory/consolidation skills, maintenance policy and helper. Generated `memory/TODAY.md`, `memory/.last_consolidation`, and `memory/episodic/consolidation-progress-YYYY-MM-DD.md` ledgers/markers are bookkeeping, **never reduction sources**, and excluded from the inventory. Supply repeatable `--dependency PATH` for any other relevant input (including external/imported/referenced sources, custom policies, or candidate directories); directories are inventoried recursively and missing paths fingerprint availability. Confirm the same complete dependency set at each attempt/decision. If coverage or normalization is uncertain, omit `--coverage-confirmed` and perform the normal search. Add `--review` whenever an explicit human request to reconsider that target is pending; do not treat a standing human-review warning as a new request every day.
+
+**Daily maintenance filter:** Only direct `memory/daily/YYYY-MM-DD.md` archives may exclude exact complete lines `- HH:MM — <message>` or `- [HH:MM] <message>` with a valid 24-hour time and one of three messages: `memory consolidation started`, `memory consolidation completed`, `maintenance: consolidation session`. The filter requires plain, single-line top-level bullets under exact `# YYYY-MM-DD` headers matching the valid filename date. Sections containing only these maintenance lines are omitted together with their blank lines/date headers; a wholly maintenance-only file (and a daily directory with no remaining inputs) contributes no availability change. In mixed sections only the exact maintenance lines are removed; all other bytes remain inputs. Unknown messages, extra detail, MEM/REMEMBER tags, malformed times and incomplete lines stay source content. Ambiguous structure (including continuations, code/HTML context, mismatched headers or invalid UTF-8) means **search**, never silent deferral. Other paths and explicit extra dependencies are not filtered. No mtime heuristic is used. This lets Step 0 archive routine stubs and the required maintenance session entry without resetting a weekly stall; any substantive daily change still invalidates it.
+
+The helper reads only the **newest exact completed final commit's markdown at START_HEAD**. It requires the matching committed markdown/JSON pair in that final or its preceding `steps 10-12` checkpoint, with unchanged final markdown. It never reads working report drafts or consumed on-disk JSON and never falls back to an older stall when the newest report lacks valid metadata. Missing/corrupt/incompatible/future attempt metadata, merged/shallow/unverifiable history, uncertain inputs, or a helper failure means **search**, subject to the completion/repair guard (which still stops unfinished/unknown cycles). Helper advice cannot authorize starting or repairing a cycle.
+
+- **`search`:** run the existing protected/bounded reduction algorithm. Fingerprints include file content (equal-byte-size edits count), source availability/content, target threshold, and reduction policy/version. Only SUMMARY's well-formed first `Last consolidated` line is excluded; no other target text is normalized. New source material may invalidate a stall even if unrelated; prefer safety over cache hits.
+- **`deferred`:** skip only this target's candidate search. Carry the returned `entry` forward exactly, including its original `lastAttemptAt`, `nextEligibleAt`, `inputFingerprint`, `policyVersion`, and review reason. Do not recompute a deadline from today's report. Record `deferred: structural stall; next eligible <nextEligibleAt>; last actual search <lastAttemptAt>` and `structurally stalled, needs human review`, with current measured bytes/overage and a link to the helper's source report/commit. Do not claim a new attempt or repeat the old candidate narrative. Continue every other step.
+
+**Establishing/clearing retry state:** Only a full, conclusive search of an oversized target with **zero successful reductions** that proves the entire remainder is protected or already pointer-only may establish `structurally-stalled` (`reason: protected-or-pointer-only`). One conclusive search suffices. Record the actual search completion time in UTC ISO format with milliseconds and set the deadline to exactly **168 elapsed hours** later. Capture the helper's non-null fingerprint at the actual attempt with complete dependencies. If inputs change during/after the attempt, establish a stall only if the conclusive proof covers those final inputs; otherwise clear it. Generic uncertainty, failed preservation/pointer checks, interrupted work, `no progress`, and `budget exhausted` cannot establish a stall. Any productive over-cap reduction retains normal next-run cadence, even if its remaining content appears protected. An under-cap result clears stale state without a candidate search. Each target's result stands alone.
+
+**Durable evidence:** Include exactly one fenced `consolidation-retry-v1` JSON block under its own `## Reduction Retry Cadence` heading in every completed consolidation markdown report, with both target entries. Keep it outside `## Tier Coverage` and all other existing metric sections so their consumers retain the same input. Keep it in the in-progress ledger until reporting, but ledger/checkpoint-only metadata never grants deferral. Example shape (illustrative fingerprint):
+
+````markdown
+## Reduction Retry Cadence
+```consolidation-retry-v1
+{
+  "version": 1,
+  "targets": {
+    "CLAUDE.md": {
+      "status": "structurally-stalled",
+      "reason": "protected-or-pointer-only",
+      "lastAttemptAt": "2026-11-15T01:00:00.000Z",
+      "nextEligibleAt": "2026-11-22T01:00:00.000Z",
+      "inputFingerprint": "<64 lowercase SHA-256 hex characters from helper>",
+      "policyVersion": "reduction-retry-v1",
+      "reviewReason": "Only identity, imports and behavioral rules remain; needs human review"
+    },
+    "memory/SUMMARY.md": {
+      "status": "under-cap",
+      "reason": "under cap",
+      "lastAttemptAt": null,
+      "nextEligibleAt": null,
+      "inputFingerprint": null,
+      "policyVersion": "reduction-retry-v1",
+      "reviewReason": null
+    }
+  }
+}
+```
+````
+
+For a deferred target use the helper's returned entry (`status: deferred`). For all other outcomes use `status: under-cap`, `progress`, `ambiguous`, `no-progress`, or `budget-exhausted` as appropriate, with an honest `reason`, null deadline/fingerprint/reviewReason, and the actual `lastAttemptAt` only when a search occurred (otherwise null). Never carry an old stall over successful progress or an under-cap result. At/after the unchanged deadline the first otherwise-authorized consolidation searches again; deferred runs do not slide it. Preserve the overage warning and review reason in `processImprovements`/report Consequences using existing fields; do not add JSON schema/self-assessment keys or send external messages automatically.
 
 ### Pre-Step-0. Verify Prior-Cycle Completion (mechanical citation guard)
 
@@ -433,16 +488,16 @@ This replaces the old "Update MEMORY.md" step. SUMMARY.md is the new authoritati
 
 **Report tracking (required):** Add `memory/SUMMARY.md` to the JSON report's `filesChanged` array immediately after completing this step — do not defer to Step 12. Also set `selfAssessment["summary-md-regenerated"]` to `true` in the JSON report at this point. Evaluators check both `filesChanged` and `selfAssessment["summary-md-regenerated"]` to verify this step ran. Omitting `memory/SUMMARY.md` from `filesChanged` fails the `summary-md-regenerated` criterion even when the file was correctly regenerated.
 
-**Bounded size-cap reduction (mandatory — do not defer to reflection):** After regeneration, measure `S` with `wc -c memory/SUMMARY.md` (UTF-8 bytes, not characters or lines). Fix the successful-relocation budget once from this post-regeneration size: **0 if S <= 9000; otherwise min(3, ceil(S / 9000))**. Thus 15040 bytes permits two successful section relocations; sizes above 18000 permit at most three. Do not recompute or increase the budget during this run.
+**Bounded size-cap reduction (mandatory when search is due — do not defer to reflection):** After regeneration, measure `S` with `wc -c memory/SUMMARY.md` (UTF-8 bytes, not characters or lines). Fix the successful-relocation budget once from this post-regeneration size: **0 if S <= 9000; otherwise min(3, ceil(S / 9000))**. Thus 15040 bytes permits two successful section relocations; sizes above 18000 permit at most three. Do not recompute or increase the budget during this run.
 
-If over **9000 bytes**, repeat the following until a stop condition fires:
+If over **9000 bytes**, apply the per-file retry contract after regeneration and pointer reconciliation. On `deferred`, skip only the loop below and report `deferred: structural stall` with budget **0 used / the fixed allowed budget**. Otherwise repeat the following until a stop condition fires:
 
 1. **Select the largest eligible remaining section by property, not by section name.** SUMMARY structure varies across the fleet; never hardcode a brain's titles. A section is eligible only when its content is *regenerable from a lower memory tier* (`memory/semantic/`, `memory/episodic/`, `memory/daily/`) — e.g. a running-projects list or chronological history ledger. Already pointer-only sections are not candidates. Never trim static/load-bearing material: identity, the verbatim "How this memory works" block, repo tables, or Key Rules whose full text lives only here. If a section contains unique rules or information that exists nowhere else, protect it. Never mark ACTIVE memories obsolete to meet the cap.
 2. **Prepare and verify a safe replacement before changing SUMMARY.** Preserve the overflow detail *verbatim*, including MEM identifiers and links, in the source-tier file it derives from (`semantic/` or `episodic/`). Preserve existing destination content; reuse a verified existing copy instead of duplicating it. Prepare a short pointer relative to `memory/` (e.g. `→ semantic/<file>.md`), retaining actionable rule/preference hooks where required by the template. Write the destination first, then read it back to verify the complete relocated text and verify that the proposed pointer resolves to that text before replacing the section. If either check is unavailable or fails, retain the original section; never drop unique/load-bearing rules or other content to save bytes.
 3. **Require measured progress on every iteration.** Compare the current SUMMARY byte count with the proposed complete SUMMARY. Accept the replacement only if all preservation/pointer checks pass and the result is **strictly smaller**. Re-read and remeasure the accepted SUMMARY, record its before/after UTF-8 bytes, count one successful relocation, and add its destination to `filesChanged` immediately, even when reusing a verified existing copy. Also track any destination created/modified before a rejected replacement or interruption. Keep valid pointers and hooks from all previous iterations. If a result is invalid or non-shrinking, retain the last valid SUMMARY and stop with `no progress`; report the attempted section, proposed byte count, and failed check. Never retry an unchanged candidate in this run.
-4. **Stop in this order:** at/below 9000 bytes (`under cap`, including an initially small SUMMARY with no relocations); otherwise when the successful-relocation budget is used (`budget exhausted`); otherwise if no eligible section remains (`no safe candidate`); otherwise on the first invalid/non-shrinking result (`no progress`). Do not force a relocation when only protected or pointer-only content remains. Remaining overage is allowed and must be reported honestly. An unresolved integrity alarm still blocks the checkpoint; a stop reason does not clear it.
+4. **Stop in this order:** at/below 9000 bytes (`under cap`, including an initially small SUMMARY with no relocations); otherwise when the successful-relocation budget is used (`budget exhausted`); otherwise if no eligible section remains (`no safe candidate`; distinguish a proven protected/pointer-only remainder from uncertainty under the retry contract); otherwise on the first invalid/non-shrinking result (`no progress`). Do not force a relocation when only protected or pointer-only content remains. Remaining overage is allowed and must be reported honestly. An unresolved integrity alarm still blocks the checkpoint; a stop reason does not clear it.
 
-**Reduction report (required on every run):** Under `## SUMMARY.md Reduction`, record the previous final size (or `not present`), post-regeneration size `S`, each accepted section and destination with whole-SUMMARY bytes before → after, final size and remaining overage (`max(0, final - 9000)`), successful-relocation budget used/allowed, and the stop reason (`under cap`, `budget exhausted`, `no safe candidate`, or `no progress`). Include any rejected attempt and pointer/source reconciliation. This separates regeneration growth from relocation savings, even when no relocation succeeds. Keep `memory/SUMMARY.md` in `filesChanged` and `selfAssessment["summary-md-regenerated"] = true` as required above, alongside all relocation destinations tracked above.
+**Reduction report (required on every run):** Under `## SUMMARY.md Reduction`, record the previous final size (or `not present`), post-regeneration size `S`, each accepted section and destination with whole-SUMMARY bytes before → after, final size and remaining overage (`max(0, final - 9000)`), successful-relocation budget used/allowed, and the stop reason (`under cap`, `budget exhausted`, `no safe candidate`, `no progress`, or `deferred: structural stall`). For a conclusive zero-progress protected/pointer-only search also record `structurally stalled, needs human review` and establish retry evidence; ambiguous candidates and failed checks do not qualify. A deferred run still records every size/overage, the fixed budget, pointer reconciliation, prior attempt and unchanged next-eligible time. Include any rejected attempt and pointer/source reconciliation. This separates regeneration growth from relocation savings, even when no relocation succeeds. Keep `memory/SUMMARY.md` in `filesChanged` and `selfAssessment["summary-md-regenerated"] = true` as required above, alongside all relocation destinations tracked above.
 
 Prepare and verify Step 6 edits directly and protect them with the existing Step 6a checkpoint below; **do not use `consolidation-apply.sh` for Step 6** (its transaction allowlist excludes this step).
 
@@ -584,9 +639,11 @@ The registry budget covers the current trim writer's full pointer output, includ
 
 Use this CLI's printed `threshold` and `overCap` everywhere this skill compares LEARNINGS.md/MEM_REGISTRY.md against "the cap" (this table, Step 5c preflight, Step 5d/9d/9e triggers). Do not reconstruct the old `300 + rows × 150` registry cap. Rerun after Step 9d/9e and record pre/post size and threshold: removing rows can lower the threshold faster than file size. See `lib/mem-scaled-threshold-core.ts` for the shared evaluator and constants. PREFERENCES.md and MISTAKES.md retain their flat 5000B policies.
 
+Step 9b measurements and warnings remain required even when Step 6 or 9c candidate discovery is deferred. Keep the measured overage and human-review flag visible; deferral is not a healthy size result.
+
 #### 9c. CLAUDE.md Gradual Reduction
 
-If the Memory Metrics table (Step 9b) shows `CLAUDE.md` exceeding 10000 bytes, perform **one** small extraction per consolidation cycle:
+If the Memory Metrics table (Step 9b) shows `CLAUDE.md` exceeding 10000 bytes, apply the per-file retry contract immediately before searching. On `deferred`, report current size/overage, the last actual search, unchanged deadline and human-review flag, then continue to Step 9d. When search is due, attempt **one** small extraction per consolidation cycle:
 
 1. **Identify one block** (10–30 lines) in `CLAUDE.md` that is procedural, reference-like, or domain-specific knowledge — not core identity or behavioral rules. Good candidates:
    - Step-by-step workflows → move to `memory/procedural/{topic}.md`
@@ -606,8 +663,8 @@ If the Memory Metrics table (Step 9b) shows `CLAUDE.md` exceeding 10000 bytes, p
 4. **Constraints:**
    - Move *at most 1 block per cycle* — gradual reduction, not a big-bang refactor
    - *Never move* identity sections, `@` import lines, or core behavioral rules
-   - If unsure whether a block is safe to move, skip this step and note "no safe candidate found" in the report
-   - If `CLAUDE.md` is under 10000 bytes, skip this step entirely
+   - If unsure whether a block is safe to move, retain it and report `no safe candidate found — ambiguous`; this does **not** establish structural backoff. Only a full search proving all remaining content protected/already pointer-only, with no extraction, may record `structurally stalled, needs human review` and retry metadata. Failed verification/interruption is not a stall.
+   - If `CLAUDE.md` is at/below 10000 bytes, skip candidate search and clear its stale backoff (`under-cap`). Successful extraction also clears backoff, even if still over cap
 
 This ensures steady progress toward the threshold while allowing time to detect regressions between cycles.
 
@@ -747,7 +804,7 @@ Do not silently pass a failing check.
 
 ### 10a. Persist Compliance Ledger and Checkpoint
 
-Before self-critique, write the Step 10 compliance results, cumulative `filesChanged`, completed-step boundary, session-start HEAD, and any prior-cycle recovery/occurrence counts to `memory/episodic/consolidation-progress-YYYY-MM-DD.md`. Include the working JSON fields (`filesChanged`, `selfAssessment`, `processImprovements`) in a fenced JSON block. Mark this ledger explicitly as **in progress**, not completed evidence. Keep drafts outside `reports/` so the platform cannot ingest an unfinished report. This ledger preserves bookkeeping if the session dies before reporting (#462).
+Before self-critique, write the Step 10 compliance results, cumulative `filesChanged`, completed-step boundary, session-start HEAD, and any prior-cycle recovery/occurrence counts to `memory/episodic/consolidation-progress-YYYY-MM-DD.md`. Include the working JSON fields (`filesChanged`, `selfAssessment`, `processImprovements`) in a fenced JSON block. Carry both targets' retry entries and actual attempt/deadline evidence in this in-progress ledger too; they become usable only in the completed, committed report. Mark this ledger explicitly as **in progress**, not completed evidence. Keep drafts outside `reports/` so the platform cannot ingest an unfinished report. This ledger preserves bookkeeping if the session dies before reporting (#462).
 
 **Commit that ledger and daily-log backfills before Step 11.** Apply **Checkpoint Rules** first: stop on any unresolved integrity alarm; reconcile unexpected changes; skip silently only if the allowed consolidation paths have no changes.
 
@@ -805,7 +862,7 @@ cannot be confirmed. Do not automatically resolve rescue refs.
 
 Create both reports, carrying forward Step 10a's ledger fields without dropping compliance, recovery, or cumulative file tracking. Once both reports are verified, remove the in-progress ledger (its content is now in the reports) before Step 12a:
 
-- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, and `## Memory Metrics` from Step 9b)
+- **Markdown:** `reports/YYYY-MM-DD-memory-consolidation.md` (must include the per-file retry block and truthful reduction statuses from the retry contract, plus `## Daily Log Compliance` from Step 10, `## MEM Audit` from Step 9a, and `## Memory Metrics` from Step 9b)
 - **JSON:** `reports/YYYY-MM-DD-memory-consolidation.json` (must include `daily-log-*` and `mem-integrity-check` keys in `selfAssessment`, and the `[self-critique]` entry from Step 11 in `processImprovements`)
 
 **Post-write existence check (required, added per pb#257):** After writing the JSON report, run `ls reports/YYYY-MM-DD-memory-consolidation.json` and confirm it exists on disk. This step is easy to drop silently on unusually busy sessions (many interleaved threads) — and when it's dropped, the poller's guard-file hook (`teamvibe.ai#128`) has nothing to POST, so `.last_consolidation` never updates even though real consolidation content landed. The next `maintenance-guard.sh` run then reports a false-overdue signal despite consolidation having actually happened. Verify the pair before Step 12a commits it. After that checkpoint, the platform may consume/delete JSON; use its committed copy as evidence and never recreate an already consumed report. If no committed report evidence exists and the check fails, stop and finish the report before closing the session.
