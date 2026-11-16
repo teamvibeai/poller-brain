@@ -50,6 +50,8 @@ test("#585 short -p exceptions use only resolved curl and git log contexts", () 
     "command curl -p --proxy http://localhost:8080", "env MODE=plain curl -p --proxy localhost",
     "git -C /project log -p HEAD", "git --no-pager log -p HEAD",
     "git log -p HEAD && mysql -p $REF", "curl -p --proxy localhost; git log -pHEAD",
+    "curl --proxy http://localhost:8080 -p https://example.invalid",
+    "curl --user $REF -p --proxy localhost",
   ];
   for (const command of commands) assert.equal(redactSecrets(command), command);
   console.log(`#585 nonsecret -p commands=${commands.length}`);
@@ -133,6 +135,42 @@ test("#585 exceptions retain credential protection and omit uncertain assignment
   assert.equal(redactSecrets("echo src/file[ab].ts --token CanaryPassword"), "echo src/file[ab].ts --token [REDACTED]");
   console.log(`#585 protection checks=${checks + 2}`);
 });
+
+// Review1: decoded subscripts and option arguments must never widen exemptions.
+const review1Commands = {
+  arrays: [
+    "declare -A TOKEN; TOKEN['public[0']='CanaryPassword trailingCanary'",
+    "declare -A TOKEN; TOKEN['public[0']+='CanaryPassword trailingCanary'",
+    "declare -A TOKEN; TOKEN['public[0']=$REF-CanaryPassword",
+    "TOKEN[0]=$REF TOKEN['public[0']='CanaryPassword trailingCanary'",
+    "TOKEN['outer[inner[0']='CanaryPassword trailingCanary'",
+  ],
+  optionValues: [
+    "curl --user '-p:CanaryPassword' https://example.invalid",
+    "curl --proxy-user '-p:CanaryPassword' https://example.invalid",
+    "curl -u '-p:CanaryPassword' https://example.invalid",
+    "curl -U '-p:CanaryPassword' https://example.invalid",
+    "curl -p --user '-p:CanaryPassword' https://example.invalid",
+    "curl --proxy localhost --proxy-user '-p:CanaryPassword' https://example.invalid",
+    "curl --unknown '-p:CanaryPassword' https://example.invalid",
+    "curl -- '-p:CanaryPassword'",
+    "curl --data '-p CanaryPassword trailingCanary'",
+    "curl '-p CanaryPassword trailingCanary'",
+  ],
+};
+for (const [kind, commands] of Object.entries(review1Commands)) {
+  test(`#585 review1 ${kind}: redact direct output and telemetry metadata`, () => {
+    for (const command of commands) {
+      const { event } = prepareBashTelemetryHook(input(command), env);
+      assert.ok(event);
+      for (const result of [redactSecrets(command), event.metadata.command]) {
+        assert.ok(!/Canary/.test(result), `${command}: ${result}`);
+        assert.match(result, /\[REDACTED/);
+      }
+    }
+    console.log(`#585 review1 ${kind} checks=${commands.length * 2}`);
+  });
+}
 
 test("#585 bracket cwd and benign commands survive telemetry preparation", () => {
   let checks = 0;

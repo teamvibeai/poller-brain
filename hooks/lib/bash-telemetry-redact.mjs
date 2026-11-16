@@ -53,6 +53,18 @@ function nonsecretShortPStart(words) {
   return words[i] === "log" ? i + 1 : Infinity;
 }
 
+// Only exempt actual option occurrences. Skip known value-taking options;
+// stop at operands, --, or unknown options whose argument extent is uncertain.
+function nonsecretShortPOptions(words) {
+  const options = new Set();
+  for (let i = nonsecretShortPStart(words); i < words.length; i++) {
+    if (/^-p[^\s]*$/.test(words[i])) options.add(i);
+    else if (["--proxy", "-x", "--header", "-H", "--user", "-u", "--proxy-user", "-U"].includes(words[i])) i++;
+    else break;
+  }
+  return options;
+}
+
 // Assignment-shaped subscripts may span decoded words or contain quoted ']'.
 // Do not assume decoded brackets balance. Match an assignment terminator and
 // omit uncertain extents; ordinary bracket paths have no such terminator.
@@ -60,8 +72,13 @@ function unsupportedArrayAssignment(words) {
   const text = words.join(" ");
   let start = -1;
   for (const match of text.matchAll(/(?<![A-Za-z0-9_./-])[A-Za-z_][A-Za-z0-9_]*\[|\]\+?=/g)) {
-    if (match[0].endsWith("[")) start = match.index + match[0].length;
-    else if (start !== -1 && !/^[A-Za-z0-9_]+$/.test(text.slice(start, match.index))) return true;
+    if (match[0].endsWith("[")) {
+      // Keep the outer boundary when a quoted subscript decodes to another '['.
+      if (start === -1) start = match.index + match[0].length;
+    } else if (start !== -1) {
+      if (!/^[A-Za-z0-9_]+$/.test(text.slice(start, match.index))) return true;
+      start = -1;
+    }
   }
   return false;
 }
@@ -155,11 +172,11 @@ export function redactSecrets(command, { knownTokens = [] } = {}) {
       return MARKER + (separator ? ` ${separator} ` : "");
     }
     const headers = redactHeaders(words);
-    const nonsecretPStart = nonsecretShortPStart(words);
+    const nonsecretPOptions = nonsecretShortPOptions(words);
     if (headers.length !== words.length || headers.some((word, i) => word !== words[i])) changed = true;
     const safe = headers.map((word, i) => {
-      const nonsecretP = i >= nonsecretPStart;
-      const shortValue = words[i - 1] === "-p" && (!nonsecretP || mixedReference(word));
+      const nonsecretP = nonsecretPOptions.has(i);
+      const shortValue = words[i - 1] === "-p" && (!nonsecretPOptions.has(i - 1) || mixedReference(word));
       const secretValue = SECRET_FLAGS.has(words[i - 1]) || shortValue;
       const redacted = secretValue && !isEnvVarRef(word) ? MARKER : redactWord(word, knownTokens, nonsecretP);
       if (redacted !== word) changed = true;
