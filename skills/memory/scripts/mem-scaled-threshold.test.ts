@@ -144,8 +144,9 @@ function trimFixture(columns: number, kind: string, file: string, hook: string) 
   const registry = `# MEM Registry\n\n| Key | Status | Created | ${columns === 5 ? "Obsoleted | " : ""}Description |\n` +
     `|---|---|---|${columns === 5 ? "---|" : ""}---|\n` +
     descriptions.map((body, i) => `| ${fixtureId(i, kind)} | ACTIVE | 2026-11-07 | ${columns === 5 ? "— | " : ""}${body} |\n`).join("");
-  const destinations = [{ file, text: `# ${hook}\n\n` +
-    descriptions.map((body, i) => `[${fixtureId(i, kind)}] ${body}`).join("\n") }];
+  // Each preserved description must live under its own keyed heading (#447).
+  const destinations = [{ file, text: descriptions.map((body, i) =>
+    `# ${hook} [${fixtureId(i, kind)}]\n\n[${fixtureId(i, kind)}] ${body}`).join("\n") }];
   const found = findTrimCandidates(registry, destinations);
   assert(found.candidates.length === 186, "real discovery finds every covered row");
   const trimmed = applyTrimCandidates(registry, found.candidates);

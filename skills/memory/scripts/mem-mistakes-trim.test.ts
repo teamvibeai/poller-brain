@@ -19,6 +19,7 @@
  * Exits non-zero if any assertion fails.
  */
 
+import { runTrimOwnershipTests } from "./test-support/trim-ownership.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -78,7 +79,7 @@ const HASH2_DESTINATIONS: DestinationFile[] = [
   {
     file: "core/LEARNINGS.md",
     text: [
-      "### Communication style",
+      "### Communication style [MEM-902]",
       "",
       "- **Communication style** — never use a loanword when a native term exists. [MEM-902]",
     ].join("\n"),
@@ -112,7 +113,7 @@ const hash2Applied = applyMistakesTrimCandidates(
 const hash2Checks = verifyMistakesTrimStats(hash2Applied.stats);
 assert(hash2Applied.stats.trimmedEntries === 1, "##: exactly one entry trimmed");
 assert(
-  hash2Applied.mistakes.includes("## [MEM-902] → see core/LEARNINGS.md:3 — Communication style"),
+  hash2Applied.mistakes.includes("## [MEM-902] → see core/LEARNINGS.md:1 — Communication style"),
   "##: entry rewritten to a `##` pointer — SAME heading level as the original entry, never forced to `###`"
 );
 assert(
@@ -163,7 +164,7 @@ const HASH3_DESTINATIONS: DestinationFile[] = [
   {
     file: "semantic/measurement-discipline.md",
     text: [
-      "## Measure the right artifact",
+      "## Measure the right artifact [MEM-950]",
       "",
       "- Before declaring a propagation broken, diff the target against the source in the version it was actually sent, not the version at head. [MEM-950]",
     ].join("\n"),
@@ -188,7 +189,7 @@ const hash3Applied = applyMistakesTrimCandidates(
 verifyMistakesTrimStats(hash3Applied.stats);
 assert(
   hash3Applied.mistakes.includes(
-    "### [MEM-950] → see semantic/measurement-discipline.md:3 — Measure the right artifact"
+    "### [MEM-950] → see semantic/measurement-discipline.md:1 — Measure the right artifact"
   ),
   "###: entry rewritten to a `###` pointer matching its own entry format, never downgraded to `##`"
 );
@@ -225,7 +226,7 @@ const BULLET_DESTINATIONS: DestinationFile[] = [
   {
     file: "core/LEARNINGS.md",
     text: [
-      "### CI green discipline",
+      "### CI green discipline [MEM-154]",
       "",
       "- **CI green discipline** — CI status and manual review are separate signals, never merge them. [MEM-154]",
     ].join("\n"),
@@ -244,7 +245,7 @@ assert(
 
 const bulletMem154 = bulletFound.candidates[0];
 assert(bulletMem154.format === "bullet" && bulletMem154.marker === "-", "bullet: MEM-154 candidate recorded as bullet-format");
-assert(bulletMem154.file === "core/LEARNINGS.md" && bulletMem154.line === 3, "bullet: candidate points at core/LEARNINGS.md:3");
+assert(bulletMem154.file === "core/LEARNINGS.md" && bulletMem154.line === 1, "bullet: candidate points at core/LEARNINGS.md:1");
 assert(bulletMem154.hook === "CI green discipline", "bullet: hook extracted from governing heading");
 assert(
   bulletMem154.originalText.includes("Assumed CI green means merged"),
@@ -262,7 +263,7 @@ const bulletChecks = verifyMistakesTrimStats(bulletApplied.stats);
 assert(bulletApplied.stats.trimmedEntries === 1, "bullet: exactly one entry trimmed");
 assert(
   bulletApplied.mistakes.includes(
-    "- [MEM-154] → see core/LEARNINGS.md:3 — CI green discipline (Source: Jakub, 2026-06-01)"
+    "- [MEM-154] → see core/LEARNINGS.md:1 — CI green discipline (Source: Jakub, 2026-06-01)"
   ),
   "bullet: entry rewritten to a pointer in the SAME short format as Step 5d — destination only, no per-entry archive annotation"
 );
@@ -283,7 +284,7 @@ assert(
   "bullet: pre-existing pointer entry left completely untouched"
 );
 assert(
-  bulletApplied.archive.includes("Archived 2026-08-20 — superseded by core/LEARNINGS.md:3 [MEM-154]"),
+  bulletApplied.archive.includes("Archived 2026-08-20 — superseded by core/LEARNINGS.md:1 [MEM-154]"),
   "bullet: archive gets a provenance header for the relocated entry"
 );
 assert(
@@ -543,7 +544,7 @@ const mixedMistakePointers = findMistakesTrimCandidates([
 ].join("\n"), []);
 assert(mixedMistakePointers.alreadyPointer === 3, "MISTAKES recognises dated and legacy bullet/heading pointers");
 const datedMistake = `- **Important dated mistake** — ${"Original incident detail worth preserving. ".repeat(12)} (Source: incident, [${DATED_A}])\n`;
-const datedDest = [{ file: "core/LEARNINGS.md", text: `### Stable dated lesson heading\nCondensed lesson [${DATED_A}]` }];
+const datedDest = [{ file: "core/LEARNINGS.md", text: `### Stable dated lesson heading [${DATED_A}]\nCondensed lesson [${DATED_A}]` }];
 const datedMistakeFound = findMistakesTrimCandidates(datedMistake, datedDest);
 assert(datedMistakeFound.candidates[0]?.key === DATED_A, "MISTAKES extracts whole dated identity");
 const datedMistakeApplied = applyMistakesTrimCandidates(datedMistake, "", datedMistakeFound.candidates, "2026-11-07", DEFAULT_ARCHIVE_HEADER("2026-H2"));
@@ -594,6 +595,7 @@ for (const key of ["MEM-1", DATED_A]) {
   }
 }
 
+runTrimOwnershipTests("mistakes", assert);
 
 // ===========================================================================
 // Issue #463: category containers, heading-owned body bullets, and unresolved
@@ -607,7 +609,7 @@ const groupedDated = `- [${DATED_B}] Another independent incident. ${detail.repe
 const groupedMissing = "- [MEM-612] No promotion evidence; preserve this sibling.\n  Preserve this continuation too.";
 const groupedMulti = "- [MEM-613] One incident also references MEM-614; keep single-key rejection.";
 const groupedIndex = "- [MEM-615] Listed only in an index, never promoted.";
-const groupedUnreliable = "- [MEM-616] Destination lacks a governing heading.";
+const groupedUnreliable = "- [MEM-616] Destination has an unreliable hook.";
 const groupedSemantic = `- [MEM-617] Eligible but unapproved sibling. ${detail.repeat(6)}`;
 const groupedHeading = "### Actual incident [MEM-620]\nIncident prose belongs to the heading.\n- Supporting detail mentioning [MEM-621] is not a sibling.";
 const GROUPED = [
@@ -616,10 +618,10 @@ const GROUPED = [
   "", "### Communication", "", groupedSemantic, "", groupedHeading, "",
 ].join("\n");
 const GROUPED_DESTINATIONS: DestinationFile[] = [
-  { file: "core/LEARNINGS.md", text: `### Fresh evidence discipline\nUse fresh evidence [MEM-610]\nUse current evidence [${DATED_B}]\n| [MEM-615] | semantic/reference.md |` },
-  { file: "semantic/communication.md", text: "## Preserve communication context\nRetain context [MEM-617]" },
-  { file: "procedural/check.md", text: "## Check before reporting\nCheck the result [MEM-619]\nRelated incident [MEM-621]" },
-  { file: "semantic/no-heading.md", text: "A lesson without a reliable heading [MEM-616]" },
+  { file: "core/LEARNINGS.md", text: `### Fresh evidence discipline [MEM-610]\nUse fresh evidence [MEM-610]\n### Fresh evidence discipline [${DATED_B}]\nUse current evidence [${DATED_B}]\n| [MEM-615] | semantic/reference.md |` },
+  { file: "semantic/communication.md", text: "## Preserve communication context [MEM-617]\nRetain context [MEM-617]" },
+  { file: "procedural/check.md", text: "## Check before reporting [MEM-619]\nCheck the result [MEM-619]\n## Check before reporting [MEM-621]\nRelated incident [MEM-621]" },
+  { file: "semantic/short-hook.md", text: "## Short [MEM-616]\nA lesson without a reliable hook [MEM-616]" },
 ];
 const groupedFound = findMistakesTrimCandidates(GROUPED, GROUPED_DESTINATIONS);
 assert(groupedFound.totalEntries === 9, "grouped: category headings are containers, with nine real entries");
@@ -634,7 +636,7 @@ assert(groupedCandidate.entryStartLine === GROUPED.split("\n").indexOf(groupedLe
 const groupedApplied = applyMistakesTrimCandidates(GROUPED, "", [groupedCandidate], "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
 const groupedChecks = verifyMistakesTrimStats(groupedApplied.stats);
 assert(groupedChecks.length > 0 && groupedApplied.stats.distinctKeysBefore === 11 && groupedApplied.stats.distinctKeysAfter === 11, "grouped: shared boundaries preserve every distinct key");
-const groupedPointer = "- [MEM-610] → see core/LEARNINGS.md:2 — Fresh evidence discipline";
+const groupedPointer = "- [MEM-610] → see core/LEARNINGS.md:1 — Fresh evidence discipline";
 const expectedGroupedBody = GROUPED.replace(groupedLegacy, groupedPointer).trimEnd();
 assert(groupedApplied.mistakes.split("\n\n> 📦")[0] === expectedGroupedBody, "grouped: exact category text, separators, markers, and all untouched siblings survive");
 assert(groupedApplied.archive.includes(`\n${groupedLegacy}\n`), "grouped: archive retains the complete original entry verbatim");
@@ -656,7 +658,7 @@ assert(datedGroupedApplied.archive.includes(`\n${groupedDated}\n`), "grouped: da
 for (const marker of ["##", "###"]) {
   for (const identityInTitle of [false, true]) {
     const text = `${marker} Genuine incident${identityInTitle ? " [MEM-630]" : ""}\nIntroductory incident prose${identityInTitle ? "" : " [MEM-630]"}.\n- Supporting detail [MEM-631]\n- Another detail mentioning MEM-632\n`;
-    const found = findMistakesTrimCandidates(text, [{ file: "semantic/lesson.md", text: "## Proper supporting lesson\nRestatement [MEM-631]" }]);
+    const found = findMistakesTrimCandidates(text, [{ file: "semantic/lesson.md", text: "## Proper supporting lesson [MEM-631]\nRestatement [MEM-631]" }]);
     assert(found.totalEntries === 1 && found.multiKeyEntries === 1 && found.candidates.length === 0 && found.structuralDiagnostics.length === 0, `${marker}, identityInTitle=${identityInTitle}: body keys have a resolved heading owner, never become candidates`);
   }
 }
@@ -665,7 +667,7 @@ for (const marker of ["##", "###"]) {
 // markers, even when only the child incident is trimmed.
 const nestedHeading = `### Child incident [MEM-640]\n${detail.repeat(10)}`;
 const nested = `## Category\n\n${nestedHeading}\n\n## Empty category\n`;
-const nestedFound = findMistakesTrimCandidates(nested, [{ file: "semantic/lesson.md", text: "## Fresh nested lesson\nRestatement [MEM-640]" }]);
+const nestedFound = findMistakesTrimCandidates(nested, [{ file: "semantic/lesson.md", text: "## Fresh nested lesson [MEM-640]\nRestatement [MEM-640]" }]);
 const nestedApplied = applyMistakesTrimCandidates(nested, "", nestedFound.candidates, "2026-11-15", DEFAULT_ARCHIVE_HEADER("2026-H2"));
 verifyMistakesTrimStats(nestedApplied.stats);
 assert(nestedFound.totalEntries === 1 && nestedApplied.mistakes.startsWith("## Category\n\n### [MEM-640] → see ") && nestedApplied.mistakes.includes("\n\n## Empty category\n"), "nested: parent category and following empty category survive a child heading trim");
@@ -695,7 +697,7 @@ assert(lowFound.coverageRatio < 0.5 && lowFound.structuralDiagnostics.length ===
 // A candidate from a heading-free scan must never be silently accepted once
 // its bullet becomes part of an unresolved section.
 const formerlyFlat = "# Mistakes\n\n- [MEM-650] May belong to the prose above.\n  Continuation must stay.";
-const ambiguityDest = [{ file: "semantic/lesson.md", text: "## Reliable promoted lesson\nRestatement [MEM-650]" }];
+const ambiguityDest = [{ file: "semantic/lesson.md", text: "## Reliable promoted lesson [MEM-650]\nRestatement [MEM-650]" }];
 const formerlyFlatFound = findMistakesTrimCandidates(formerlyFlat, ambiguityDest);
 let ambiguousApplyThrew = false;
 try {
