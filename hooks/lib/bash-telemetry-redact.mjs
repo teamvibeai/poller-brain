@@ -32,7 +32,7 @@ const VALUES = [
 
 // Resolve only literal, explicitly supported invocation forms. Unknown wrappers
 // and git options keep password semantics; a later command name proves nothing.
-function nonsecretShortPStart(words) {
+function shortOptionContext(words) {
   let i = 0;
   const skipAssignments = () => {
     while (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(words[i] ?? "")) i++;
@@ -41,44 +41,115 @@ function nonsecretShortPStart(words) {
   while (["sudo", "command", "env"].includes(words[i])) {
     const wrapper = words[i++];
     if (wrapper === "env") skipAssignments();
-    if (!words[i] || words[i].startsWith("-")) return Infinity;
+    if (!words[i] || words[i].startsWith("-")) return {};
   }
-  if (words[i] === "curl") return i + 1;
-  if (words[i++] !== "git") return Infinity;
+  if (words[i] === "curl") return { start: i + 1, curl: true };
+  if (words[i++] !== "git") return {};
   while (i < words.length) {
     if (words[i] === "--no-pager") i++;
     else if (words[i] === "-C" && words[i + 1]) i += 2;
     else break;
   }
-  return words[i] === "log" ? i + 1 : Infinity;
+  return words[i] === "log" ? { start: i + 1, curl: false } : {};
 }
 
-// Only exempt actual option occurrences. Skip known value-taking options;
-// stop at operands, --, or unknown options whose argument extent is uncertain.
-function nonsecretShortPOptions(words) {
-  const options = new Set();
-  for (let i = nonsecretShortPStart(words); i < words.length; i++) {
-    if (/^-p[^\s]*$/.test(words[i])) options.add(i);
-    else if (["--proxy", "-x", "--header", "-H", "--user", "-u", "--proxy-user", "-U"].includes(words[i])) i++;
-    else break;
-  }
-  return options;
-}
-
-// Assignment-shaped subscripts may span decoded words or contain quoted ']'.
-// Do not assume decoded brackets balance. Match an assignment terminator and
-// omit uncertain extents; ordinary bracket paths have no such terminator.
-function unsupportedArrayAssignment(words) {
-  const text = words.join(" ");
-  let start = -1;
-  for (const match of text.matchAll(/(?<![A-Za-z0-9_./-])[A-Za-z_][A-Za-z0-9_]*\[|\]\+?=/g)) {
-    if (match[0].endsWith("[")) {
-      // Keep the outer boundary when a quoted subscript decodes to another '['.
-      if (start === -1) start = match.index + match[0].length;
-    } else if (start !== -1) {
-      if (!/^[A-Za-z0-9_]+$/.test(text.slice(start, match.index))) return true;
-      start = -1;
+// A curl short option consumes the rest of its word as soon as it takes a
+// value. In particular, p never exempts a bundled u/U or its argument. Unknown
+// options withhold further exemptions; their characters cannot prove safety.
+const CURL_NO_VALUE = new Set("012346aBfgGhiIjJklLnNOpqRsSvVZ");
+const CURL_VALUE = new Set("AbcCdDeEFHKmoPQrtTuUwxXyYz");
+const CURL_LONG_VALUE = new Set(["--proxy", "--header", "--user", "--proxy-user"]);
+function shortOptionPolicy(words) {
+  const nonsecretP = new Set(), credentials = new Set();
+  const { start, curl } = shortOptionContext(words);
+  if (start === undefined) return { nonsecretP, credentials };
+  let uncertainStart;
+  for (let i = start; i < words.length; i++) {
+    const word = words[i];
+    if (!curl) {
+      if (/^-p[^\s]*$/.test(word)) nonsecretP.add(i);
+      else if (CURL_LONG_VALUE.has(word) || ["-x", "-H", "-u", "-U"].includes(word)) i++;
+      else break;
+      continue;
     }
+    if (word === "--") break;
+    if (word.startsWith("--")) {
+      const equal = word.indexOf("=");
+      const flag = equal === -1 ? word : word.slice(0, equal);
+      if (["--user", "--proxy-user"].includes(flag)) {
+        if (equal === -1) credentials.add(++i);
+        else if (!isEnvVarRef(word.slice(equal + 1))) credentials.add(i);
+      } else if (CURL_LONG_VALUE.has(flag)) {
+        if (equal === -1) i++;
+      } else uncertainStart ??= i;
+      continue;
+    }
+    // curl allows options after URL operands as well.
+    if (!word.startsWith("-") || word === "-") continue;
+    if (word === "-p" && uncertainStart === undefined) nonsecretP.add(i);
+    for (let j = 1; j < word.length; j++) {
+      const flag = word[j];
+      if (flag === "u" || flag === "U") {
+        if (j + 1 === word.length) credentials.add(++i);
+        else if (!isEnvVarRef(word.slice(j + 1))) credentials.add(i);
+        break;
+      }
+      if (CURL_VALUE.has(flag)) {
+        if (j + 1 === word.length) i++;
+        break;
+      }
+      if (!CURL_NO_VALUE.has(flag)) uncertainStart ??= i;
+    }
+  }
+  // After an unresolved option, even -- or another value-taking flag could
+  // itself be an argument. Do not guess which later u/U occurrence is active.
+  const omit = uncertainStart !== undefined && words.slice(uncertainStart).some(word =>
+    /^--(?:user|proxy-user)(?:=|$)/.test(word) || (/^-[^-]/.test(word) && /[uU]/.test(word.slice(1))));
+  return { nonsecretP, credentials, omit };
+}
+
+// Walk each candidate once, balancing nested subscripts and literal quotes.
+// Shell quote removal loses provenance: a ]= at ANY depth may be the real
+// terminator (e.g. TOKEN['public[0']=...). Only a single plain subscript is
+// delegated to redactWord; uncertain/compound extents omit the whole command.
+function unsupportedArrayAssignment(words) {
+  if (words.some(word => word.includes("\0"))) return true;
+  // Preserve word boundaries without confusing whitespace inside quoted words.
+  const text = words.join("\0");
+  const candidates = /(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*\[/g;
+  while (candidates.exec(text)) {
+    let depth = 1, quote = null, simple = true, sawEquals = false;
+    let i = candidates.lastIndex;
+    const indexStart = i;
+    for (; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "\0" && depth === 0 && !quote) break;
+      if (ch === "=" && (depth > 0 || quote)) sawEquals = true;
+      if (ch === "]" && (text[i + 1] === "=" || text.slice(i + 1, i + 3) === "+=")) {
+        if (!simple || depth !== 1 || quote || i === indexStart) return true;
+        // A supported simple index is handled by redactWord, including any
+        // trailing literal. Continue looking for other assignments in the word.
+        break;
+      }
+      if (ch === "\\") {
+        simple = false;
+        // The escaped character could hide a terminator after quote removal.
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        simple = false;
+        if (quote === ch) quote = null;
+        else if (!quote) quote = ch;
+      } else if (!quote && ch === "[") {
+        depth++;
+        simple = false;
+      } else if (!quote && ch === "]") {
+        depth--;
+        simple = false;
+      } else if (!/[A-Za-z0-9_]/.test(ch)) simple = false;
+    }
+    if ((depth > 0 || quote) && sawEquals) return true;
+    candidates.lastIndex = i + 1;
   }
   return false;
 }
@@ -167,17 +238,17 @@ export function redactSecrets(command, { knownTokens = [] } = {}) {
   if (commands.some(({ words }) => PEM.test(words.join(" ")))) return "[REDACTED PRIVATE KEY]";
   let changed = false;
   const sanitized = commands.map(({ words, separator }) => {
-    if (unsupportedArrayAssignment(words)) {
+    const { nonsecretP: nonsecretPOptions, credentials, omit } = shortOptionPolicy(words);
+    if (omit || unsupportedArrayAssignment(words)) {
       changed = true;
       return MARKER + (separator ? ` ${separator} ` : "");
     }
     const headers = redactHeaders(words);
-    const nonsecretPOptions = nonsecretShortPOptions(words);
     if (headers.length !== words.length || headers.some((word, i) => word !== words[i])) changed = true;
     const safe = headers.map((word, i) => {
       const nonsecretP = nonsecretPOptions.has(i);
       const shortValue = words[i - 1] === "-p" && (!nonsecretPOptions.has(i - 1) || mixedReference(word));
-      const secretValue = SECRET_FLAGS.has(words[i - 1]) || shortValue;
+      const secretValue = credentials.has(i) || SECRET_FLAGS.has(words[i - 1]) || shortValue;
       const redacted = secretValue && !isEnvVarRef(word) ? MARKER : redactWord(word, knownTokens, nonsecretP);
       if (redacted !== word) changed = true;
       return redacted;
