@@ -171,7 +171,20 @@ function openParent(root, relative, create) {
       open(absolute, access);
     }
     const parent = directories.at(-1);
-    return { file: (name) => path.join(parent.access, name), verify, close };
+    return {
+      file: (name) => path.join(parent.access, name), verify, close,
+      // Only called with this invocation's exclusively created temp basename.
+      cleanupOwnedTemp(name) {
+        // A pinned fd still owns the temp after a move. The portable pathname
+        // needs verification and retains the documented check-to-unlink window.
+        if (!parent.pinned) verify();
+        try {
+          fs.unlinkSync(path.join(parent.access, name));
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      },
+    };
   } catch (error) {
     close();
     throw error;
@@ -436,8 +449,10 @@ export async function main(args = process.argv.slice(2)) {
     validateTarget(root, target);
     const parent = openParent(root, target, true);
     const file = parent.file(path.basename(target));
-    const temporary = parent.file(`.brain-write-${randomUUID()}.tmp`);
+    const temporaryName = `.brain-write-${randomUUID()}.tmp`;
+    const temporary = parent.file(temporaryName);
     let created = false;
+    let primaryError;
     try {
       const stat = regularFile(file);
       if (stat?.size === content.length) {
@@ -474,13 +489,15 @@ export async function main(args = process.argv.slice(2)) {
         ? `Updated ${target} (${stat.size} -> ${content.length} bytes)`
         : `Created ${target} (${content.length} bytes)`);
       if (mcpSummary) console.log(mcpSummary);
+    } catch (error) {
+      primaryError = error;
+      throw error;
     } finally {
       try {
-        if (created) {
-          // Never clean up using a replaced parent path on the portable fallback.
-          parent.verify();
-          if (lstatIfPresent(temporary)) fs.unlinkSync(temporary);
-        }
+        if (created) parent.cleanupOwnedTemp(temporaryName);
+      } catch (error) {
+        if (!primaryError) throw error;
+        console.error(`brain-write: temporary cleanup failed: ${error.message}`);
       } finally {
         parent.close();
       }
