@@ -50,7 +50,17 @@ export function simpleCommands(input, { allowEnvReferences = false, stripSudo = 
     } else if ("&;|\n".includes(ch)) {
       finishWord();
       let separator = ch;
-      if ("&|".includes(ch) && input[i + 1] === ch) separator += input[++i];
+      if ("&|".includes(ch)) {
+        // Join logical continuations before recognizing a paired operator.
+        // Look ahead only here: quotes and physical comment endings retain
+        // their existing handling, and heredocs still fail open at '<'.
+        let next = i + 1;
+        while (input[next] === "\\" && input[next + 1] === "\n") next += 2;
+        if (input[next] === ch) {
+          separator += ch;
+          i = next;
+        }
+      }
       // Empty boundaries (including continuation newlines/comments) keep adjacency.
       if (words.length) commands.push({ words, separator });
       words = [];
