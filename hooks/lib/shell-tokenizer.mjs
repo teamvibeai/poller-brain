@@ -1,8 +1,9 @@
 // Split literal words and command boundaries without executing shell input.
-// Unsupported syntax (expansions, redirects, compound commands) fails open.
+// Invalid or unsupported syntax (expansions, redirects, compound commands) fails open.
 export function simpleCommands(input, { allowEnvReferences = false, stripSudo = true } = {}) {
   const commands = [];
   let words = [], word = "", started = false, quote = null;
+  let requiresCommand = false;
   const finishWord = () => {
     if (started) words.push(word);
     word = "";
@@ -51,8 +52,14 @@ export function simpleCommands(input, { allowEnvReferences = false, stripSudo = 
       finishWord();
       let separator = ch;
       if ("&|".includes(ch) && input[i + 1] === ch) separator += input[++i];
-      // Empty boundaries (including continuation newlines/comments) keep adjacency.
-      if (words.length) commands.push({ words, separator });
+      if (words.length) {
+        commands.push({ words, separator });
+        requiresCommand = ["|", "&&", "||"].includes(separator);
+      } else if (separator !== "\n") {
+        // Only newlines/comments may intervene before the next command.
+        // Reject the whole parse, including any earlier matching commands.
+        return [];
+      }
       words = [];
     } else if (ch === " " || ch === "\t") {
       finishWord();
@@ -64,6 +71,7 @@ export function simpleCommands(input, { allowEnvReferences = false, stripSudo = 
   if (quote) return [];
   finishWord();
   if (words.length) commands.push({ words, separator: "" });
+  else if (requiresCommand) return [];
   // Support the existing literal `sudo command ...` forms, without guessing options.
   return commands.map(({ words, separator }) => ({
     words: stripSudo && words[0] === "sudo" ? words.slice(1) : words,

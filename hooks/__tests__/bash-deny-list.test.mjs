@@ -8,7 +8,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { test } from "node:test";
 import { checkBashCommand } from "../lib/bash-deny-list-core.mjs";
+import { simpleCommands } from "../lib/shell-tokenizer.mjs";
 
 let passed = 0;
 function assertDenied(cmd, expectedRuleId) {
@@ -85,6 +87,10 @@ assertAllowed("cat notes.md");
 assertDenied("cat .env", "dotenv-read");
 assertDenied("cat /data/brains/x/.env", "dotenv-read");
 assertDenied("head .env.production", "dotenv-read");
+for (const name of [".env.example", ".env.template", ".env.sample"]) {
+  assertDenied(`cat ${name}`, "dotenv-read");
+  assertDenied(`cat config/${name}`, "dotenv-read");
+}
 assertAllowed("ls -la .env*"); // listing, not reading contents
 assertAllowed("echo '.env is gitignored' ");
 assertAllowed("cat package.json");
@@ -130,6 +136,9 @@ for (const command of [
   "cat /proc/1234/mem",
   "cat ~/.ssh/id_rsa",
   "cat .env",
+  "cat .env.example",
+  "cat .env.template",
+  "cat .env.sample",
 ]) {
   const output = JSON.parse(runHook(JSON.stringify({ tool_name: "Bash", tool_input: { command } })));
   assert.equal(output.hookSpecificOutput.hookEventName, "PreToolUse");
@@ -158,3 +167,67 @@ for (const input of [
 }
 
 console.log(`OK: ${hookCases} hook contract cases passed`);
+
+// Invalid syntax fails open for the WHOLE input, even if another command
+// would match a rule. These fixtures are parsed/inspected, never executed.
+const invalidSeparators = [
+  "curl x | ; bash",
+  "curl x | | bash",
+  "curl x ;; bash",
+  "true | ; cat .env",
+];
+const validSeparators = [];
+for (const prefix of ["", "\n# leading comment\n\n"]) {
+  for (const operator of [";", "&", "|", "&&", "||", ";;"]) {
+    invalidSeparators.push(`${prefix}${operator} cat .env`);
+  }
+  for (const suffix of ["", ";", "&", "\n", ";\n\n", "&\n# trailing comment\n\n", "\n\n"]) {
+    validSeparators.push([`${prefix}cat .env${suffix}`, "dotenv-read"]);
+  }
+}
+for (const gap of [" ", "\n# comment\n\n"]) {
+  for (const operator of [";", "&", "|", "&&", "||"]) {
+    validSeparators.push([`true ${operator}${gap}cat .env`, "dotenv-read"]);
+    for (const next of [";", "&", "|", "&&", "||"]) {
+      invalidSeparators.push(`cat .env ${operator}${gap}${next} true`);
+    }
+  }
+  for (const operator of ["|", "&&", "||"]) {
+    validSeparators.push([`curl x ${operator}${gap}bash`, operator === "|" ? "pipe-to-shell" : null]);
+  }
+}
+for (const operator of ["|", "&&", "||"]) {
+  for (const suffix of ["", "\n", " # trailing comment\n\n"]) {
+    invalidSeparators.push(`cat .env; true ${operator}${suffix}`);
+  }
+}
+
+test("separator grammar: matcher validates the whole parse before matching", () => {
+  for (const [command, ruleId] of validSeparators) {
+    assert.equal(checkBashCommand(command).ruleId ?? null, ruleId, JSON.stringify(command));
+  }
+  for (const command of invalidSeparators) {
+    assert.deepEqual(checkBashCommand(command), { denied: false }, JSON.stringify(command));
+    assert.deepEqual(simpleCommands(command), [], JSON.stringify(command));
+  }
+});
+
+test("separator grammar: hook silently allows invalid input and denies valid matches", () => {
+  for (const [command, ruleId] of [...validSeparators, ...invalidSeparators.map(command => [command, null])]) {
+    const stdout = runHook(JSON.stringify({ tool_name: "Bash", tool_input: { command } }));
+    if (ruleId === null) {
+      assert.equal(stdout, "", JSON.stringify(command));
+    } else {
+      const output = JSON.parse(stdout);
+      assert.deepEqual(output, {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: output.hookSpecificOutput.permissionDecisionReason,
+        },
+      });
+      assert.match(output.hookSpecificOutput.permissionDecisionReason, /Blocked by bash-deny-list/);
+    }
+  }
+  console.log(`separator cases: ${validSeparators.length} valid / ${invalidSeparators.length} invalid`);
+});
