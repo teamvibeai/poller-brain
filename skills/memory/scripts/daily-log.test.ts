@@ -1,5 +1,47 @@
 import { strict as assert } from "node:assert";
 import { planTodayArchive, backfillDailyLog, dailyLogProvenance } from "./lib/daily-log-core.js";
+import { normalizeDaily } from "../../../scripts/consolidation-retry.mjs";
+
+// All supported identities and Markdown/continuation families obey the same
+// boundary rule in both consumers. Closing Markdown cannot establish the end
+// of a writer's undelimited multiline payload.
+for (const identity of ["12:01", "MEM-12", "REMEMBER", "MEM-2026-11-16-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]) {
+  for (const ending of ["\n", "\r\n"]) {
+    for (const [opening, closing] of [
+      ["```text", "```"], ["````text", "```\n````"], ["~~~text", "~~~"],
+      ["    ```text", "    ```"], ["> ```text", "> ```"],
+      ["- nested list", ""], ["    indented payload", ""], ["> quoted payload", ""],
+      ["continued paragraph", ""], ["<!--", "-->"], ["<pre>", "</pre>"],
+      ["# 2026-11-16 (<!--)", "-->"],
+      ["```unclosed", ""], ["`multiline span", "`"],
+      ["```text\n# 2026-11-16\n", "```"],
+    ]) {
+      const prefix = "# 2026-11-16\n\n- [12:00][maint] Documentation example:\n";
+      const literal = `- [${identity}][user] Example payload`;
+      const text = (prefix + opening + "\n" + literal + "\n" + closing +
+        "\n\n# 2026-11-16\n\n" + literal + "\n").replace(/\n/g, ending);
+      const report = dailyLogProvenance({ end: "2026-11-16", sessionDays: ["2026-11-16"], daily: { "2026-11-16": text } });
+      assert.equal(report.userTaggedSessionDays, 0, opening);
+      assert.equal(report.unknownSessionDays, 1, opening);
+      assert.equal(report.fullyTaggedSessionDays, 0, opening);
+      const normalized = normalizeDaily(Buffer.from(text), "2026-11-16");
+      assert.equal(normalized!.toString(), text.replace("[12:00][maint]", "[12:00]"), opening);
+    }
+  }
+}
+for (const opener of ["```text", "~~~text", "<!--", "<pre>", "`unfinished", "continued\\"]) {
+  const text = `# 2026-11-16\n\n- [12:00][maint] ${opener}\n- [12:01][user] Example payload\n`;
+  const report = dailyLogProvenance({ end: "2026-11-16", sessionDays: ["2026-11-16"], daily: { "2026-11-16": text } });
+  assert.equal(report.userTaggedSessionDays, 0, "Markdown may open in the entry payload");
+  assert.equal(normalizeDaily(Buffer.from(text), "2026-11-16")!.toString(), text.replace("[12:00][maint]", "[12:00]"));
+}
+const beforeContinuation = "# 2026-11-16\n\n- [12:00][user] real request\n- [12:01][maint] example:\n```\n- [12:02][user] literal\n```\n";
+assert.equal(dailyLogProvenance({ end: "2026-11-16", sessionDays: ["2026-11-16"], daily: { "2026-11-16": beforeContinuation } }).userTaggedSessionDays, 1,
+  "proven records before uncertain content remain lower-bound evidence");
+const headerExample = "# 2026-11-15\n\n- [12:00][maint] example:\n```text\n# 2026-11-16\n\n- [12:01][user] literal\n```\n";
+const headerArchive = planTodayArchive(headerExample, {}, "2026-11-16", "13:00");
+assert.deepEqual(headerArchive.daily, { "2026-11-15": headerExample }, "archive cannot reset Markdown context at a payload header");
+assert.equal(dailyLogProvenance({ end: "2026-11-16", sessionDays: ["2026-11-15", "2026-11-16"], daily: headerArchive.daily }).userTaggedSessionDays, 0);
 
 // Legacy writers always put a space after identity/time; bracketed payload is unknown.
 for (const identity of ["12:00", "MEM-12", "REMEMBER", "MEM-2026-11-16-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]) {

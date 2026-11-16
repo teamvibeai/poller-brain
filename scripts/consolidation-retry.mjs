@@ -94,6 +94,44 @@ export function normalizeSummary(bytes) {
   return Buffer.from(text.slice(text.indexOf('\n') + 1))
 }
 
+// Shared with the observe-only daily aggregate. Keep this in the retry policy
+// module so changes to classification also invalidate policy fingerprints.
+// A space after identity starts legacy payload, not provenance. Keep the MEM
+// identity grammar aligned with skills/memory/scripts/lib/mem-id.ts.
+const clock = '(?:[01][0-9]|2[0-3]):[0-5][0-9]'
+const dailyEntry = new RegExp(`^(- \\[(?:${clock}|MEM-(?:\\d{4}-\\d{2}-\\d{2}-\\d{6}-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\d+)|REMEMBER)\\])(?:\\[(maint|user)\\])? `)
+const legacyClockEntry = new RegExp(`^- ${clock} — `)
+
+/**
+ * Classify only the provable plain-log prefix; preserve every original byte.
+ * Writers accept arbitrary multiline payloads without an end delimiter. Once
+ * continuation/Markdown is encountered, even a closing fence, blank line or
+ * date header cannot prove a later canonical-looking row is a new record.
+ * Keep the remaining suffix opaque rather than invent provenance. This covers
+ * backtick/tilde fences of any length, quotes, indentation, HTML and unfinished
+ * blocks without trying to recover writer boundaries from Markdown syntax.
+ * @param {string} text
+ */
+export function classifyDailyLines(text) {
+  let continuation = false
+  return (text.match(/[^\n]*\n|[^\n]+$/g) || []).map(line => {
+    const body = line.replace(/\r?\n$/, '')
+    if (!continuation && (/^[ \t]*$/.test(body) || /^# \d{4}-\d\d-\d\d(?: \((?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)\))?$/.test(body))) {
+      return { line, kind: 'scaffold', source: undefined, prefix: '' }
+    }
+    const entry = !continuation && dailyEntry.exec(body)
+    const legacy = !continuation && legacyClockEntry.test(body)
+    if (entry || legacy) {
+      // These characters can open a block/span in the payload itself. The
+      // current record's metadata is still structural; later rows are not.
+      if (/[`<>]|~{3}|\u0000|\r|\\[ \t]*$/.test(body)) continuation = true
+      return { line, kind: 'entry', source: entry ? entry[2] : undefined, prefix: entry ? entry[1] : '' }
+    }
+    continuation = true
+    return { line, kind: 'content', source: undefined, prefix: '' }
+  })
+}
+
 // Exact allowlist for plain, date-headed daily bullet logs. A suffix, MEM tag,
 // unknown maintenance message, malformed time, or unfinished line is source
 // content, never bookkeeping. Multi-line/Markdown contexts are uncertain and
@@ -103,23 +141,22 @@ export function normalizeSummary(bytes) {
 export function normalizeDaily(bytes, date) {
   const text = bytes.toString('utf8')
   if (!Buffer.from(text).equals(bytes)) throw new Error('daily normalization uncertain: invalid UTF-8')
-  const lines = text.match(/[^\n]*\n|[^\n]+$/g) || []
-  const clock = '(?:[01][0-9]|2[0-3]):[0-5][0-9]'
+  const classified = classifyDailyLines(text)
+  const lines = classified.map(row => row.line)
   const maintenance = new RegExp(`^- (?:${clock} — |\\[${clock}\\](?: ?\\[maint\\])? )(?:memory consolidation (?:started|completed)|maintenance: consolidation session)\\r?\\n$`)
-  // New provenance touches the identity/time bracket; a space begins legacy
-  // payload. Normalize metadata on retained source rows without hiding user
-  // entries whose text happens to match a bookkeeping message.
-  // Keep this identity grammar aligned with skills/memory/scripts/lib/mem-id.ts.
-  const source = /^(- \[(?:(?:[01]\d|2[0-3]):[0-5]\d|MEM-(?:\d{4}-\d{2}-\d{2}-\d{6}-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\d+)|REMEMBER)\])\[(?:maint|user)\] /
-  const normalizeSource = line => line.replace(source, '$1 ')
-  if (!lines.some(line => maintenance.test(line))) return Buffer.from(lines.map(normalizeSource).join(''))
+  const normalizeSource = row => row.source
+    ? row.prefix + row.line.slice(row.prefix.length + `[${row.source}]`.length)
+    : row.line
+  if (!lines.some(line => maintenance.test(line))) return Buffer.from(classified.map(normalizeSource).join(''))
   if (!isoTime(`${date}T00:00:00.000Z`) || /[`<>]|~{3}|\u0000|\r(?!\n)/.test(text)) {
     throw new Error('daily normalization uncertain: date or Markdown context')
   }
   const sections = []
   let section
   let prefix = ''
-  for (const [index, line] of lines.entries()) {
+  for (const [index, row] of classified.entries()) {
+    const { line } = row
+    if (row.kind === 'content') throw new Error('daily normalization uncertain: continued content')
     if (line === `# ${date}\n` || line === `# ${date}\r\n`) {
       // Step 0/log rollover appends "\n# DATE\n". That one separator belongs
       // to the new section, not to the preceding substantive entry.
@@ -135,7 +172,7 @@ export function normalizeDaily(bytes, date) {
         throw new Error('daily normalization uncertain: expected date-headed single-line bullets')
       }
       if (maintenance.test(line)) section.maintenance = true
-      else { section.source = true; section.kept.push(normalizeSource(line)) }
+      else { section.source = true; section.kept.push(normalizeSource(row)) }
     }
   }
   // Preserve source-bearing sections, normalizing only structural metadata

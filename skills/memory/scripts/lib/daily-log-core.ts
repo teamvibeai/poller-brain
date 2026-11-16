@@ -1,5 +1,5 @@
 /** Pure plans for consolidation and observe-only provenance (no brain mutations). */
-import { MEM_ID_PATTERN } from "./mem-id.js";
+import { classifyDailyLines } from "../../../../scripts/consolidation-retry.mjs";
 
 function utcDate(date: string): Date {
   const parsed = new Date(`${date}T00:00:00Z`);
@@ -15,13 +15,21 @@ export function planTodayArchive(today: string, daily: Record<string, string>, d
   if (today.trim() && !/^# \d{4}-\d{2}-\d{2}/m.test(today)) {
     today = `# ${date}\n\n${today}`;
   }
-  const headers = [...today.matchAll(/^# (\d{4}-\d{2}-\d{2})(?:[^\n]*)$/gm)];
+  // Do not split opaque payload at an example date header: doing so would
+  // discard its Markdown context and turn its following rows into metadata.
+  const headers: { day: string; index: number }[] = [];
+  let offset = 0;
+  for (const row of classifyDailyLines(today)) {
+    const header = row.kind === "scaffold" && /^# (\d{4}-\d{2}-\d{2})/.exec(row.line);
+    if (header) headers.push({ day: header[1], index: offset });
+    offset += row.line.length;
+  }
   if (today.trim() && (!headers.length || today.slice(0, headers[0].index).trim())) {
     throw new Error("TODAY contains content before its first date header; reconcile before archiving");
   }
   const result = { ...daily };
   for (let i = 0; i < headers.length; i++) {
-    const day = headers[i][1];
+    const day = headers[i].day;
     utcDate(day);
     const section = today.slice(i === 0 ? 0 : headers[i].index, headers[i + 1]?.index ?? today.length);
     // Keep every original section byte, including source tags and whitespace.
@@ -36,12 +44,9 @@ export function backfillDailyLog(date: string, subjects: string[]): string {
     `- [unknown] (backfilled from git) — ${subject.replace(/[\r\n]+/g, " ")}\n`).join("");
 }
 
-const ENTRY = new RegExp(String.raw`^- \[(?:\d{2}:\d{2}|${MEM_ID_PATTERN}|REMEMBER)\]\[(maint|user)\] `);
-
 function entrySources(text: string): string[] {
-  // Metadata is adjacent to the closing identity/timestamp bracket. A space
-  // starts legacy content, including literal [user]/[maint] payloads.
-  return text.split("\n").filter(line => line.trim() && !line.startsWith("#")).map(line => ENTRY.exec(line)?.[1] ?? "unknown");
+  return classifyDailyLines(text).filter(row => row.kind !== "scaffold")
+    .map(row => row.source ?? "unknown");
 }
 
 export function dailyLogProvenance(input: {

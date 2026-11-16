@@ -650,3 +650,24 @@ test('source metadata preserves substantive fingerprints without hiding user ent
     assert.notEqual(normalizeDaily(Buffer.from(mixed), date), null, 'user content survives mixed archives')
   }
 })
+
+test('fenced example tag edits change both fingerprints and end weekly deferral', t => {
+  const f = fixture(t)
+  const date = '2026-11-15'
+  const path = `memory/daily/${date}.md`
+  const original = `# ${date}\n\n- [12:00][maint] Documentation example:\n\`\`\`text\n- [12:01] Example payload\n\`\`\`\n`
+  const changed = original.replace('[12:01] Example', '[12:01][user] Example')
+  f.write(path, original)
+  const targets = [claude, summary]
+  const entries = Object.fromEntries(targets.map(target => [target, f.stall(target)]))
+  f.report(entries)
+  for (const target of targets) assert.equal(advise(f.dir, target, f.opts()).decision, 'deferred')
+  f.write(path, changed)
+  assert.notDeepEqual(normalizeDaily(Buffer.from(original), date), normalizeDaily(Buffer.from(changed), date))
+  for (const target of targets) {
+    assert.notEqual(fingerprint(f.dir, target, f.opts()), entries[target].inputFingerprint)
+    const result = advise(f.dir, target, f.opts())
+    assert.equal(result.decision, 'search')
+    assert.equal(result.reason, 'decision inputs changed')
+  }
+})

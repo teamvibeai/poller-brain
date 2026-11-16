@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { planTodayArchive, dailyLogProvenance } from "./lib/daily-log-core.js";
 
 let failed = 0;
 for (const writer of ["log-write", "mem-write"]) {
@@ -53,6 +54,21 @@ for (const writer of ["log-write", "mem-write"]) {
           assert.deepEqual(snapshot(), before);
         }
       }
+    });
+    test("fenced maintenance payload never supplies user provenance after archival", () => {
+      for (const file of [today, registry]) fs.rmSync(file, { force: true });
+      const payload = "Documentation example:\n```text\n- [12:01][user] Example payload\n```";
+      const result = run("--source=maintenance", payload);
+      assert.equal(result.status, 0, result.stderr);
+      const saved = fs.readFileSync(today, "utf8");
+      assert(saved.includes(payload), "writer preserves multiline payload bytes");
+      const day = saved.match(/^# (\d{4}-\d{2}-\d{2})/m)![1];
+      const archive = planTodayArchive(saved, {}, day, "13:00");
+      assert.equal(archive.daily[day], saved, "archive preserves the payload bytes");
+      const report = dailyLogProvenance({ end: day, sessionDays: [day], daily: archive.daily });
+      assert.equal(report.userTaggedSessionDays, 0);
+      assert.equal(report.userSessionRatio, 0);
+      assert.equal(report.unknownSessionDays, 1, "uncertain continuation remains unknown");
     });
     // Clear any files a broken baseline created in the negative case.
     for (const file of [today, registry]) fs.rmSync(file, { force: true });
