@@ -273,6 +273,18 @@ function entryCitedKeys(lines: string[], entry: Entry): string[] {
   return [...keys];
 }
 
+/** Content owners for rejected-review identity checks. Reuse the exact parser
+ * and single-key/ownership gates; locations are 1-indexed and exclude separators.
+ * This supplies identity only, never promotion evidence or approval. */
+export function learningsReviewSpans(text: string): { key: string; start: number; end: number }[] {
+  const { entries, lines } = parseEntries(text);
+  return entries.flatMap(entry => {
+    if (entry.skipReason || entry.format === "unknown" || isPointerEntry(entryText(lines, entry))) return [];
+    const keys = entryCitedKeys(lines, entry);
+    return keys.length === 1 ? [{ key: keys[0], start: entry.startLine + 1, end: entry.contentEndLine }] : [];
+  });
+}
+
 export interface LearningsTrimCandidate {
   key: string;
   format: EntryFormat;
@@ -584,7 +596,8 @@ export function verifyLearningsTrimStructure(before: string, after: string, cand
   if (original.lines.slice(cursor).join("\n") !== rewritten.lines.slice(cursor + delta).join("\n")) refuse();
 }
 
-function pointerFor(text: string, candidate: LearningsTrimCandidate): string {
+/** Render a pointer from the original entry span, preserving its marker and provenance. */
+export function pointerFor(text: string, candidate: LearningsTrimCandidate): string {
   const source = extractSource(text);
   // Changing ## to ### would nest this entry under a preceding ## sibling.
   const marker = candidate.format === "heading" ? text.match(/^#{2,6}/)![0] : "-";

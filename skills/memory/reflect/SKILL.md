@@ -13,19 +13,46 @@ Before any heartbeat, scheduled maintenance, or reflection action (including Bas
 
 ## Checklist
 
+After the opt-out check, inspect `git status --short` and record the starting HEAD and original reflection date (keep that date across midnight). Identify pre-existing work before mutating memory; never include another task's edits. Keep a cumulative list of reviewed created/modified/deleted paths and, for every deletion, the specific preservation destination or named redundant source. Keep working manifests and report drafts in session scratch outside `memory/episodic/` and `reports/`; do not create `memory/episodic/reflection-YYYY-MM-DD.md` during the checklist. Its filename is the reflection guard's completion/cadence signal.
+
 ### 0. Previous Recommendations Review
 
-Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Read its `recommendations` array.
+Before starting, find the most recent reflection report in `memory/episodic/reflection-*.md` or `reports/*-memory-reflection.json`. Read its recommendations (the `recommendations` array in JSON) before writing the current draft. Record `review_mode` for the check below: `required` when prior recommendations exist, `first-run` when no prior reflection exists, or `empty-prior` when the prior recommendations list is explicitly empty. An unreadable prior report or an unknown/missing list is not an empty list; resolve it or report `[blocked]`.
 
-**If no prior reflection exists:** Add to `processImprovements`: `"[self-critique] No prior reflection found — first reflection run; no prior recommendations to review."` This satisfies the `previous-recommendations-reviewed` criterion.
+**If no prior reflection exists:** Add to `processImprovements`: `"[self-critique] No prior reflection found — first reflection run; no prior recommendations to review."` This satisfies the `previous-recommendations-reviewed` criterion. In the episodic report's `## Previous Recommendations Review` section, write exactly `- Not applicable: first reflection run; no prior recommendations to review.`
 
-**If a prior reflection exists:** For each recommendation in that report, determine its status: `implemented`, `partially addressed`, or `pending`. Add **at least one entry** to `processImprovements` that names the specific recommendation text and its status. Required format:
+**If the prior recommendations list is empty:** Add `"[self-critique] Prior reflection has an empty recommendations list; no prior recommendations to review."` to `processImprovements`. In the same episodic section, write exactly `- Not applicable: prior recommendations list is empty.` Neither exemption needs a fabricated lifecycle status.
+
+**If prior recommendations exist:** Name every recommendation in the episodic review section and assign one lifecycle status with reason/evidence:
+
+| Lifecycle status | Reporting meaning |
+| --- | --- |
+| `Closed` | The recommendation has been completed, with evidence that its success condition was met. |
+| `Moot` | The recommendation no longer applies, with evidence explaining why. |
+| `Pending` | The recommendation remains actionable and unfinished, without a committed deadline. |
+| `Pending+Deadline` | The recommendation remains unfinished with an explicit deadline; record that date and the next action. |
+| `Failure-Mode` | Follow-through has become a recurring or systemic failure; name the observed failure and supporting evidence. |
+
+Consult the brain's recommendation lifecycle procedure, if available, for closure and transition rules; its absence does not disable this vocabulary check. Do not invent automatic transitions, deadlines, or recurrence thresholds from these labels. For semantic split handoffs, also apply the explicit overdue rule in Step 4 below and read the current task plus consolidation's Semantic Lifecycle outcomes, not only the prior reflection's recommendations.
+
+Also retain the legacy `implemented`, `partially addressed`, or `pending` summary in JSON. Add **at least one entry** to `processImprovements` naming a specific prior recommendation, its legacy status, and its lifecycle status. Required format:
 
 ```
-[self-critique] Prior rec: "<recommendation text>" — status: implemented/partially addressed/pending. <one-sentence reason>.
+[self-critique] Prior rec: "<recommendation text>" — status: <implemented/partially addressed/pending>; lifecycle: <label>; <reason>.
 ```
 
-All prior-recommendation review entries MUST appear in `processImprovements`. The `previous-recommendations-reviewed` eval criterion passes only when the report explicitly names at least one prior recommendation and states its status. A generic "reviewed prior recommendations" without naming one fails the criterion.
+Keep named-recommendation JSON entries and the legacy summary; assess lifecycle and legacy status from evidence rather than assuming a one-to-one mapping. Keep `processImprovements` within MAINTENANCE.md's **five-entry cap**, including the required prefixes; use Markdown for the complete per-recommendation review. Keep both reports consistent without adding evaluator keys. The `previous-recommendations-reviewed` eval criterion still requires a named prior recommendation and legacy status; generic "reviewed prior recommendations" fails.
+
+**Mechanical sub-check (required on the episodic draft before publication, and again on the published file before the final commit):** Run the grep-based helper with the mode determined above, substituting the scratch draft path first and the current report date after publication:
+
+```bash
+bash "$CLAUDE_CONFIG_DIR/skills/memory/reflect/scripts/check-previous-recommendations.sh" \
+  "memory/episodic/reflection-YYYY-MM-DD.md" "$review_mode"
+```
+
+The helper extracts only `## Previous Recommendations Review` and requires at least one standalone `- Status: <label>` field in `required` mode. Its `grep -E` expression matches exact, case-sensitive tokens, including escaped `Pending\+Deadline`; vocabulary lists, fenced examples, labels elsewhere, partial tokens, and legacy lowercase `pending` do not pass. Exempt modes require their exact not-applicable line in that section. A missing/duplicate section, missing/unreadable report, or command error fails even in exempt modes. The check verifies presence, not completeness or substantive closure: still review every recommendation and its evidence.
+
+On failure, repair the current draft and rerun the same check. If repair is blocked, put a visible `[blocked] Previous Recommendations Review validation failed: <reason>` in the maintenance Markdown and a terse `[blocked]` entry in `processImprovements`, respecting the five-entry cap; set `selfAssessment.previous-recommendations-reviewed` to `false` and do not claim validation passed. Do not edit past reports.
 
 ### 1. Staleness Check
 
@@ -79,18 +106,52 @@ If you cannot supply a specific named incident with a date, do NOT include it in
 
 Review memory files for bloat:
 - Core files over 50 lines should be pruned
-- Semantic files over 100 lines should be split
+- Semantic files over 100 lines require review for distinct sub-topics (a cohesive topic may remain intact with justification)
 - MEMORY.md should be under 100 lines
 
 **Action:** Split, prune, or archive as needed.
 
+For semantic files, use consolidation Step 5b's [citation-safe split runbook](../consolidate/SKILL.md#citation-safe-split-runbook): at most one source per cycle, a complete origin-repo reference inventory and lossless section map, validation of every live reference's intended content, and an explicit `migrated`, `justified no-split`, or `concrete handoff` outcome. The 100-line threshold triggers review; destination size goals never justify dropping content. Execute memory mutations during consolidation through its `step 5b` apply path; a reflection without that active cycle records the concrete handoff rather than invoking the helper without a marker. Changes involving `kb/` need the dedicated reviewed origin-repo migration in that runbook.
+
+Carry an existing split task forward with its source fingerprint, inventory/plan, owner, original UTC deadline, blocker and next action. At each review, verify migration evidence or actual progress instead of issuing a fresh "split this file" recommendation. Before its deadline, an unfinished handoff is `Pending+Deadline`. **If the deadline has expired and migration is unverified, escalate that same task as `Failure-Mode`** in `## Previous Recommendations Review`, with the missed deadline, evidence, blocker and owner action; include a terse `[blocked]` entry in `processImprovements` within the five-entry cap. Preserve the legacy pending/partially addressed status from evidence. Do not silently extend the deadline or create a duplicate recommendation. Report escalation through MAINTENANCE.md's reporting convention; no unsolicited external message. Close only with the runbook's migration evidence, or mark Moot with a verified no-split rationale.
+
 **`MEM_REGISTRY.md` inline policy prose:** if the registry carries inline policy-prose sections (e.g. a HOLD-lifecycle rule) rather than just `[MEM-NNN]` rows, that is live content, not the dead REMOVED rows the automated archival (Step 9d in `consolidate/SKILL.md`, poller-brain#217) relocates — deciding whether/where to move it is a manual reflection judgment. Relocate such prose verbatim to `memory/procedural/{topic}.md` and leave a one-line pointer in the registry (e.g. `> 📖 [section names] relocated to [procedural/{topic}.md](procedural/{topic}.md)`). Do not fold this into the automated consolidate step (poller-brain#217).
+
+### Checklist checkpoint — required before Output
+
+After Steps 1–4, review the complete diff for each reflection path, including both sides of moves and every preservation destination. Resolve integrity alarms before committing or proceeding. Prepare a JSON manifest in session scratch containing **only exact reviewed memory file paths**, never `memory/`, globs, or unrelated work. For example:
+
+```json
+{
+  "paths": ["memory/semantic/old-topic.md", "memory/procedural/topic.md"],
+  "deletionPreservation": {
+    "memory/semantic/old-topic.md": "Content preserved verbatim in memory/procedural/topic.md"
+  }
+}
+```
+
+Use an empty `paths` array only when the checklist made no changes. Recheck the root maintenance opt-out before invoking:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/scripts/reflection-commit.mjs" \
+  . YYYY-MM-DD checklist "$reflection_manifest"
+```
+
+The reflection-specific helper isolates the index, commits only these reviewed files, and preserves unrelated staged/unstaged work. It rejects staged work overlapping the reviewed paths; resolve ownership explicitly, never reset or sweep it. Hooks are disabled for isolation, so complete content/integrity validation before invocation. The subject is `chore: memory reflection checkpoint (YYYY-MM-DD) — checklist`. Do not call `consolidation-commit.sh` for reflection.
+
+**Require exit 0 with `result: committed` or a genuine `result: no-change` before entering Output.** Any command/commit failure stops progression: retain the diff and diagnostics for inspection; do not produce completed reports, advance cadence, or silently fall back to a broad commit. The helper also refuses opted-out runs without writes. It must not be used to commit the dated episodic report at this boundary.
+
+If index publication fails after HEAD moves, the helper exits nonzero and names the published commit SHA in stderr. It attempts to restore only its own HEAD update with compare-and-swap and reports whether HEAD was restored. If that fails, it retains the prepared `index.lock` at the diagnostic path, preserving unrelated staging. Inspect HEAD and reconcile the retained index before further Git writes; do not delete that lock or rerun blindly. This is recovery evidence, not completion evidence or automatic lifecycle repair.
+
+Retain the helper's JSON evidence and checkpoint SHA. The same `Reflection-Evidence:` JSON is stored in the checkpoint commit body (`git show -s --format=%B <checkpoint-SHA>`), including the pre-checkpoint baseline, changed paths/statuses and each deletion's preservation explanation. Carry these entries into cumulative `filesChanged`, `operationCounts`, and the per-file deletion entries in `decisions`/`observations`; union later reviewed changes without double-counting paths. A clean post-checkpoint diff does **not** mean zero work. After interruption, inspect that commit and its diff to recover this evidence before resuming; the checkpoint proves checklist changes were saved, not that reflection completed. A no-change result makes no commit and needs no fabricated changes.
 
 ## Output
 
+Enter Output only after the checklist checkpoint succeeds. Prepare and validate all three report drafts in session scratch first. Keep the cadence-bearing episodic filename absent until all drafts are ready to finalize; recheck maintenance opt-out before publishing them. Carry forward the checkpoint evidence when filling the reports, even if no memory edits remain uncommitted.
+
 ### 1. Episodic reflection file
 
-Write a reflection report to `memory/episodic/reflection-YYYY-MM-DD.md`:
+Prepare the episodic draft with this content; publish to `memory/episodic/reflection-YYYY-MM-DD.md` only at finalization:
 
 ```markdown
 # Memory Reflection — YYYY-MM-DD
@@ -102,12 +163,19 @@ Write a reflection report to `memory/episodic/reflection-YYYY-MM-DD.md`:
 - Gaps identified: N
 - Files pruned/archived: N
 
+## Previous Recommendations Review
+### Prior recommendation: <specific recommendation text>
+- Status: <one lifecycle label from Step 0>
+- Reason/evidence: <what happened, with a file/cycle reference; deadline and next action if applicable>
+
 ## Changes Made
 - [list of specific changes]
 
 ## Gaps to Fill
 - [list of identified gaps for future capture]
 ```
+
+Always include the canonical review section. Repeat its recommendation block for every prior recommendation; for a first run or an empty prior list, replace the blocks with the exact not-applicable line from Step 0. Run Step 0's mechanical sub-check on the draft before publication and on the published file before committing. An unresolved integrity/validation failure stops finalization; do not publish a completed reflection.
 
 ### 2. Maintenance reports (required)
 
@@ -129,12 +197,12 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
   - "episodic/ covers the last 3 months well; the last 2 questions about pre-Q1 incidents required Slack history dives because no episodic entries cover that period" — gap + observed consequence
   - Vague impact language like "this may affect quality" does NOT qualify — the consequence must be specific and already observed.
 - `recommendations`: Specific actions for the next maintenance cycle. If any recommendation would benefit all agents (not just this channel), prefix it with `[base-brain]`. **At least one recommendation MUST include all three of: (1) the concrete change to make, (2) the current problem it addresses, and (3) a verifiable success condition** — a checkable outcome that confirms the recommendation was implemented and effective. Format: `"[change] — [problem] — success: [verifiable condition]"`. Examples:
-  - "Split semantic/projects.md into per-project files — currently 120 lines, causes slow lookups — success: each resulting file under 60 lines at next reflection"
+  - "Complete split task memory/procedural/semantic-split-projects.md — mixed topics impede lookup — success: all sections/keys and live citations validated per Step 5b"
   - "[base-brain] Add guidance on deduplicating recurring morning-reflection topics — same question appears in consecutive daily logs without resolution — success: next reflection finds no unresolved repeated question across 3 consecutive logs"
 
   **Pre-write self-check (required):** Before finalizing recommendations, confirm at least one entry explicitly contains all three parts in this order: `[change] — [problem] — success: [verifiable condition]`. Check each draft recommendation for the "—" separator pattern with a named problem in the middle. A recommendation structured as `"[change]; success = [condition]"` or `"[change] — success: [condition]"` fails this criterion because it omits the problem statement. If no entry has all three parts, rewrite or add one recommendation that explicitly names the current problem before the success condition.
 
-  **Minimum-bar fallback:** Every reflection runs a size check (Step 4) that measures at least one memory file. If you are uncertain any draft recommendation satisfies the three-part test, append one based on a file measured in Step 4: `"[Trim/archive/split] [filename] — currently [N] bytes ([Nx] over [threshold] threshold) — success: [filename] under [threshold] at next reflection."` This template mechanically supplies all three required parts from evidence already in hand.
+  **Minimum-bar fallback:** Every reflection runs a size check (Step 4) that measures at least one memory file. If you are uncertain any draft recommendation satisfies the three-part test, use a measured file: `"Review [filename] via Step 4 — currently [N] lines, above its review trigger — success: record a justified keep, preserved relocation, or owned handoff with deadline."` For semantic splits, cite the existing task and its verifiable next action; never replace an overdue handoff with another size-only recommendation or promise reduction at the expense of content/citations.
 - `selfAssessment`: Use the actual reflection eval criterion IDs: `concrete-improvement-proposal`, `previous-recommendations-reviewed`, `gap-impact-analysis`, `verifiable-recommendations`, `deletion-with-preservation-evidence`.
 
   **Pre-write deletion accounting check (required when any files were deleted):** Before finalizing the report, check `operationCounts.deleted`. If deleted count > 0, enumerate every deleted file and confirm that `decisions` or `observations` contains an entry for each one that either (a) names the specific destination file where the content was preserved (e.g., "Deleted memory/daily/2026-03-15.md — content merged into memory/episodic/march-2026.md"), or (b) explicitly states the content was redundant with a specifically named existing file (e.g., "Deleted semantic/old-topic.md — fully superseded by semantic/new-topic.md"). Generic phrases like "archived old logs" or "no data loss" without naming specific files DO NOT qualify and will fail the `deletion-with-preservation-evidence` criterion. Every deleted file must be individually accounted for.
@@ -145,7 +213,11 @@ Produce both a markdown and JSON report in `reports/` as required by MAINTENANCE
 
 ## Commit
 
-After reflection, commit all changes (memory files + both report files) in one commit:
+Once all drafts pass validation, publish the episodic file and both maintenance reports, review their complete diffs, and prepare a final manifest with those three exact paths plus any additional reviewed memory changes since the checkpoint. Include deletion-preservation evidence for any new deletions. Recheck opt-out and commit through the same scoped helper:
+
+```bash
+node "$CLAUDE_CONFIG_DIR/scripts/reflection-commit.mjs" \
+  . YYYY-MM-DD final "$reflection_final_manifest"
 ```
-chore: memory reflection (YYYY-MM-DD)
-```
+
+The helper requires all three reports to exist and be explicitly reviewed in the manifest, then verifies all three are regular files in the private staged index. The final subject remains `chore: memory reflection (YYYY-MM-DD)`. Require a successful commit or verified no-change; failure stops completion claims and requires inspection. Preserve the checkpoint's cumulative file/count/deletion accounting in both reports; do not replace it with only the final commit's diff. This boundary does not implement automatic repair of interrupted publication or concurrent Git changes.

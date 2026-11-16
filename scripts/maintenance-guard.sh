@@ -35,7 +35,8 @@
 # SKILL.md — reinstated 2026-04-29 after skipping steps broke the
 # summary-md-regenerated eval criterion), so the fix belongs here at the
 # trigger, not inside the run: skip the ENTIRE run (no report) once a streak
-# of recent runs has promoted nothing, never a partial one. Mirrors
+# of recent runs has promoted nothing. The #466 per-file exception defers only
+# Step 6/9c candidate searches; regeneration/reporting still run. Mirrors
 # reflection-guard.sh's cadence-gate pattern (poller-brain#157) applied to
 # the opposite problem (running too often instead of too rarely).
 #

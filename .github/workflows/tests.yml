@@ -61,6 +61,6 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --prefix skills/memory --ignore-scripts
-          for suite in citation-detect mem-id mem-write mem-registry-archive mem-registry-trim mem-learnings-trim mem-mistakes-trim mem-scaled-threshold; do
+          for suite in citation-detect mem-id mem-write mem-registry-archive mem-registry-trim mem-learnings-trim mem-mistakes-trim mem-scaled-threshold mem-catalog-audit trim-review-state; do
             npx --yes tsx@4.23.15 "skills/memory/scripts/${suite}.test.ts"
           done

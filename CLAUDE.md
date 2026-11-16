@@ -316,6 +316,12 @@ You can attach multiple modals to one message — each gets its own button:
 - The `view` object follows standard Slack Block Kit modal format — use `input` blocks for form fields
 - Each input block needs a unique `block_id` and the element needs an `action_id` — these become the field names in submission data
 - The `action_id` values from your input elements become the keys in the submission values
+- Use `type: "modal"`, a required `plain_text` title, and optional `plain_text` submit/close controls, each with 1–24 characters. A submit control is required when there are input blocks. A view supports at most 100 blocks.
+- `callbackId` (wrapper, takes precedence) and `view.callback_id` are each limited to 255 characters; `private_metadata` to 3000. All supplied block IDs must be unique within the view.
+- Option values must be unique within each element, including across its option groups, and at most 150 characters; option/group labels at most 75; placeholders at most 150. Initial selections may refer to declared options. Character limits count Unicode code points.
+- For `plain_text_input`, `min_length` must be an integer from 0–3000 and `max_length` from 1–3000, with min ≤ max; `initial_value` must fit those bounds (default maximum 3000). For `number_input`, supplied min/max/initial values must be finite numeric strings, ordered and consistent with `is_decimal_allowed`.
+- `send_message` checks all views before any API call, including `dry_run` and sessions without platform credentials. Invalid input returns MCP `isError: true`, `ok: false` and a field-path diagnostic; fix the definition before sending. Valid definitions are passed unchanged; unknown Slack fields are preserved. These bounded checks do not guarantee Slack acceptance when the modal opens.
+- Registration and button-update errors can occur after the message is posted. Their `ok: false` result includes `stage`, a safe `code`/HTTP `status`, `message_posted: true`, `channel` and `ts`; registration errors also include zero-based `modal_index`. A failed registration stops the batch without attaching a subset of buttons. Do not automatically resend or delete the message. With no platform credentials, valid modals remain disabled as before.
 
 ## Task Scheduling & Heartbeat (DEPRECATED)
 

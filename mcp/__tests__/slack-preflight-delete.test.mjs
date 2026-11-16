@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const mcpDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const source = readFileSync(join(mcpDir, 'slack.mjs'), 'utf8')
   .split('// --- stdio transport ---')[0]
-  .replace("'./lib/validate-args.mjs'", JSON.stringify(pathToFileURL(join(mcpDir, 'lib/validate-args.mjs')).href))
+  .replace(/'\.\/lib\/([^']+)'/g, (_, file) => JSON.stringify(pathToFileURL(join(mcpDir, 'lib', file)).href))
 let instance = 0
 const TS = '1000.000002'
 const OWN = { ts: TS, user: 'UOWN', bot_id: 'BOWN' }
@@ -129,7 +129,7 @@ for (const args of [
   { text: '*https://example.com/a*\n\n| Task | State |\n|---|---|\n| Work | Done |' },
   { text: '*see https://example.com/a*', blocks: [{ type: 'divider' }] },
   { text: 'Open form', modals: [{ label: 'Open', view: { type: 'modal', title: { type: 'plain_text', text: 'Form' }, blocks: [] } }] },
-  { text: '*https://example.com/a*', blocks: [{ type: 'divider' }], modals: [{ view: { type: 'modal', blocks: [] } }] },
+  { text: '*https://example.com/a*', blocks: [{ type: 'divider' }], modals: [{ view: { type: 'modal', title: { type: 'plain_text', text: 'Form' }, blocks: [] } }] },
 ]) {
   test(`preflight transformed payload matches ordinary initial post: ${JSON.stringify(args).slice(0, 65)}`, () => fixture(async ({ call, calls }) => {
     const { result, envelope } = await call('send_message', { ...args, dry_run: true })
@@ -160,7 +160,7 @@ test('preflight sentinel reports suppression without writes', () => fixture(asyn
 }))
 
 test('preflight returns a disabled modal plan without platform credentials or writes', () => fixture(async ({ call, calls }) => {
-  const modals = [{ view: { type: 'modal', blocks: [] } }]
+  const modals = [{ view: { type: 'modal', title: { type: 'plain_text', text: 'Form' }, blocks: [] } }]
   const { result } = await call('send_message', { text: 'hello', thread_ts: null, modals, dry_run: true })
   assert.equal(result.modals.enabled, false)
   assert.equal(result.modals.thread_context, 'sent_message_ts')

@@ -6,6 +6,7 @@
 # even when the final marker's tree no longer contains the JSON.
 BRAIN_DIR="${1:-.}"
 export GIT_OPTIONAL_LOCKS=0  # detection must not refresh or rewrite the index
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPAIR_GUIDANCE='unfinished consolidation cycle — inspect, then run `consolidation-marker.sh repair`'
 unknown() {
   local guidance='inspect before citing'
@@ -26,6 +27,9 @@ unfinished() {
 pair_in_commit() {
   git -C "$BRAIN_DIR" cat-file -e "$1:reports/$2-memory-consolidation.md" 2>/dev/null &&
     git -C "$BRAIN_DIR" cat-file -e "$1:reports/$2-memory-consolidation.json" 2>/dev/null
+}
+history_in_commit() {
+  node "$SCRIPT_DIR/consolidation-history.mjs" "$BRAIN_DIR" "$3" --committed "$1" "$2" "${START_HEAD:-}" 2>&1
 }
 final_for_date() {
   local candidates
@@ -98,8 +102,22 @@ if [ "$CYCLE_DATE" != "$TODAY" ] && [ -f "$BRAIN_DIR/reports/$TODAY-memory-conso
   if [ -z "$TODAY_FINAL" ] || ! pair_in_commit "$TODAY_FINAL" "$TODAY"; then
     unfinished "$TODAY; in progress" "report without committed completion evidence; inspect and reconcile"
   fi
+  HISTORY_CHECK=$(history_in_commit "$TODAY_FINAL" "$TODAY_FINAL" "$TODAY") ||
+    unfinished "$TODAY; in progress" "$HISTORY_CHECK"
 fi
 if [ -z "$CHECKPOINT" ] && [ "$MARKER_STATUS" -eq 0 ]; then
+  # Check versioned checkpoint-free completions too; legacy reports need no backfill.
+  LATEST_FINAL=$(git -C "$BRAIN_DIR" log --format='%H %s' --extended-regexp \
+    --grep='^chore: consolidate memory \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$' HEAD 2>/dev/null | \
+    sed -nE '/^[0-9a-f]+ chore: consolidate memory \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$/{p;q;}')
+  if [ -n "$LATEST_FINAL" ]; then
+    LEGACY_SHA=${LATEST_FINAL%% *}
+    LEGACY_DATE=$(printf '%s\n' "$LATEST_FINAL" | sed -nE 's/.*\(([0-9-]+)\)$/\1/p')
+    if pair_in_commit "$LEGACY_SHA" "$LEGACY_DATE"; then
+      HISTORY_CHECK=$(history_in_commit "$LEGACY_SHA" "$LEGACY_SHA" "$LEGACY_DATE") ||
+        unfinished "$LEGACY_DATE" "$HISTORY_CHECK"
+    fi
+  fi
   echo "consolidation_state: none (no checkpoint in available history; no unfinished report evidence)"
   exit 0
 fi
@@ -122,8 +140,11 @@ if [ -n "$FINAL" ]; then
     EVIDENCE=$CHECKPOINT_SHA
   fi
   if [ -n "$EVIDENCE" ] && [ -f "$BRAIN_DIR/reports/$CYCLE_DATE-memory-consolidation.md" ]; then
-    echo "consolidation_state: complete ($CYCLE_DATE; final $FINAL; report pair committed at $EVIDENCE)"
-    exit 0
+    if HISTORY_CHECK=$(history_in_commit "$FINAL" "$EVIDENCE" "$CYCLE_DATE"); then
+      echo "consolidation_state: complete ($CYCLE_DATE; final $FINAL; report pair committed at $EVIDENCE)"
+      exit 0
+    fi
+    REASON=$HISTORY_CHECK
   fi
 fi
 if [ "$MARKER_STATUS" -eq 1 ]; then

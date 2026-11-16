@@ -6,6 +6,7 @@
 # Strict mode: --memory-only BRAIN_DIR YYYY-MM-DD BOUNDARY EXACT_MEMORY_PATH...
 # Requires a valid cycle marker and clean target index; never sweeps memory/.
 set -euo pipefail
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [ "${1:-}" = --memory-only ]; then
   shift
   exec node "$(dirname "${BASH_SOURCE[0]}")/consolidation-transaction.mjs" commit "$@"
@@ -16,6 +17,14 @@ BOUNDARY=${3:?checkpoint boundary or final required}
 shift 3
 [[ "$CYCLE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo 'invalid cycle date' >&2; exit 2; }
 cd "$BRAIN_DIR"
+# History is due at Step 6, including zero-promotion and clean-tree runs.
+# Gate before any staging (or an empty final commit), leaving index/HEAD/marker
+# untouched on rejection. Steps 0-5 and their transactions remain usable.
+case "$BOUNDARY" in
+  'steps 5-6') node "$SCRIPT_DIR/consolidation-history.mjs" . "$CYCLE_DATE" ;;
+  'steps 10-12') node "$SCRIPT_DIR/consolidation-history.mjs" . "$CYCLE_DATE" --report ;;
+  final) node "$SCRIPT_DIR/consolidation-history.mjs" . "$CYCLE_DATE" --final ;;
+esac
 JSON="reports/$CYCLE_DATE-memory-consolidation.json"
 ALLOWLIST=(memory/ "reports/$CYCLE_DATE-memory-consolidation.md" "$JSON")
 for path in "$@"; do

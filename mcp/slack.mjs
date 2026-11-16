@@ -19,6 +19,7 @@
 
 import { createInterface } from 'readline'
 import { validateArgs } from './lib/validate-args.mjs'
+import { validateModalViews } from './lib/validate-modal-views.mjs'
 
 const BOT_TOKEN = process.env.SLACK_BOT_TOKEN
 const DEFAULT_CHANNEL = process.env.SLACK_CHANNEL
@@ -647,7 +648,7 @@ function buildSendPreflight(args, body, { thread_ts, hasModals, transformed }) {
     }
   }
   response.validation = {
-    checked: ['argument_schema', 'session_routing', 'payload_transforms'],
+    checked: ['argument_schema', 'modal_views', 'session_routing', 'payload_transforms'],
     limits: {
       message_blocks: 50,
       section_text_characters: 3000,
@@ -656,7 +657,7 @@ function buildSendPreflight(args, body, { thread_ts, hasModals, transformed }) {
       text_truncation_characters: 40000,
     },
     limitations: [
-      'Limits are advisory; full Block Kit and modal view validation is performed by Slack only on publication.',
+      'Message limits are advisory. Bounded modal checks run locally; full Block Kit validation and acceptance when opening a modal remain with Slack.',
       'Channel is resolved from the explicit argument or session default; names, access, archive state and thread existence are not verified.',
       'No delivery, permission, rendering or later send success is guaranteed; post-send warnings are not evaluated.',
       'Payload previews the initial post. Modal registration, generated button IDs and the subsequent update are deferred; enabled modals add one actions block.',
@@ -828,7 +829,7 @@ async function resolveDisplayName(userId) {
 const TOOLS = [
   {
     name: 'send_message',
-    description: 'Send a message to Slack; publishes immediately unless dry_run: true requests a zero-write wrapper preflight. Never post placeholder/probe messages to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. With no session thread context, an explicit channel and omitted thread_ts produces a channel-root post. For deliberate root posts use thread_ts: null; otherwise omit thread_ts to use the current thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.).',
+    description: 'Send a message to Slack; publishes immediately unless dry_run: true requests a zero-write wrapper preflight. Never post placeholder/probe messages to discover a destination. For unknown channel names, call list_channels first, then confirm the selected ID with read_channel_info. If the destination is missing, ambiguous, inaccessible, or discovery is incomplete, stop and report it; never guess. With no session thread context, an explicit channel and omitted thread_ts produces a channel-root post. For deliberate root posts use thread_ts: null; otherwise omit thread_ts to use the current thread. Supports full Slack markdown and Block Kit blocks (for buttons, sections, etc.). All nested modal views are validated before any API call, including dry runs and when platform credentials are absent. Modal registration or button-update failures return ok:false with message_posted:true, channel and ts; do not automatically resend.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -840,13 +841,13 @@ const TOOLS = [
         dry_run: { type: 'boolean', description: 'Wrapper preflight only: returns the effective channel, thread/root mode, transformed initial payload, deferred modal plan and validation limits with ZERO writes. Does not verify destination access or guarantee later delivery. Default: false (publishes immediately).' },
         modals: {
           type: 'array',
-          description: 'Modal form definitions to attach as buttons. Each opens a Slack modal when clicked.',
+          description: 'Modal form definitions to attach as buttons. Every view is checked before posting: type modal; required plain_text title and optional submit/close text 1-24 characters; submit required with input blocks; callback_id/callbackId <=255; private_metadata <=3000; blocks <=100. Input blocks need unique block_id and interactive elements need action_id. Option values <=150 and unique per element (including groups), labels <=75, placeholders <=150; plain_text_input min_length 0-3000, max_length 1-3000, ordered and compatible with initial_value; number_input bounds and initial_value must agree. Unknown Slack fields pass through; local checks do not guarantee Slack acceptance. Without platform credentials, valid definitions retain the existing disabled-modal behavior.',
           items: {
             type: 'object',
             properties: {
               label: { type: 'string', description: 'Button label (default: "Open Form")' },
-              view: { type: 'object', description: 'Slack Block Kit view object with type, title, blocks, submit, close' },
-              callbackId: { type: 'string', description: 'Identifier for matching submissions to requests' },
+              view: { type: 'object', description: 'Slack modal view with type: modal, plain_text title (1-24 characters), blocks (at most 100), optional plain_text submit/close (1-24 characters); submit required with inputs. Character limits count Unicode code points. Valid views are forwarded unchanged.' },
+              callbackId: { type: 'string', description: 'Identifier for matching submissions to requests, at most 255 characters; takes precedence over view.callback_id (also validated)' },
             },
             required: ['view'],
           },
@@ -910,14 +911,19 @@ const TOOLS = [
   },
   {
     name: 'read_thread',
-    description: 'Read message history from the current thread.',
+    description: 'Read one page of thread history in Slack order (oldest first; the parent may be included). Returns messages, resolved channel/thread_ts, has_more and next_cursor when present. Continue with cursor=next_cursor, keeping the same destination and time bounds. oldest/latest are exclusive unless inclusive=true. No automatic traversal. has_more=false only describes the end of the requested range at read time, not a stable snapshot or proof of delivery/non-delivery. A message missing from one page does NOT prove it was not sent.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'number', description: 'Max messages to return (default: 20)' },
         channel: { type: 'string', description: 'Channel ID (default: current channel)' },
-        thread_ts: { type: 'string', description: 'Thread timestamp (default: current thread)' },
+        thread_ts: { type: 'string', maxLength: 19, pattern: '^\\d{1,12}\\.\\d{1,6}$(?![\\s\\S])', description: 'Thread timestamp as a string (default: current thread)' },
+        // The final lookahead enforces true end-of-input, even for a trailing newline.
+        cursor: { type: 'string', minLength: 1, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$(?![\\s\\S])', description: 'Opaque next_cursor from a previous page; pass unchanged, without whitespace or control characters' },
+        oldest: { type: 'string', maxLength: 19, pattern: '^\\d{1,12}\\.\\d{1,6}$(?![\\s\\S])', description: 'Lower message timestamp bound (exclusive unless inclusive=true)' },
+        latest: { type: 'string', maxLength: 19, pattern: '^\\d{1,12}\\.\\d{1,6}$(?![\\s\\S])', description: 'Upper message timestamp bound (exclusive unless inclusive=true)' },
+        inclusive: { type: 'boolean', description: 'Include messages exactly at oldest/latest (Slack default: false)' },
       },
     },
   },
@@ -1152,11 +1158,21 @@ const TOOLS = [
   },
 ]
 
+// Modal failures happen after posting. Keep remote bodies/exception messages
+// out of the tool response while preserving enough context to avoid reposting.
+function modalPublicationError(stage, code, channel, ts, details) {
+  const error = new Error(`${stage} failed${details.modal_index === undefined ? '' : ` for modals[${details.modal_index}]`}: ${code}. Message already posted; do not automatically resend.`)
+  error.slackModalFailure = { stage, code, ...details, message_posted: true, channel, ts }
+  return error
+}
+
 // --- Tool handlers ---
 
 async function handleTool(name, args) {
   switch (name) {
     case 'send_message': {
+      const modalError = validateModalViews(args.modals)
+      if (modalError) throw new Error(modalError)
       if (!args.dry_run && shouldSuppressSentinel(args)) {
         return { ok: true, suppressed: 'sentinel', detail: 'Nothing was posted to Slack.' }
       }
@@ -1198,7 +1214,9 @@ async function handleTool(name, args) {
       if (hasModals) {
         const effectiveThreadTs = thread_ts || result.ts
         const buttons = []
-        for (const modal of args.modals) {
+        for (const [modalIndex, modal] of args.modals.entries()) {
+          let status = null
+          let code = 'transport_error'
           try {
             const resp = await fetch(`${API_URL}/modal-definitions`, {
               method: 'POST',
@@ -1217,8 +1235,18 @@ async function handleTool(name, args) {
                 viewDefinition: modal.view,
               }),
             })
+            status = Number.isInteger(resp.status) && resp.status >= 100 && resp.status <= 599 ? resp.status : null
+            code = 'http_error'
+            if (resp.ok !== true) throw new Error()
+            code = 'invalid_json'
             const data = await resp.json()
-            if (!resp.ok) throw new Error(data.error || `API error ${resp.status}`)
+            code = 'invalid_response'
+            if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error()
+            if (data.ok === false || data.error) {
+              code = 'application_error'
+              throw new Error()
+            }
+            if (typeof data.modalDefId !== 'string' || !data.modalDefId.trim()) throw new Error()
 
             buttons.push({
               type: 'button',
@@ -1226,20 +1254,24 @@ async function handleTool(name, args) {
               action_id: `modal:${data.modalDefId}`,
               value: `modal_def_id:${data.modalDefId}`,
             })
-          } catch (e) {
-            console.error('Failed to register modal:', e.message)
+          } catch {
+            throw modalPublicationError('modal_registration', code, channel, result.ts, { modal_index: modalIndex, status })
           }
         }
 
         // Update the message to add modal buttons
         if (buttons.length) {
           const updatedBlocks = [...blocks, { type: 'actions', elements: buttons }]
-          await slackApi('chat.update', {
-            channel,
-            ts: result.ts,
-            text: effectiveText,
-            blocks: updatedBlocks,
-          })
+          try {
+            await slackApi('chat.update', {
+              channel,
+              ts: result.ts,
+              text: effectiveText,
+              blocks: updatedBlocks,
+            })
+          } catch {
+            throw modalPublicationError('modal_button_update', 'update_failed', channel, result.ts, { status: null })
+          }
         }
       }
 
@@ -1317,7 +1349,13 @@ async function handleTool(name, args) {
       const limit = args.limit || 20
       if (!channel) throw new Error('channel required')
       if (!ts) throw new Error('thread_ts required')
-      const result = await slackApi('conversations.replies', { channel, ts, limit })
+      const result = await slackApi('conversations.replies', {
+        channel, ts, limit,
+        cursor: args.cursor,
+        oldest: args.oldest,
+        latest: args.latest,
+        inclusive: args.inclusive,
+      })
       const messages = (result.messages || []).map((m) => ({
         user: m.user || m.bot_id || 'unknown',
         text: m.text || '',
@@ -1337,7 +1375,16 @@ async function handleTool(name, args) {
           })),
         }),
       }))
-      return { ok: true, messages }
+      const nextCursor = result.response_metadata?.next_cursor
+      return {
+        ok: true,
+        messages,
+        channel,
+        thread_ts: ts,
+        // A continuation cursor also signals more pages, even if has_more is absent/false.
+        has_more: Boolean(result.has_more || nextCursor),
+        ...(nextCursor && { next_cursor: nextCursor }),
+      }
     }
 
     case 'get_permalink': {
@@ -1777,6 +1824,7 @@ async function handleRequest(req) {
           ok: false,
           error: e.slackDeleteCode || e.message,
           ...(e.slackDeleteCode ? { detail: e.message } : {}),
+          ...e.slackModalFailure,
         }
         const result = name === 'delete_message'
           ? buildDeleteResponse(e.slackDeleteAudit || createDeleteAudit(args, 'invalid_arguments'), failure)

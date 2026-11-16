@@ -36,6 +36,11 @@
  * no-op for that key. Structurally and count-verified: aborts (exit 1) on any invariant
  * break — no silent drop.
  *
+ * Rejected-review ledger (propose only): --reject <printed-review-ref>
+ * --reason <explanation> records a pending explicit rejection. Only a completed
+ * consolidation with its report pair makes it reusable. --completed-at <HEAD>
+ * selects the pre-Step-0 HEAD; --reconsider requests fresh review of all entries.
+ *
  * Usage:
  *   npx tsx mem-learnings-trim.ts                            # propose: list candidates, write nothing
  *   npx tsx mem-learnings-trim.ts --apply --only MEM-1,MEM-5  # apply exactly these approved keys
@@ -45,8 +50,8 @@
 import { printOwnershipRejections } from "./lib/citation-detect.js";
 import { MEM_ID_PATTERN } from "./lib/mem-id.js";
 import * as fs from "fs";
-import * as path from "path";
-import { brainPath } from "./lib/brain-root.js";
+import { brainPath, resolveBrainRoot } from "./lib/brain-root.js";
+import { collectTrimDestinations, reviewProposals, checkReviewApplyFlags } from "./lib/trim-review-state.js";
 import {
   findLearningsTrimCandidates,
   applyLearningsTrimCandidates,
@@ -55,6 +60,7 @@ import {
   parseOnlySelectors,
   groupCandidatesByKey,
   unambiguousHeadlineKeys,
+  pointerFor,
   type DestinationFile,
   type LearningsTrimCandidate,
   type OnlySelector,
@@ -79,39 +85,10 @@ const DEST_DIRS = ["semantic", "episodic", "procedural"];
 const LEARNINGS_CAP_BYTES = 5000;
 const HAS_MEM_KEY_RE = new RegExp(String.raw`\b${MEM_ID_PATTERN}\b`);
 
-// episodic/archive/mistakes-*.md holds relocated, dead history from Step 9f
-// — a key cited there is evidence it USED to live somewhere, not that it's
-// currently promoted. Scanning it as a destination lets a trim rewrite a
-// live entry into a pointer at the archive instead of its actual current
-// home. poller-brain#328 review round 1 (DevGuru): measured this happening
-// for real via the new mistakes archive this same PR introduces. Scoped to
-// mistakes-*.md specifically (round 2 fix) — excluding the whole
-// episodic/archive/ directory also dropped episodic/archive/learnings-*.md
-// (Step 5c's own archive) as a destination, breaking 4 already-live
-// reduction paths on a real 261KB over-cap MEM_REGISTRY.md (measured:
-// 26 -> 22 candidates on the DevGuru brain).
-const MISTAKES_ARCHIVE_RE = /^episodic\/archive\/mistakes-.*\.md$/;
-
-function walk(absDir: string, relDir: string, out: DestinationFile[]): void {
-  if (!fs.existsSync(absDir)) return;
-  for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-    const relPath = path.join(relDir, entry.name);
-    const absPath = path.join(absDir, entry.name);
-    if (entry.isDirectory()) {
-      walk(absPath, relPath, out);
-    } else if (entry.name.endsWith(".md")) {
-      if (MISTAKES_ARCHIVE_RE.test(relPath)) continue;
-      out.push({ file: relPath, text: fs.readFileSync(absPath, "utf-8") });
-    }
-  }
-}
-
+// Shared scan preserves the mistakes-archive exclusion and excludes generated
+// consolidation progress bookkeeping from evidence and review fingerprints.
 function collectDestinations(): DestinationFile[] {
-  const destinations: DestinationFile[] = [];
-  for (const dir of DEST_DIRS) {
-    walk(brainPath("memory", dir), dir, destinations);
-  }
-  return destinations;
+  return collectTrimDestinations(resolveBrainRoot(), DEST_DIRS);
 }
 
 function parseOnlyFlag(): OnlySelector[] | null {
@@ -133,8 +110,13 @@ function parseOnlyFlag(): OnlySelector[] | null {
   }
 }
 
-function printProposals(candidates: LearningsTrimCandidate[]): void {
-  const byKey = groupCandidatesByKey(candidates);
+function printProposals(
+  learningsBefore: string,
+  candidates: LearningsTrimCandidate[],
+  allCandidates = candidates
+): void {
+  const lines = learningsBefore.split("\n");
+  const byKey = groupCandidatesByKey(allCandidates);
   const selectorFor = (c: LearningsTrimCandidate): string =>
     byKey.get(c.key)!.length > 1 ? `${c.key}@${c.entryStartLine}` : c.key;
 
@@ -149,7 +131,7 @@ function printProposals(candidates: LearningsTrimCandidate[]): void {
   // called out below, so copy-pasting the headline can never apply more
   // than one candidate for the same key — a reviewer must explicitly pick a
   // span selector per ambiguous key from the per-candidate list.
-  const unambiguousKeys = unambiguousHeadlineKeys(candidates);
+  const unambiguousKeys = unambiguousHeadlineKeys(allCandidates).filter(key => candidates.some(c => c.key === key));
   const ambiguousKeys = [...new Set(candidates.filter((c) => byKey.get(c.key)!.length > 1).map((c) => c.key))];
 
   console.log(`${candidates.length} trim candidate(s) found. Nothing written — review, then apply with:`);
@@ -164,14 +146,14 @@ function printProposals(candidates: LearningsTrimCandidate[]): void {
   }
   for (const c of candidates) {
     const span = c.entryStartLine === c.entryEndLine ? `${c.entryStartLine}` : `${c.entryStartLine}-${c.entryEndLine}`;
-    const marker = c.format === "heading" ? "###" : "-";
+    const entryText = lines.slice(c.entryStartLine - 1, c.entryEndLine).join("\n");
     console.log(`${selectorFor(c)} (LEARNINGS.md:${span}, ${c.format} entry) → ${c.file}:${c.line}`);
     console.log(`  citing line:      ${c.lineText.trim()}`);
     // Must match applyLearningsTrimCandidates' actual write, verbatim — a
     // reviewer approves THIS text (DevGuru catch, poller-brain#300 review
     // round 1: printed proposal previously omitted ":line" that the write
     // included).
-    console.log(`  proposed pointer: ${marker} [${c.key}] → see ${c.file}:${c.line} — ${c.hook}`);
+    console.log(`  proposed pointer: ${pointerFor(entryText, c)}`);
     console.log();
   }
 }
@@ -227,6 +209,7 @@ function printUnreliableHooks(unreliableHooks: UnreliableHook[]): void {
 }
 
 function main(): void {
+  checkReviewApplyFlags();
   const apply = process.argv.includes("--apply");
   const onlyKeys = parseOnlyFlag();
 
@@ -283,6 +266,8 @@ function main(): void {
       );
       return;
     }
+    const review = reviewProposals(resolveBrainRoot(), "memory/core/LEARNINGS.md", learningsBefore, candidates, destinations);
+    if (review === null) return;
     if (candidates.length === 0) {
       console.log(
         `No promoted entries to propose (${alreadyPointer} already pointers out of ${totalEntries} entries, ` +
@@ -290,7 +275,7 @@ function main(): void {
       );
       return;
     }
-    printProposals(candidates);
+    if (review.length > 0) printProposals(learningsBefore, review, candidates);
     return;
   }
 

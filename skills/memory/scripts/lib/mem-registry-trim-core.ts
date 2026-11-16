@@ -145,8 +145,22 @@ function checkCoverage(key: string, description: string, citation: OwnedCitation
   };
 }
 
-/** Matches an already-trimmed pointer row's Description cell. */
-export const POINTER_DESC_RE = /^see .+\.md( —| -)/;
+/** Recognize an existing pointer in a trimmed Description cell. */
+export function isPointerDescription(description: string): boolean {
+  // Compact targets need only a token boundary, independent of the hook's
+  // separator (or whether a hook exists). A suffix like .md.bak or .md:12
+  // is not a target emitted by this registry writer.
+  if (/^see \S+\.md(?:\s|$)/u.test(description)) return true;
+
+  // Spaced tier-relative paths end at `.md — `, not the first ` — `:
+  // the delimiter itself can occur in a filename. Preserve presentation
+  // spaces verbatim. Colons and control whitespace stay outside this
+  // grammar so a line-qualified target cannot consume a later .md hook.
+  // The writer checks this same predicate before emitting a pointer.
+  const file = description.match(/^see ((?:core|semantic|episodic|procedural)\/[^:]+?\.md) — /u)?.[1];
+  return file !== undefined && file.split("/").every((part) =>
+    part.length > 0 && part !== "." && part !== ".." && !/[^\S \u00a0\u202f]/u.test(part));
+}
 
 export interface FindCandidatesResult {
   candidates: TrimCandidate[];
@@ -199,7 +213,7 @@ export function findTrimCandidates(
     const cells = parseRegistryCells(line);
     // An unparseable row has no verifiable body and must fail coverage.
     const description = cells ? cells[cells.length - 2].trim() : "";
-    if (POINTER_DESC_RE.test(description)) {
+    if (isPointerDescription(description)) {
       alreadyPointer++;
       continue;
     }
@@ -276,6 +290,7 @@ export interface TrimResult {
  * candidates but weren't approved.
  * Unparseable rows and all rows with duplicated keys are always retained,
  * including when the approved candidates came from an earlier registry.
+ * Destination paths outside the shared pointer grammar are also retained.
  *
  * @param registry     current MEM_REGISTRY.md content
  * @param candidates   the exact set of trims to apply (caller decides trust)
@@ -302,7 +317,7 @@ export function applyTrimCandidates(
     const key = m[1];
     const description = cells ? cells[cells.length - 2].trim() : "";
 
-    if (POINTER_DESC_RE.test(description)) {
+    if (isPointerDescription(description)) {
       alreadyPointer++;
       return line;
     }
@@ -311,6 +326,9 @@ export function applyTrimCandidates(
 
     const candidate = byKey.get(key);
     if (!candidate) return line; // no approved candidate for this row — keep full narrative
+    // Fail closed for paths the next scan could not recognize. Check the
+    // target alone so a .md in the hook cannot make an invalid target pass.
+    if (!isPointerDescription(`see ${candidate.file} — `)) return line;
 
     trimmedKeys.push(key);
     if (cells.length === 7) cells[4] = ` ${candidate.file}:${candidate.line} `;
