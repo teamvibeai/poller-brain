@@ -161,12 +161,26 @@ function apply(today: string, registry: string, id = DATED_A, text = content) {
   if (result.kind !== "ready") throw new Error("expected write plan");
   return { today: today + result.todayAppend, registry: registry + result.registryAppend, result };
 }
+acceptance("legacy leading source words are payload, including partial retries", () => {
+  for (const tag of ["user", "maint"]) {
+    const text = `[${tag}] literal payload\ncontinuation`;
+    const today = `- [${DATED_A}] ${text}\n`;
+    const registry = header5 + `| ${DATED_A} | ACTIVE | 2026-11-08 | — | [${tag}] literal payload continuation |\n`;
+    for (const source of ["maintenance", "user-session"] as const) {
+      for (const savedRegistry of [registry, header5]) {
+        const result = core.planMemWrite({ today, registry: savedRegistry, id: DATED_A, content: text, source });
+        check.equal(result.kind, "ready");
+        if (result.kind === "ready") check.equal(result.todayAppend, "");
+      }
+    }
+  }
+});
 acceptance("a default dated identity and injected UTC clock", () => {
   const id = ids.newMemId(clock);
   check(ids.isMemId(id));
   check.deepEqual(ids.parseMemId(id), { kind: "dated", date: "2026-11-07", time: "193203", uuid: id.slice(22) });
   const written = apply("", header5, id);
-  check.equal(written.result.todayAppend, `- [${id}] [maint] ${content}\n`);
+  check.equal(written.result.todayAppend, `- [${id}][maint] ${content}\n`);
   check.equal(written.result.registryAppend, `| ${id} | ACTIVE | 2026-11-07 | — | ${content} |\n`);
 });
 acceptance("b identical content in separate requests has separate IDs", () => {
@@ -334,7 +348,7 @@ acceptance("CLI wiring", () => {
     check.notEqual(failure.status, 0);
     const failedId = failure.stderr.match(/^MEM_ID=(.+)$/m)?.[1];
     check(failedId && ids.isMemId(failedId), failure.stderr);
-    check(fs.readFileSync(todayPath, "utf8").includes(`[${failedId}] [maint] new memo after failure`));
+    check(fs.readFileSync(todayPath, "utf8").includes(`[${failedId}][maint] new memo after failure`));
     check(!fs.readFileSync(registryPath, "utf8").includes(failedId));
     const partialToday = fs.readFileSync(todayPath, "utf8");
     fs.unlinkSync(failureSwitch);

@@ -6,7 +6,7 @@ export function parseSourceFlag(argv: string[]): { source: LogSource; content: s
   let explicit: LogSource | undefined;
   for (const arg of argv) {
     if (arg === "--source") throw new Error("Use --source=maintenance or --source=user-session");
-    if (!arg.startsWith("--source=")) { rest.push(arg); continue; }
+    if (!arg.startsWith("--source=") || /\s/.test(arg)) { rest.push(arg); continue; }
     const value = arg.slice("--source=".length);
     if (value !== "maintenance" && value !== "user-session") {
       throw new Error(`Invalid --source value: "${value}" (expected maintenance or user-session)`);

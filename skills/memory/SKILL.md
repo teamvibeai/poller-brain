@@ -233,7 +233,7 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" --source=user-se
 
 Choose `--source=user-session` for human-triggered work and `--source=maintenance` for scheduled/automated work, with **either writer**. Derive source from the trigger, never the commit prefix or log wording. Both default to maintenance if omitted, and reject invalid/conflicting flags or empty content before writing. Historical untagged entries stay unknown; do not relabel them. The user-tagged day signal is an observe-only lower bound during adoption, not user logging completeness.
 
-The script appends a timestamped line: `- [HH:MM] [user] content` or `- [HH:MM] [maint] content`.
+Source metadata touches the closing identity/timestamp bracket; the following space starts content. A bracketed word after that space in a legacy entry remains content with unknown provenance. The script appends a timestamped line: `- [HH:MM][user] content` or `- [HH:MM][maint] content`.
 
 #### `mem-write.ts` — tracked memory
 
@@ -263,7 +263,7 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" --id "$MEM_ID" -
 The script:
 1. Allocates a UTC `MEM-YYYY-MM-DD-HHMMSS-<uuid>` ID using the platform's full random UUID
 2. Prints `MEM_ID=<id>` to stderr before any file write; preserve this ID for retries
-3. Appends `- [<id>] [user] content` (or `[maint]` for maintenance) to `memory/TODAY.md` if that ID is absent
+3. Appends `- [<id>][user] content` (or `[maint]` for maintenance) to `memory/TODAY.md` if that ID is absent
 4. Appends the same ID to `memory/MEM_REGISTRY.md` if that key is absent
 5. Creates missing headers as needed; `--id <printed MEM_ID>` completes either missing append, returns `Already written [<id>]` if both exist, and rejects different content or a conflicting existing source tag without writing; legacy untagged retries stay unchanged and unknown
 
@@ -274,8 +274,8 @@ After the script runs, confirm to user: "Zapsáno." / "Uloženo do paměti." (do
 **Example result:**
 ```markdown
 # In TODAY.md:
-- [MEM-3] [user] deploy: staging vyžaduje SSO login
-- [MEM-4] [user] komunikace: mužský rod, vždy česky
+- [MEM-3][user] deploy: staging vyžaduje SSO login
+- [MEM-4][user] komunikace: mužský rod, vždy česky
 
 # In MEM_REGISTRY.md:
 | MEM-3 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |

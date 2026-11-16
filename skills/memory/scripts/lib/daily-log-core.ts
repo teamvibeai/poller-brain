@@ -27,7 +27,7 @@ export function planTodayArchive(today: string, daily: Record<string, string>, d
     // Keep every original section byte, including source tags and whitespace.
     result[day] = result[day] ? result[day] + "\n" + section : section;
   }
-  return { daily: result, today: `# ${date}\n\n- [${time}] [maint] memory consolidation started\n` };
+  return { daily: result, today: `# ${date}\n\n- [${time}][maint] memory consolidation started\n` };
 }
 
 export function backfillDailyLog(date: string, subjects: string[]): string {
@@ -36,11 +36,11 @@ export function backfillDailyLog(date: string, subjects: string[]): string {
     `- [unknown] (backfilled from git) — ${subject.replace(/[\r\n]+/g, " ")}\n`).join("");
 }
 
-const ENTRY = new RegExp(String.raw`^- \[(?:\d{2}:\d{2}|${MEM_ID_PATTERN}|REMEMBER)\] (?:\[(maint|user)\] )?`);
+const ENTRY = new RegExp(String.raw`^- \[(?:\d{2}:\d{2}|${MEM_ID_PATTERN}|REMEMBER)\]\[(maint|user)\] `);
 
 function entrySources(text: string): string[] {
-  // Only the metadata slot immediately after a writer's identity/timestamp is
-  // trusted. A [user] mention in prose (or a git subject) is not provenance.
+  // Metadata is adjacent to the closing identity/timestamp bracket. A space
+  // starts legacy content, including literal [user]/[maint] payloads.
   return text.split("\n").filter(line => line.trim() && !line.startsWith("#")).map(line => ENTRY.exec(line)?.[1] ?? "unknown");
 }
 

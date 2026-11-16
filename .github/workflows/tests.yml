@@ -60,6 +60,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for suite in log-write source-flag source-writers daily-log mem-id mem-write mem-registry-archive mem-registry-trim mem-learnings-trim mem-mistakes-trim mem-scaled-threshold mem-catalog-audit trim-review-state; do
+          for suite in log-write source-flag source-writers daily-log daily-log-cli mem-id mem-write mem-registry-archive mem-registry-trim mem-learnings-trim mem-mistakes-trim mem-scaled-threshold mem-catalog-audit trim-review-state; do
             npx --yes tsx@4.23.15 "skills/memory/scripts/${suite}.test.ts"
           done

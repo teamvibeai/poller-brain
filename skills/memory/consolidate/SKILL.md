@@ -170,7 +170,7 @@ Require the durable start marker above before any write, including creating a mi
    ```
    # YYYY-MM-DD
 
-   - [HH:MM] [maint] memory consolidation started
+   - [HH:MM][maint] memory consolidation started
    ```
    This entry is required — it ensures today's log is non-empty even if no user sessions follow, so the daily-log-weekly-coverage metric counts this day.
 

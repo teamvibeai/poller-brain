@@ -15,4 +15,8 @@ for (const args of [[], [" "], ["--source=maintenance"], ["--source=user-session
   assert.equal(parseSourceFlag(args).content, "");
 }
 assert.equal(parseSourceFlag(["detail: --source=user-session"]).source, "maintenance", "content cannot set metadata");
+for (const content of ["--source=user-session was mentioned in documentation", "--source=maintenance literal payload", "--source=bad\ttext", "--source literal text", "--source=user-session\n", "--source=maintenance\npayload"]) {
+  assert.deepEqual(parseSourceFlag([content]), { source: "maintenance", content: content.trim() });
+  assert.deepEqual(parseSourceFlag(["--source=user-session", content]), { source: "user-session", content: content.trim() });
+}
 console.log("source-flag: all assertions passed");

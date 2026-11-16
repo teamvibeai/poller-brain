@@ -601,3 +601,52 @@ test('documented deferral preserves required work, bounded reduction and whole-r
   assert.match(maintenance, /This never schedules or forces an idle\/disabled brain to run/)
   assert.match(maintenance, /completion\/repair guard/)
 })
+
+
+test('tagged maintenance archives preserve weekly backoff', t => {
+  const f = fixture(t)
+  const date = '2026-11-15'
+  const path = `memory/daily/${date}.md`
+  const targets = [claude, summary]
+  f.report(Object.fromEntries(targets.map(target => [target, f.stall(target)])))
+  const before = targets.map(target => fingerprint(f.dir, target, f.opts()))
+  for (const slot of [' [maint]', '[maint]']) {
+    f.write(path, `# ${date}\n\n- [13:00]${slot} memory consolidation started\n`)
+    targets.forEach((target, i) => {
+      assert.equal(fingerprint(f.dir, target, f.opts()), before[i])
+      assert.equal(advise(f.dir, target, f.opts()).decision, 'deferred')
+    })
+  }
+})
+
+test('source metadata preserves substantive fingerprints without hiding user entries', t => {
+  const f = fixture(t)
+  const date = '2026-11-15'
+  const path = `memory/daily/${date}.md`
+  const targets = [claude, summary]
+  f.report(Object.fromEntries(targets.map(target => [target, f.stall(target)])))
+  const plain = `# ${date}\n\n- [13:00] Keep this decision.\n`
+  f.write(path, plain)
+  const substantive = targets.map(target => fingerprint(f.dir, target, f.opts()))
+  for (const tag of ['maint', 'user']) {
+    f.write(path, plain.replace('] Keep', `][${tag}] Keep`))
+    targets.forEach((target, i) => assert.equal(fingerprint(f.dir, target, f.opts()), substantive[i]))
+    assert.equal(advise(f.dir, summary, f.opts()).decision, 'search')
+  }
+  for (const identity of ['MEM-12', 'MEM-2026-11-15-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 'REMEMBER']) {
+    const legacy = plain.replace('13:00', identity)
+    for (const tag of ['maint', 'user']) {
+      assert.deepEqual(normalizeDaily(Buffer.from(legacy.replace('] Keep', `][${tag}] Keep`)), date), Buffer.from(legacy))
+    }
+  }
+  for (const identity of ['24:00', 'MEM-feedback', 'MEM-2026-11-15-incomplete']) {
+    const text = plain.replace('13:00', identity).replace('] Keep', '][user] Keep')
+    assert.deepEqual(normalizeDaily(Buffer.from(text), date), Buffer.from(text), 'invalid identities cannot carry metadata')
+  }
+  for (const slot of [' [user]', '[user]']) {
+    const text = `# ${date}\n\n- [13:00]${slot} memory consolidation started\n`
+    assert.notEqual(normalizeDaily(Buffer.from(text), date), null, 'user content must not disappear')
+    const mixed = text + '- [13:01][maint] memory consolidation completed\n'
+    assert.notEqual(normalizeDaily(Buffer.from(mixed), date), null, 'user content survives mixed archives')
+  }
+})

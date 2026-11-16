@@ -105,8 +105,14 @@ export function normalizeDaily(bytes, date) {
   if (!Buffer.from(text).equals(bytes)) throw new Error('daily normalization uncertain: invalid UTF-8')
   const lines = text.match(/[^\n]*\n|[^\n]+$/g) || []
   const clock = '(?:[01][0-9]|2[0-3]):[0-5][0-9]'
-  const maintenance = new RegExp(`^- (?:${clock} — |\\[${clock}\\] )(?:memory consolidation (?:started|completed)|maintenance: consolidation session)\\r?\\n$`)
-  if (!lines.some(line => maintenance.test(line))) return bytes
+  const maintenance = new RegExp(`^- (?:${clock} — |\\[${clock}\\](?: ?\\[maint\\])? )(?:memory consolidation (?:started|completed)|maintenance: consolidation session)\\r?\\n$`)
+  // New provenance touches the identity/time bracket; a space begins legacy
+  // payload. Normalize metadata on retained source rows without hiding user
+  // entries whose text happens to match a bookkeeping message.
+  // Keep this identity grammar aligned with skills/memory/scripts/lib/mem-id.ts.
+  const source = /^(- \[(?:(?:[01]\d|2[0-3]):[0-5]\d|MEM-(?:\d{4}-\d{2}-\d{2}-\d{6}-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\d+)|REMEMBER)\])\[(?:maint|user)\] /
+  const normalizeSource = line => line.replace(source, '$1 ')
+  if (!lines.some(line => maintenance.test(line))) return Buffer.from(lines.map(normalizeSource).join(''))
   if (!isoTime(`${date}T00:00:00.000Z`) || /[`<>]|~{3}|\u0000|\r(?!\n)/.test(text)) {
     throw new Error('daily normalization uncertain: date or Markdown context')
   }
@@ -129,10 +135,11 @@ export function normalizeDaily(bytes, date) {
         throw new Error('daily normalization uncertain: expected date-headed single-line bullets')
       }
       if (maintenance.test(line)) section.maintenance = true
-      else { section.source = true; section.kept.push(line) }
+      else { section.source = true; section.kept.push(normalizeSource(line)) }
     }
   }
-  // Preserve all bytes of source-bearing sections except allowlisted lines.
+  // Preserve source-bearing sections, normalizing only structural metadata
+  // and excluding the exact allowlisted maintenance lines.
   // Header-only/empty sections remain inputs; only proven maintenance vanishes.
   const kept = sections.filter(s => s.source || !s.maintenance).map(s => s.kept.join(''))
   return kept.length ? Buffer.from(kept.join('')) : null

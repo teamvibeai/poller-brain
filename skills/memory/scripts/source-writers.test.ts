@@ -32,10 +32,32 @@ for (const writer of ["log-write", "mem-write"]) {
         assert.deepEqual(snapshot(), before);
       }
     });
+    test("quoted source-like payload is content", () => {
+      for (const content of ["--source=user-session was mentioned in documentation", "--source=bad\ttext", "--source literal text"]) {
+        const result = run(content);
+        assert.equal(result.status, 0, result.stderr);
+        assert(fs.readFileSync(today, "utf8").includes(content));
+        if (writer === "mem-write") assert(fs.readFileSync(registry, "utf8").includes(content));
+      }
+    });
+    if (writer === "mem-write") test("legacy leading source words retry without mutation", () => {
+      const id = "MEM-2026-11-16-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+      for (const tag of ["user", "maint"]) {
+        const content = `[${tag}] literal payload\ncontinuation`;
+        fs.writeFileSync(today, `# 2026-11-16\n\n- [${id}] ${content}\n`);
+        fs.writeFileSync(registry, `| ${id} | ACTIVE | 2026-11-16 | — | [${tag}] literal payload continuation |\n`);
+        const before = snapshot();
+        for (const flags of [[], ["--source=user-session"], ["--source=maintenance"]]) {
+          const result = run("--id", id, ...flags, content);
+          assert.equal(result.status, 0, result.stderr);
+          assert.deepEqual(snapshot(), before);
+        }
+      }
+    });
     // Clear any files a broken baseline created in the negative case.
     for (const file of [today, registry]) fs.rmSync(file, { force: true });
     test("default and explicit sources survive rollover", () => {
-      fs.writeFileSync(today, "# 2000-01-01\n\n- [12:34] [user] old entry\n");
+      fs.writeFileSync(today, "# 2000-01-01\n\n- [12:34][user] old entry\n");
       for (const [args, tag, text] of [
         [["default"], "maint", "default"],
         [["--source=maintenance", "scheduled"], "maint", "scheduled"],
@@ -43,10 +65,10 @@ for (const writer of ["log-write", "mem-write"]) {
       ] as const) {
         const result = run(...args);
         assert.equal(result.status, 0, result.stderr);
-        assert.match(fs.readFileSync(today, "utf8"), new RegExp(`\\] \\[${tag}\\] ${text}\\n`));
+        assert.match(fs.readFileSync(today, "utf8"), new RegExp(`\\]\\[${tag}\\] ${text}\\n`));
       }
       const saved = fs.readFileSync(today, "utf8");
-      assert(saved.startsWith("# 2000-01-01\n\n- [12:34] [user] old entry\n"));
+      assert(saved.startsWith("# 2000-01-01\n\n- [12:34][user] old entry\n"));
       assert.equal((saved.match(/^# /gm) ?? []).length, 2);
       const before = snapshot();
       assert.notEqual(run("--source=typo", "text").status, 0);
@@ -72,7 +94,7 @@ for (const writer of ["log-write", "mem-write"]) {
       const registryOnly = snapshot()[1];
       assert.equal(run("--id", id, "--source=user-session", "memo\ncontinuation").status, 0);
       assert.equal(snapshot()[1], registryOnly);
-      assert(fs.readFileSync(today, "utf8").includes(`[${id}] [user] memo\ncontinuation`));
+      assert(fs.readFileSync(today, "utf8").includes(`[${id}][user] memo\ncontinuation`));
       fs.writeFileSync(today, `# 2000-01-01\n\n- [${id}] memo\ncontinuation\n`);
       const legacy = snapshot();
       assert.equal(run("--id", id, "memo\ncontinuation").status, 0);

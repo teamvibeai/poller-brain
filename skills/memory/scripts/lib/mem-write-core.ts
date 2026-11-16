@@ -58,7 +58,7 @@ function registryCells(line: string): string[] {
 // log-write.ts timestamps, memo tags, consolidation markers, and rollover headers.
 // Arbitrary bracketed bullets/checkboxes remain part of the memo's content.
 const TODAY_ENTRY_BOUNDARY_PATTERN = new RegExp(
-  String.raw`^(?:- \[(?:\d{2}:\d{2}|${MEM_ID_PATTERN}|REMEMBER)\] |- \d{2}:\d{2} — |# \d{4}-\d{2}-\d{2}$)`
+  String.raw`^(?:- \[(?:\d{2}:\d{2}|${MEM_ID_PATTERN}|REMEMBER)\](?:\[(?:maint|user)\])? |- \d{2}:\d{2} — |# \d{4}-\d{2}-\d{2}$)`
 );
 
 /** Decide both appends before either file is changed; never allocate an identity here. */
@@ -87,14 +87,16 @@ export function planMemWrite(input: {
     // Compare the full requested text, including continuation lines that may
     // themselves look like log rows. Additional prose is conflicting content;
     // only a writer-produced row/date section after rollover whitespace is separate.
-    let firstLine = lines[i].slice(tagAt + tag.length).replace(/^ /, "");
-    const provenance = firstLine.match(/^\[(maint|user)\] /);
+    let firstLine = lines[i].slice(tagAt + tag.length);
+    // Legacy writers always insert a space after the identity. Only an
+    // adjacent tag on a canonical row occupies the new metadata slot.
+    const provenance = lines[i].startsWith(`- ${tag}`) ? firstLine.match(/^\[(maint|user)\] /) : null;
     // Legacy retries remain byte-identical and unknown. Tagged retries must
     // repeat the source; provenance is not part of the registry description.
     if (provenance) {
       if (provenance[0].trim() !== sourceTag(source)) conflict = true;
       firstLine = firstLine.slice(provenance[0].length);
-    }
+    } else firstLine = firstLine.replace(/^ /, "");
     const text = [firstLine,
       ...lines.slice(i + 1, i + contentLineCount)].join("\n");
     const following = lines.slice(i + contentLineCount).find((line) => line !== "");
@@ -122,7 +124,7 @@ export function planMemWrite(input: {
     : `| ${id} | ACTIVE | ${parsed.date} | — | ${desc} |\n`;
   return {
     kind: "ready",
-    todayAppend: todayPresent ? "" : `- [${id}] ${sourceTag(source)} ${content}\n`,
+    todayAppend: todayPresent ? "" : `- [${id}]${sourceTag(source)} ${content}\n`,
     registryAppend: registryPresent ? "" : row,
   };
 }

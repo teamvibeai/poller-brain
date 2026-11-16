@@ -59,7 +59,7 @@ function main(): void {
   ensureToday();
 
   const timestamp = new Date().toTimeString().slice(0, 5);
-  fs.appendFileSync(TODAY_PATH, `- [${timestamp}] ${sourceTag(source)} ${content}\n`);
+  fs.appendFileSync(TODAY_PATH, `- [${timestamp}]${sourceTag(source)} ${content}\n`);
 
   console.log(`Logged to ${TODAY_PATH}`);
 }

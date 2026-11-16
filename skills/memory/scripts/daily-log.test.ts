@@ -1,21 +1,32 @@
 import { strict as assert } from "node:assert";
 import { planTodayArchive, backfillDailyLog, dailyLogProvenance } from "./lib/daily-log-core.js";
 
-const a = "# 2026-11-15\n\n- [10:00] [user] request\n- [11:00] [maint] scheduled\n";
+// Legacy writers always put a space after identity/time; bracketed payload is unknown.
+for (const identity of ["12:00", "MEM-12", "REMEMBER", "MEM-2026-11-16-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]) {
+  for (const tag of ["user", "maint"]) {
+    const report = dailyLogProvenance({ end: "2026-11-16", sessionDays: ["2026-11-16"],
+      daily: { "2026-11-16": `# 2026-11-16\n\n- [${identity}] [${tag}] literal payload\n` } });
+    assert.equal(report.userTaggedSessionDays, 0, "legacy payload is not metadata");
+    assert.equal(report.unknownSessionDays, 1);
+    assert.equal(report.fullyTaggedSessionDays, 0);
+  }
+}
+
+const a = "# 2026-11-15\n\n- [10:00][user] request\n- [11:00][maint] scheduled\n";
 const b = "# 2026-11-16\n\n- [12:00] legacy\n";
-const existing = "# 2026-11-15\n\n- [09:00] [maint] earlier archive\n";
+const existing = "# 2026-11-15\n\n- [09:00][maint] earlier archive\n";
 for (const today of [a, a + "\n" + b]) {
   const plan = planTodayArchive(today, { "2026-11-15": existing }, "2026-11-16", "13:00");
   assert.equal(plan.daily["2026-11-15"], existing + "\n" + a + (today.includes(b) ? "\n" : ""));
   if (today.includes(b)) assert.equal(plan.daily["2026-11-16"], b);
-  assert.equal(plan.today, "# 2026-11-16\n\n- [13:00] [maint] memory consolidation started\n");
+  assert.equal(plan.today, "# 2026-11-16\n\n- [13:00][maint] memory consolidation started\n");
   assert.equal(planTodayArchive(plan.today, plan.daily, "2026-11-16", "14:00").daily["2026-11-16"],
     (plan.daily["2026-11-16"] ? plan.daily["2026-11-16"] + "\n" : "") + plan.today);
 }
 assert.throws(() => planTodayArchive("orphan content\n" + a, {}, "2026-11-16", "13:00"), /date header/i);
 assert.equal(planTodayArchive("- legacy unknown\n", {}, "2026-11-16", "13:00").daily["2026-11-16"],
   "# 2026-11-16\n\n- legacy unknown\n");
-const memDay = "# 2026-11-16\n\n- [MEM-2026-11-16-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee] [user] human memo\n";
+const memDay = "# 2026-11-16\n\n- [MEM-2026-11-16-120000-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee][user] human memo\n";
 const memArchive = planTodayArchive(memDay, {}, "2026-11-16", "13:00");
 assert.equal(memArchive.daily["2026-11-16"], memDay);
 assert.equal(dailyLogProvenance({ end: "2026-11-16", sessionDays: ["2026-11-16"], daily: memArchive.daily }).userTaggedSessionDays, 1);
@@ -36,13 +47,13 @@ assert.equal(report.provenanceCompleteness, 1 / 3);
 assert.equal(report.userSessionRatio, 1 / 3);
 assert.equal(report.coverageRatio, 1);
 const week = Array.from({ length: 7 }, (_, i) => `2026-11-${10 + i}`);
-const maintenance = Object.fromEntries(week.map(day => [day, `# ${day}\n\n- [10:00] [maint] scheduled\n`]));
+const maintenance = Object.fromEntries(week.map(day => [day, `# ${day}\n\n- [10:00][maint] scheduled\n`]));
 const allMaint = dailyLogProvenance({ end: "2026-11-16", sessionDays: week, daily: maintenance });
 assert.equal(allMaint.coverageRatio, 1);
 assert.equal(allMaint.userSessionRatio, 0);
 assert.equal(allMaint.provenanceCompleteness, 1);
-maintenance[week[0]] += "- [11:00] [user] request\n";
-maintenance[week[1]] += "- [11:00] [user] request\n";
+maintenance[week[0]] += "- [11:00][user] request\n";
+maintenance[week[1]] += "- [11:00][user] request\n";
 assert.equal(dailyLogProvenance({ end: "2026-11-16", sessionDays: week, daily: maintenance }).userSessionRatio, 2 / 7);
 const partial = dailyLogProvenance({ end: "2026-11-16", sessionDays: week, daily: { [week[0]]: a } });
 assert.equal(partial.coverageRatio, 1 / 7);
