@@ -51,17 +51,21 @@ function startCycle(date: string): string {
   return head;
 }
 let openCycle: string | undefined;
+// Keep fixture reports away from today's UTC date: the state checker also
+// inspects today's report and would compare an older cycle to the active marker.
+const cycleYear = new Date().getUTCFullYear() - 1;
+const firstCycleDate = `${cycleYear}-11-01`;
 let cycle = 0;
 function nextDate(): string {
   let date: string;
-  do date = `2026-11-${String(++cycle).padStart(2, "0")}`; while (startedCycles.has(date));
+  do date = `${cycleYear}-11-${String(++cycle).padStart(2, "0")}`; while (startedCycles.has(date));
   return date;
 }
 function complete(consume = false): string {
   // Finish an already-started cycle (as production does) before starting a new one.
   const date = openCycle ?? nextDate();
   const startingHead = startCycle(date);
-  const history = path.join(root, "memory/episodic/archive/consolidation-history-2026-H2.md");
+  const history = path.join(root, `memory/episodic/archive/consolidation-history-${cycleYear}-H2.md`);
   fs.mkdirSync(path.dirname(history), { recursive: true });
   fs.appendFileSync(history, `\n## Consolidation ${date} / ${startingHead}\nStatus: in progress\nWork performed: Reviewed trim proposals; zero promotions.\n<!-- /consolidation-history -->\n`);
   write(`reports/${date}-memory-consolidation.md`, "# Completed fixture\n");
@@ -101,8 +105,8 @@ try {
     check(read(kind === "learnings" ? learning : registry) === bytes, `${kind}: rejection never trims source`);
     check(refs(cached(kind, 0)).length === 2, `${kind}: pending state never suppresses review`);
   }
-  startCycle("2026-11-01");
-  checkpoint("2026-11-01", "steps 8-9");
+  startCycle(firstCycleDate);
+  checkpoint(firstCycleDate, "steps 8-9");
   check(git("show", `HEAD:${REVIEW_STATE_PATH}`) === read(REVIEW_STATE_PATH).trimEnd(), "normal memory checkpoint persists the exact ledger");
   for (const kind of ["learnings", "registry"]) cached(kind, 0);
   let completedAt = complete(true);
@@ -186,7 +190,7 @@ try {
   check(items.every((i, n) => i.id !== policyChanged[n].id), "policy version invalidates every decision");
   const policyRecords = completedRejections(root).records;
   check(policyRecords.length > 0 && policyChanged.every(i => !policyRecords.some(r => r.id === i.id)), "changed policy has no reusable completed verdict");
-  write("memory/episodic/consolidation-progress-2026-11-01.md", "### Bookkeeping\nUnrelated review tally [MEM-124]\n");
+  write(`memory/episodic/consolidation-progress-${firstCycleDate}.md`, "### Bookkeeping\nUnrelated review tally [MEM-124]\n");
   check(JSON.stringify(collectTrimDestinations(root, ["semantic", "episodic", "procedural"])) === JSON.stringify(destinations), "progress bookkeeping excluded from inventory and evidence");
   cached("learnings", 2);
 
