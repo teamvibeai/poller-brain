@@ -63,6 +63,23 @@ non-root execution — is tracked separately as
 [teamvibeai/teamvibe.ai#344](https://github.com/teamvibeai/teamvibe.ai/issues/344)
 and is out of scope here.
 
+### Registry and proxy egress
+
+In the high-security threat model, access to npm, PyPI, RubyGems, GHCR, and
+Artifactory or other package proxies is **internet egress**, not an inherently
+safe exception. A constrained registry does not necessarily grant arbitrary
+internet access: risk depends on allowed requests, uploads/publishing,
+upstream resolution, redirects, and proxy vulnerabilities.
+
+Approve only narrowly scoped destinations/upstreams and operations. Enforce
+network policy independently of the agent and its writable settings, and
+audit network egress with credentials redacted. An allowlist and logging
+reduce risk but do not establish isolation; Bash command telemetry alone
+is not a complete network-egress audit.
+
+This is guidance only; runtime/network enforcement remains with
+[teamvibeai/teamvibe.ai#344](https://github.com/teamvibeai/teamvibe.ai/issues/344).
+
 ### Live-fire verification — REQUIRED immediately after merge, not deferred
 
 Tests here prove the matcher's logic and the hook's stdin/stdout
