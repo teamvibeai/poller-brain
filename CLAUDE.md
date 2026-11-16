@@ -185,16 +185,20 @@ If these files don't exist yet, they'll be created during the next maintenance c
 # Routine logs (events, triage, status updates):
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "category: detail"
 
-# Important items to remember (corrections, preferences, lessons):
+# Tracked capture (prescriptive lessons: apply the placement decision below first):
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detail"
 ```
 
 **Where to write (regular sessions):**
 - Routine logs → `log-write.ts` (appends to TODAY.md with timestamp)
-- Important items (corrections, preferences, lessons) → `mem-write.ts` (tracked key in TODAY.md + MEM_REGISTRY.md; new writes allocate UTC `MEM-YYYY-MM-DD-HHMMSS-<uuid>` IDs with a full random lowercase UUID; readers accept `MEM-<n>` and `MEM-YYYY-MM-DD-HHMMSS-<uuid>`, and existing IDs are never renumbered)
+- Important facts/preferences → `mem-write.ts` (tracked key in TODAY.md + MEM_REGISTRY.md; new writes allocate UTC `MEM-YYYY-MM-DD-HHMMSS-<uuid>` IDs with a full random lowercase UUID; readers accept `MEM-<n>` and `MEM-YYYY-MM-DD-HHMMSS-<uuid>`, and existing IDs are never renumbered)
 - Session capture (brainstorming, deep-dive) → `memory/semantic/{topic}.md` (see memory skill for full pattern)
 
-**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use `mem-write.ts` to create tracked memory entries (see memory skill).
+For corrections/prescriptive lessons, follow [Rule Placement Before Capture](skills/memory/SKILL.md#rule-placement-before-capture): assess a mechanical check first (even with an action site), then the smallest loaded action entry point, then memory for judgement without an action site.
+Use `mem-write.ts` for a tracked trigger + actionable cue + exact canonical location pointer only after verifying destination content and delivery.
+If placement is blocked/pending, retain the full lesson + intended destination/owner/blocker/next action via `mem-write.ts`; follow existing protected-path approval routes.
+
+**NEVER write directly to `memory/core/`** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Use the placement and tracked-capture path above (see memory skill).
 
 **NEVER self-promote during regular sessions** — don't reorganize old logs into `semantic/`, `episodic/`, or `procedural/`. That's maintenance's job. Writing *new content from the current conversation* to `semantic/` (session capture) is allowed. See the **Session Capture** section in the memory skill for rules.
 

@@ -84,14 +84,17 @@ Rules:
 
 During regular sessions (non-maintenance), you may write to these places:
 
+For prescriptive lessons (what an agent should do next time), apply [Rule Placement Before Capture](#rule-placement-before-capture) before `mem-write`. Facts, preferences, and routine logs keep their existing routes below.
+
 ### 1. `memory/TODAY.md` — primary write target
 
-ALL new information goes into the daily log. This includes:
+Capture new information in the daily log; for a placed rule, capture its tracked pointer rather than duplicate the policy. This includes:
 - Factual info about the team or project (e.g., "Alice is the frontend lead")
 - Notable events (e.g., "production went down for 2h")
 - Workflows and procedures you figured out
 - Task progress, conversation notes, routine observations
-- Corrections, preferences, and lessons — use `[MEM-NNN]` tracked keys (see below)
+- Corrections and prescriptive lessons — placement decision first, then a `[MEM-NNN]` pointer or full lesson as specified below
+- Preferences — use `[MEM-NNN]` tracked keys (see below)
 
 ### 2. `memory/semantic/` — for larger content (pointer pattern)
 
@@ -126,7 +129,7 @@ This pattern also applies to **session capture** — see the section below for d
 
 ### What is NOT allowed
 
-**Do NOT write directly to `memory/core/` files** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Write to `memory/TODAY.md` instead — use `[MEM-NNN]` keys for important items that must be promoted.
+**Do NOT write directly to `memory/core/` files** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Apply the placement decision for prescriptive lessons, then use `mem-write.ts` for tracked capture in `memory/TODAY.md`; use `log-write.ts` for routine logs.
 
 **Do NOT self-promote content during regular sessions.** Self-promotion means reading old daily logs or existing memory and reorganizing them into `semantic/`, `episodic/`, or `procedural/`. That is maintenance's job — only the consolidation process curates and reorganizes existing content.
 
@@ -213,7 +216,8 @@ Critical information gets a unique, tracked key — like Jira tickets for memory
 ### When to create a `[MEM-NNN]` entry
 
 - User explicitly asks you to remember/save something ("zapamatuj si", "remember this")
-- User states a strong preference or correction that must persist
+- User states a strong preference that must persist
+- User corrects you or supplies a prescriptive lesson — apply [Rule Placement Before Capture](#rule-placement-before-capture) first
 - You discover something critical that must not be lost
 - Do NOT tag routine observations — those go via `log-write.ts`
 
@@ -237,15 +241,19 @@ The script appends a timestamped line: `- [HH:MM] content`
 
 ### How to write a `[MEM-NNN]` entry
 
+For a prescriptive lesson, complete [Rule Placement Before Capture](#rule-placement-before-capture) first. The script stores the resulting pointer or full lesson; it does not decide placement.
+
 **Do NOT pick the ID yourself.** Use the `mem-write` script — it allocates the ID and performs two appends: TODAY.md, then MEM_REGISTRY.md. On failure, re-run with `--id <printed MEM_ID>` and the same content to complete the missing half without duplicating:
 
 ```bash
 npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "category: detail"
 ```
 
-**Examples:**
+**Examples** (illustrative destinations; verify actual paths before capture):
 ```bash
-npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "deploy: staging vyžaduje SSO login"
+# Placed check: only after verifying the staging preflight was written and runs before staging deploys:
+npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "deploy: before staging deploy, verify SSO login; canonical check: scripts/deploy.sh:staging_preflight (channel brain)"
+# Preference: unchanged route:
 npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "komunikace: mužský rod, vždy česky"
 # Stderr before writes: MEM_ID=MEM-YYYY-MM-DD-HHMMSS-<uuid>
 # Output: Written [MEM-YYYY-MM-DD-HHMMSS-<uuid>] to memory/TODAY.md and memory/MEM_REGISTRY.md
@@ -265,11 +273,11 @@ After the script runs, confirm to user: "Zapsáno." / "Uloženo do paměti." (do
 **Example result:**
 ```markdown
 # In TODAY.md:
-- [MEM-3] deploy: staging vyžaduje SSO login
+- [MEM-3] deploy: before staging deploy, verify SSO login; canonical check: scripts/deploy.sh:staging_preflight (channel brain)
 - [MEM-4] komunikace: mužský rod, vždy česky
 
 # In MEM_REGISTRY.md:
-| MEM-3 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |
+| MEM-3 | ACTIVE | 2026-04-28 | — | deploy: before staging deploy, verify SSO login; canonical check: scripts/deploy.sh:staging_preflight (channel brain) |
 | MEM-4 | ACTIVE | 2026-04-28 | — | Communication: masculine, always Czech |
 ```
 
@@ -316,23 +324,50 @@ The `[REMEMBER]` tag continues to work as an alias — consolidation will alloca
 
 ## Routing Logic
 
-When you learn something new, route it:
+### Rule Placement Before Capture
 
-| Signal | Script | Example |
+Before `mem-write` for any prescriptive lesson, including a correction or a request to remember a rule, identify its **trigger**, applicable **scope** (project/agent), canonical **owner**, intended **destination**, and **delivery path**: how the executing agent receives the rule or encounters the check during that action.
+
+Decide in this order:
+
+1. **Is a reliable mechanical check feasible?** Propose a check, hook, or preflight at the relevant action, even when an action-specific instruction site already exists. Record what it checks and where it runs; guidance may accompany it. Use the existing approval path for protected paths. A proposed or unregistered check is pending placement, not enforcement.
+2. **Otherwise, is the lesson action-bound?** Place it in the smallest **existing** entry point actually loaded during that action: a skill step, invoked template, or project instruction section. Verify that loading path; a new file with no consumer does not deliver the rule.
+3. **Judgement without an action site** stays as a full tracked lesson in memory via `mem-write`.
+
+**Destination first, pointer second.** Within authorized scope, write the canonical rule/check through the owner's normal workflow. Read it back at the exact location and verify the instruction loading path or check registration/coverage before claiming placement. Only then use `mem-write` to create a tracked pointer containing **trigger + short actionable cue + exact canonical location** (repository/path and section or check entry point). Do not duplicate the full policy in memory. The pointer remains a current tracked memory; placement does not make it obsolete.
+
+**Blocked or pending placement:** If the destination is inaccessible or unwritable (read-only base brain at runtime, protected path awaiting approval, another repository), or delivery cannot yet be verified, use `mem-write` to retain the **full lesson + intended destination + owner + blocker + next action**. Keep that substantive capture while the proposal/review is pending; never leave only a pointer to unwritten content. Base-brain changes use its owning repository's review process. For channel-brain `.claude/skills|commands|agents`, use `brain-write`; `.claude/settings*.json` and `.claude/hooks/` require the existing Slack approval path. Do not bypass those routes.
+
+Examples of the decision (illustrative destinations, not claims that these files exist):
+
+| Lesson | Placement outcome and tracked capture |
+|--------|---------------------------------------|
+| API calls must put the key in the header | First assess a preflight that detects query-string credentials, even if an API skill exists. Propose it to the API skill/check owner; until written and verified, retain the full lesson and handoff details via `mem-write`. Never include the key value. |
+| Before a client status report, explain unresolved risks | If no reliable mechanical check applies, write the cue in the project's already invoked `templates/status-report.md#risks`, verify the template and invocation, then `mem-write`: `report: before client status reports, explain unresolved risks; canonical rule: acme/client-portal:templates/status-report.md#risks`. |
+| When evidence is ambiguous, distinguish observation from inference | With no reliable check or action site, retain the full judgement lesson via `mem-write`. |
+| Prevent a repeat via a protected channel hook | Retain the full lesson plus `destination: .claude/hooks/check-report.sh and .claude/settings.json registration; owner: channel maintainer; blocker: Slack approval pending; next action: propose check and registration for approval`. No placed-rule pointer yet. |
+
+### Routing Table
+
+When you learn something new, route it (prescriptive content always takes the placement decision first):
+
+| Signal | Route | Example |
 |--------|--------|---------|
-| User explicitly asks to remember | `mem-write.ts` | "Zapamatuj si že jsem mužského rodu" |
-| User corrects you | `mem-write.ts` | "No, the API key goes in the header, not query param" |
+| User explicitly asks to remember | `mem-write.ts` for facts/preferences; placement decision first for rules | "Zapamatuj si že jsem mužského rodu" |
+| User corrects you / prescriptive lesson | Placement decision above → `mem-write.ts` pointer or full lesson | "No, the API key goes in the header, not query param" |
 | User states preference | `mem-write.ts` | "Always use bullet points in summaries" |
-| You discover something useful | `mem-write.ts` | "The staging DB resets every Sunday" |
+| You discover something useful | `mem-write.ts` for facts; placement decision first for rules | "The staging DB resets every Sunday" |
 | Factual info about team/project | `log-write.ts` | "Alice is the frontend lead" |
 | Something notable happened | `log-write.ts` | "Production went down for 2h due to DNS" |
-| You figure out how to do something | `log-write.ts` | "Deploy requires SSO login first" |
+| You figure out how to do something | `log-write.ts` for an observation; placement decision first if it prescribes future action | "Deploy requires SSO login first" |
 | Substantial reference material (brainstorming, deep-dive) | `semantic/{topic}.md` | 30-min architecture discussion → session capture |
 | Action items, follow-ups | `HEARTBEAT.md` | "Check if PR #42 is merged by Friday" |
 
 ## Mistake Promotion Pipeline
 
-`memory/core/MISTAKES.md` is a **staging area**, not a permanent archive. When you make a mistake or get corrected, write it there immediately. During consolidation, each entry is reviewed and promoted to a permanent home:
+When you make a mistake or get corrected during a regular session, apply [Rule Placement Before Capture](#rule-placement-before-capture), then capture the resulting pointer or full lesson with `mem-write`. Include incident context (what happened, root cause, impact) when retaining the full lesson. Do not write to `memory/core/MISTAKES.md` directly.
+
+`memory/core/MISTAKES.md` is a **consolidation-only staging area**, not a permanent archive. During consolidation, each entry is reviewed and promoted to a permanent home:
 
 | Promotion path | When to use | Example |
 |---------------|-------------|---------|
@@ -342,7 +377,7 @@ When you learn something new, route it:
 
 ### MISTAKES.md Entry Format
 
-Each entry should include enough context for promotion:
+Consolidation maintains this format; regular sessions capture via `mem-write` after the placement decision above. Each entry should include enough context for promotion:
 
 ```markdown
 ## YYYY-MM-DD — short description [MEM-NNN]
