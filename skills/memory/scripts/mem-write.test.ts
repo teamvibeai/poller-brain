@@ -166,7 +166,7 @@ acceptance("a default dated identity and injected UTC clock", () => {
   check(ids.isMemId(id));
   check.deepEqual(ids.parseMemId(id), { kind: "dated", date: "2026-11-07", time: "193203", uuid: id.slice(22) });
   const written = apply("", header5, id);
-  check.equal(written.result.todayAppend, `- [${id}] ${content}\n`);
+  check.equal(written.result.todayAppend, `- [${id}] [maint] ${content}\n`);
   check.equal(written.result.registryAppend, `| ${id} | ACTIVE | 2026-11-07 | — | ${content} |\n`);
 });
 acceptance("b identical content in separate requests has separate IDs", () => {
@@ -334,7 +334,7 @@ acceptance("CLI wiring", () => {
     check.notEqual(failure.status, 0);
     const failedId = failure.stderr.match(/^MEM_ID=(.+)$/m)?.[1];
     check(failedId && ids.isMemId(failedId), failure.stderr);
-    check(fs.readFileSync(todayPath, "utf8").includes(`[${failedId}] new memo after failure`));
+    check(fs.readFileSync(todayPath, "utf8").includes(`[${failedId}] [maint] new memo after failure`));
     check(!fs.readFileSync(registryPath, "utf8").includes(failedId));
     const partialToday = fs.readFileSync(todayPath, "utf8");
     fs.unlinkSync(failureSwitch);

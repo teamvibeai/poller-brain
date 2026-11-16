@@ -226,37 +226,46 @@ Critical information gets a unique, tracked key — like Jira tickets for memory
 For events, triage, status updates, session notes:
 
 ```bash
-npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "heartbeat: klidný den, žádné pending issues"
-npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "triage: 3 nové emaily, žádný urgentní"
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" --source=maintenance "heartbeat: completed scheduled health check"
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" --source=user-session "triage: 3 nové emaily, žádný urgentní"
 # Output: Logged to memory/TODAY.md
 ```
 
-The script appends a timestamped line: `- [HH:MM] content`
+Choose `--source=user-session` for human-triggered work and `--source=maintenance` for scheduled/automated work, with **either writer**. Derive source from the trigger, never the commit prefix or log wording. Both default to maintenance if omitted, and reject invalid/conflicting flags or empty content before writing. Historical untagged entries stay unknown; do not relabel them. The user-tagged day signal is an observe-only lower bound during adoption, not user logging completeness.
+
+The script appends a timestamped line: `- [HH:MM] [user] content` or `- [HH:MM] [maint] content`.
 
 #### `mem-write.ts` — tracked memory
 
 ### How to write a `[MEM-NNN]` entry
 
-**Do NOT pick the ID yourself.** Use the `mem-write` script — it allocates the ID and performs two appends: TODAY.md, then MEM_REGISTRY.md. On failure, re-run with `--id <printed MEM_ID>` and the same content to complete the missing half without duplicating:
+**Do NOT pick the ID yourself.** Use the `mem-write` script — it allocates the ID and performs two appends: TODAY.md, then MEM_REGISTRY.md. On failure, re-run with `--id <printed MEM_ID>` and the same source and content to complete the missing half without duplicating:
 
 ```bash
-npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "category: detail"
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" --source=user-session "category: detail"
 ```
 
-**Examples:**
+**Examples (human-triggered):**
 ```bash
-npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "deploy: staging vyžaduje SSO login"
-npx tsx $CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts "komunikace: mužský rod, vždy česky"
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" --source=user-session "deploy: staging vyžaduje SSO login"
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" --source=user-session "komunikace: mužský rod, vždy česky"
 # Stderr before writes: MEM_ID=MEM-YYYY-MM-DD-HHMMSS-<uuid>
 # Output: Written [MEM-YYYY-MM-DD-HHMMSS-<uuid>] to memory/TODAY.md and memory/MEM_REGISTRY.md
+```
+
+```bash
+# Automated discovery during maintenance:
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" --source=maintenance "lesson: scheduled check found a stale configuration"
+# Retry human-triggered writes with the printed ID, same source and content:
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" --id "$MEM_ID" --source=user-session "category: detail"
 ```
 
 The script:
 1. Allocates a UTC `MEM-YYYY-MM-DD-HHMMSS-<uuid>` ID using the platform's full random UUID
 2. Prints `MEM_ID=<id>` to stderr before any file write; preserve this ID for retries
-3. Appends `- [<id>] content` to `memory/TODAY.md` if that ID is absent
+3. Appends `- [<id>] [user] content` (or `[maint]` for maintenance) to `memory/TODAY.md` if that ID is absent
 4. Appends the same ID to `memory/MEM_REGISTRY.md` if that key is absent
-5. Creates missing headers as needed; `--id <printed MEM_ID>` completes either missing append, returns `Already written [<id>]` if both exist, and rejects different content without writing
+5. Creates missing headers as needed; `--id <printed MEM_ID>` completes either missing append, returns `Already written [<id>]` if both exist, and rejects different content or a conflicting existing source tag without writing; legacy untagged retries stay unchanged and unknown
 
 **NEVER write `[MEM-NNN]` entries manually** — always use the script. This prevents malformed keys like `[MEM-feedback]`.
 
@@ -265,8 +274,8 @@ After the script runs, confirm to user: "Zapsáno." / "Uloženo do paměti." (do
 **Example result:**
 ```markdown
 # In TODAY.md:
-- [MEM-3] deploy: staging vyžaduje SSO login
-- [MEM-4] komunikace: mužský rod, vždy česky
+- [MEM-3] [user] deploy: staging vyžaduje SSO login
+- [MEM-4] [user] komunikace: mužský rod, vždy česky
 
 # In MEM_REGISTRY.md:
 | MEM-3 | ACTIVE | 2026-04-28 | — | Staging deploy requires SSO login |

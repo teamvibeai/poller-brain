@@ -6,14 +6,15 @@
  * For important items that need tracking, use mem-write.ts instead.
  *
  * Usage:
- *   npx tsx log-write.ts "heartbeat: klidný den, žádné pending issues"
- *   npx tsx log-write.ts "triage: 3 nové emaily, žádný urgentní"
+ *   npx tsx log-write.ts --source=maintenance "heartbeat: klidný den, žádné pending issues"
+ *   npx tsx log-write.ts --source=user-session "triage: 3 nové emaily, žádný urgentní"
  *
  * Output:
  *   Logged to memory/TODAY.md
  */
 
 import * as fs from "fs";
+import { parseSourceFlag, sourceTag } from "./lib/source-flag.js";
 import { brainPath } from "./lib/brain-root.js";
 import { computeRollover } from "./lib/today-md-core.js";
 
@@ -37,21 +38,28 @@ function ensureToday(): void {
 }
 
 function main(): void {
-  const content = process.argv.slice(2).join(" ").trim();
+  let parsed: ReturnType<typeof parseSourceFlag>;
+  try { parsed = parseSourceFlag(process.argv.slice(2)); }
+  catch (error) {
+    console.error((error as Error).message);
+    process.exitCode = 2;
+    return;
+  }
+  const { source, content } = parsed;
 
   if (!content) {
-    console.error('Usage: npx tsx log-write.ts "category: detail"');
+    console.error('Usage: npx tsx log-write.ts [--source=maintenance|user-session] "category: detail"');
     console.error("");
     console.error("Examples:");
-    console.error('  npx tsx log-write.ts "heartbeat: klidný den"');
-    console.error('  npx tsx log-write.ts "triage: 3 nové emaily, žádný urgentní"');
+    console.error('  npx tsx log-write.ts --source=maintenance "heartbeat: klidný den"');
+    console.error('  npx tsx log-write.ts --source=user-session "triage: 3 nové emaily, žádný urgentní"');
     process.exit(1);
   }
 
   ensureToday();
 
   const timestamp = new Date().toTimeString().slice(0, 5);
-  fs.appendFileSync(TODAY_PATH, `- [${timestamp}] ${content}\n`);
+  fs.appendFileSync(TODAY_PATH, `- [${timestamp}] ${sourceTag(source)} ${content}\n`);
 
   console.log(`Logged to ${TODAY_PATH}`);
 }

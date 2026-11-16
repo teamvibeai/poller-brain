@@ -4,20 +4,21 @@
  *
  * Allocates a dated UTC/full-UUID identity and prints MEM_ID=<id> to stderr
  * before any file write. Performs two appends: TODAY, then the registry.
- * On failure re-run with --id <printed MEM_ID> and the same content to complete
+ * On failure re-run with --id <printed MEM_ID> and the same source and content to complete
  * the missing half without duplicating. Prevents malformed keys like [MEM-feedback].
  *
  * Usage:
- *   npx tsx mem-write.ts "category: detail"
- *   npx tsx mem-write.ts --id <printed MEM_ID> "category: detail"
- *   npx tsx mem-write.ts "deploy: staging vyžaduje SSO login"
- *   npx tsx mem-write.ts "komunikace: mužský rod, vždy česky"
+ *   npx tsx mem-write.ts --source=user-session "category: detail"
+ *   npx tsx mem-write.ts --id <printed MEM_ID> --source=user-session "category: detail"
+ *   npx tsx mem-write.ts --source=user-session "deploy: staging vyžaduje SSO login"
+ *   npx tsx mem-write.ts --source=user-session "komunikace: mužský rod, vždy česky"
  *
  * Output:
  *   Written [MEM-YYYY-MM-DD-HHMMSS-<uuid>] to memory/TODAY.md and memory/MEM_REGISTRY.md
  */
 
 import * as fs from "fs";
+import { parseSourceFlag } from "./lib/source-flag.js";
 import { brainPath } from "./lib/brain-root.js";
 import { planMemWrite } from "./lib/mem-write-core.js";
 import { isMemId, newMemId, parseMemId } from "./lib/mem-id.js";
@@ -60,7 +61,10 @@ function ensureToday(today: string): void {
 }
 
 function main(): void {
+  // Extract --id before source parsing so flags can appear on either side of it.
   const args = process.argv.slice(2);
+  const idAt = args.indexOf("--id");
+  if (idAt > 0) args.unshift(...args.splice(idAt, 2));
   const retry = args[0] === "--id";
   const suppliedId = retry ? args[1] : undefined;
   if (retry && (!suppliedId || !isMemId(suppliedId) || parseMemId(suppliedId)?.kind !== "dated")) {
@@ -68,10 +72,17 @@ function main(): void {
     process.exitCode = 2;
     return;
   }
-  const content = args.slice(retry ? 2 : 0).join(" ").trim();
+  let parsed: ReturnType<typeof parseSourceFlag>;
+  try { parsed = parseSourceFlag(args.slice(retry ? 2 : 0)); }
+  catch (error) {
+    console.error((error as Error).message);
+    process.exitCode = 2;
+    return;
+  }
+  const { source, content } = parsed;
 
   if (!content) {
-    console.error('Usage: npx tsx mem-write.ts [--id <dated MEM ID>] "category: detail"');
+    console.error('Usage: npx tsx mem-write.ts [--id <dated MEM ID>] [--source=maintenance|user-session] "category: detail"');
     process.exitCode = 1;
     return;
   }
@@ -84,6 +95,7 @@ function main(): void {
     registry: readOrEmpty(REGISTRY_PATH),
     id,
     content,
+    source,
   });
   if (plan.kind === "error") {
     console.error(plan.message);

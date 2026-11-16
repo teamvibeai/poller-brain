@@ -182,11 +182,18 @@ If these files don't exist yet, they'll be created during the next maintenance c
 **NEVER write to `memory/TODAY.md` directly.** Always use one of these scripts:
 
 ```bash
-# Routine logs (events, triage, status updates):
-npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "category: detail"
+# User-triggered routine logs (events, triage, status updates):
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" --source=user-session "category: detail"
 
-# Important items to remember (corrections, preferences, lessons):
-npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detail"
+# User-triggered items to remember (corrections, preferences, lessons):
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" --source=user-session "category: detail"
+```
+
+Choose source from the session trigger: human-requested work uses `--source=user-session` (even if its commit is `chore:`); scheduled/automated work uses `--source=maintenance` with either writer. Missing flags default to maintenance. Entries carry durable `[user]` / `[maint]` tags; legacy untagged entries remain unknown. Repeat the same source and content on MEM retries.
+
+```bash
+# Scheduled maintenance (after the maintenance guard/start checks):
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" --source=maintenance "maintenance: consolidation session"
 ```
 
 **Where to write (regular sessions):**
