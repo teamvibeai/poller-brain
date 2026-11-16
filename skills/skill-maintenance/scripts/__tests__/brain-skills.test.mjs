@@ -284,6 +284,58 @@ process.exit(require('node:child_process').spawnSync(${JSON.stringify(git)}, arg
   return () => records(log);
 }
 const githubIdentity = 'github.com/fixture/upstream';
+const githubCasingForms = [
+  ['SSH://git@github.com/fixture/upstream.git', 'ssh://git@github.com/fixture/upstream.git'],
+  ['SsH://git@GitHub.COM/Fixture/Upstream.git', 'ssh://git@GitHub.COM/Fixture/Upstream.git'],
+  ['HTTPS://GitHub.COM/Fixture/Upstream.git', 'https://github.com/Fixture/Upstream.git'],
+  ['git@GitHub.COM:Fixture/Upstream.git', 'git@GitHub.COM:Fixture/Upstream.git'],
+];
+function trapCasedHelper(f, source) {
+  const scheme = /^([^:]+):\/\//.exec(source)?.[1];
+  const marker = path.join(f.root, 'unexpected-helper');
+  if (scheme) {
+    const helper = path.join(f.root, 'bin', `git-remote-${scheme}`);
+    write(helper, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'invoked'); console.error('UNEXPECTED_HELPER_AUTHORIZED'); process.exit(73);\n`);
+    fs.chmodSync(helper, 0o755);
+    // Permit the harmless helper so Git's own protocol gate cannot hide a bug.
+    // Only the normalized URL is rewritten to the offline file fixture.
+    f.env.GIT_ALLOW_PROTOCOL = `file:${scheme}`;
+  }
+  return () => assert.equal(fs.existsSync(marker), false, 'cased remote helper must never run');
+}
+for (const [source, url] of githubCasingForms) {
+  test(`GitHub transport casing normalizes before git and installer: ${source}`, () => {
+    const f = fixture(); f.env.GIT_CONFIG_VALUE_0 = url;
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), 'sources: ["fixture/upstream"]\n');
+    const helperUnused = trapCasedHelper(f, source), calls = captureGit(f);
+    const data = f.cli(['add', `${source}#demo`]);
+    helperUnused();
+    assert.equal(data.source, githubIdentity); assert.equal(data.source_url, url);
+    assert.equal(records(f.env.INSTALL_CALL_LOG)[0][3], `${url}#${f.sha}`);
+    for (const args of calls().filter(args => ['ls-remote', 'clone'].includes(args[0]))) {
+      assert.equal(args[args.indexOf('--') + 1], url);
+    }
+  });
+  test(`GitHub transport casing normalizes stored source and source_url: ${source}`, () => {
+    const f = fixture(); f.add(); const value = f.readLock();
+    f.env.GIT_CONFIG_VALUE_0 = url;
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), JSON.stringify({ sources: [source] }));
+    const helperUnused = trapCasedHelper(f, source), calls = captureGit(f);
+    for (const legacy of [true, false]) {
+      value.skills.demo.source = legacy ? source : githubIdentity;
+      if (legacy) delete value.skills.demo.source_url;
+      else value.skills.demo.source_url = source;
+      write(f.lockFile, JSON.stringify(value));
+      assert.equal(f.state(), 'current'); f.cli(['report']); f.cli(['sync']);
+      assert.equal(f.readLock().skills.demo.source_url, url);
+    }
+    helperUnused();
+    for (const args of calls().filter(args => ['ls-remote', 'clone'].includes(args[0]))) {
+      assert.equal(args[args.indexOf('--') + 1], url);
+    }
+    assert.ok(records(f.env.INSTALL_CALL_LOG).slice(1).every(args => args[3] === `${url}#${f.sha}`));
+  });
+}
 const githubForms = [
   ['Fixture/Upstream', 'https://github.com/Fixture/Upstream.git'],
   ['github.com/Fixture/Upstream', 'https://github.com/Fixture/Upstream.git'],

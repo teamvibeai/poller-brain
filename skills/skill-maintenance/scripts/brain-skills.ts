@@ -231,8 +231,9 @@ function sourceInfo(source) {
   const sshUser = /^(?:ssh:\/\/)?([^@/:]+)@/i.exec(source)?.[1];
   if (github && (!sshUser || sshUser === 'git') && !github.slice(1).some(part => part === '.' || part === '..')) {
     const value = `${github[1]}/${github[2]}`;
+    // Git treats mixed-case schemes as remote helpers, not the SSH transport.
     return { identity: `github.com/${value.toLowerCase()}`,
-      url: /^(ssh:\/\/|git@)/i.test(source) ? source : `https://github.com/${value}.git`, local: false };
+      url: /^(ssh:\/\/|git@)/i.test(source) ? source.replace(/^ssh:\/\//i, 'ssh://') : `https://github.com/${value}.git`, local: false };
   }
   if (!/^(https:\/\/[^\s?#]+\.git|ssh:\/\/[^\s?#]+\.git|git@[^\s:]+:[^\s?#]+\.git)$/.test(source)) fail('Use owner/repo, a git URL ending .git, or a local git path');
   return { identity: source.replace(/\/$/, ''), url: source, local: false };
