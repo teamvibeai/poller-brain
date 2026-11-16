@@ -8,7 +8,8 @@
 import { simpleCommands } from "./shell-tokenizer.mjs";
 
 const MARKER = "[REDACTED]";
-const SECRET_FLAGS = new Set(["--token", "--password", "--api-key", "--secret", "-p"]);
+const SECRET_FLAGS = new Set(["--token", "--password", "--api-key", "--secret"]);
+const BOOLEAN_OPTIONS = new Set(["--passWithNoTests", "--pass-with-no-tests"]);
 const PEM = /-----BEGIN [^-]*PRIVATE KEY-----/;
 
 // The hook sees the command before shell expansion. A whole $VAR/${VAR}
@@ -26,9 +27,48 @@ const SIGNATURES = [
   /xox[baprs]-[A-Za-z0-9-]+/,
 ];
 const VALUES = [
-  /(?:--token|--password|--api-key|--secret|-p)[ =]+([\s\S]+)/,
-  /^-p([\s\S]+)/, // Attached short option, e.g. mysql -phunter2.
+  /(?:--token|--password|--api-key|--secret)[ =]+([\s\S]+)/,
 ];
+
+// Resolve only literal, explicitly supported invocation forms. Unknown wrappers
+// and git options keep password semantics; a later command name proves nothing.
+function nonsecretShortPStart(words) {
+  let i = 0;
+  const skipAssignments = () => {
+    while (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(words[i] ?? "")) i++;
+  };
+  skipAssignments();
+  while (["sudo", "command", "env"].includes(words[i])) {
+    const wrapper = words[i++];
+    if (wrapper === "env") skipAssignments();
+    if (!words[i] || words[i].startsWith("-")) return Infinity;
+  }
+  if (words[i] === "curl") return i + 1;
+  if (words[i++] !== "git") return Infinity;
+  while (i < words.length) {
+    if (words[i] === "--no-pager") i++;
+    else if (words[i] === "-C" && words[i + 1]) i += 2;
+    else break;
+  }
+  return words[i] === "log" ? i + 1 : Infinity;
+}
+
+// Assignment-shaped subscripts may span decoded words or contain quoted ']'.
+// Do not assume decoded brackets balance. Match an assignment terminator and
+// omit uncertain extents; ordinary bracket paths have no such terminator.
+function unsupportedArrayAssignment(words) {
+  const text = words.join(" ");
+  let start = -1;
+  for (const match of text.matchAll(/(?<![A-Za-z0-9_./-])[A-Za-z_][A-Za-z0-9_]*\[|\]\+?=/g)) {
+    if (match[0].endsWith("[")) start = match.index + match[0].length;
+    else if (start !== -1 && !/^[A-Za-z0-9_]+$/.test(text.slice(start, match.index))) return true;
+  }
+  return false;
+}
+
+function mixedReference(value) {
+  return /\$(?:[A-Za-z_]|\{)/.test(value) && !isEnvVarRef(value);
+}
 function credentialHeader(word) {
   // Match each label once, then inspect its suffix. Searching for a suffix
   // directly can backtrack quadratically over long hyphenated arguments.
@@ -70,21 +110,31 @@ function redactHeaders(words) {
   return safe;
 }
 
-function redactWord(word, knownTokens) {
+function redactWord(word, knownTokens, nonsecretP) {
   // A configured credential may be quote/backslash-split in the raw shell
   // spelling. Inspect decoded words and omit the WHOLE matching word.
   if (knownTokens.some(token => token && word.includes(token))) return MARKER;
   if (SIGNATURES.some(pattern => pattern.test(word))) return MARKER;
   // Split the assignment name from its value before testing the name. Nested
   // greedy quantifiers here could make long key-like words stall the hook.
-  for (const match of word.matchAll(/\b([A-Za-z0-9_]+)(?:\[[A-Za-z0-9_]+\])?\+?=/g)) {
+  for (const match of word.matchAll(/((?<![A-Za-z0-9_-])--[A-Za-z0-9_-]+|\b[A-Za-z0-9_]+)(?:\[[A-Za-z0-9_]+\])?\+?=/g)) {
+    const value = word.slice(match.index + match[0].length);
+    if (BOOLEAN_OPTIONS.has(match[1]) && match[0] === `${match[1]}=`) {
+      if (!/^(?:true|false)$/.test(value) && !isEnvVarRef(value)) return MARKER;
+      continue;
+    }
     if (/(?:KEY|TOKEN|SECRET|PASSWORD|PASS)/i.test(match[1]) &&
-      !isEnvVarRef(word.slice(match.index + match[0].length))) return MARKER;
+      !isEnvVarRef(value)) return MARKER;
   }
   for (const pattern of VALUES) {
     const match = pattern.exec(word);
     if (match && !isEnvVarRef(match[1])) return MARKER;
   }
+  // Apply the same command policy to separated and attached -p values, while
+  // preserving the old protection for embedded flag text in quoted arguments.
+  const short = /-p[ =]+([\s\S]+)/.exec(word) ?? /^-p([\s\S]+)/.exec(word);
+  if (short && !isEnvVarRef(short[1]) &&
+    (!nonsecretP || short.index !== 0 || mixedReference(short[1]))) return MARKER;
   return word;
 }
 
@@ -100,18 +150,18 @@ export function redactSecrets(command, { knownTokens = [] } = {}) {
   if (commands.some(({ words }) => PEM.test(words.join(" ")))) return "[REDACTED PRIVATE KEY]";
   let changed = false;
   const sanitized = commands.map(({ words, separator }) => {
-    // Arithmetic/compound subscripts can cross tokenizer word boundaries.
-    // Only simple literal subscripts are supported; omit all other forms.
-    if (words.some(word => /\b[A-Za-z0-9_]+\[/.test(word) &&
-      !/^[A-Za-z_][A-Za-z0-9_]*\[[A-Za-z0-9_]+\]\+?=/.test(word))) {
+    if (unsupportedArrayAssignment(words)) {
       changed = true;
       return MARKER + (separator ? ` ${separator} ` : "");
     }
     const headers = redactHeaders(words);
+    const nonsecretPStart = nonsecretShortPStart(words);
     if (headers.length !== words.length || headers.some((word, i) => word !== words[i])) changed = true;
     const safe = headers.map((word, i) => {
-      const secretValue = SECRET_FLAGS.has(words[i - 1]);
-      const redacted = secretValue && !isEnvVarRef(word) ? MARKER : redactWord(word, knownTokens);
+      const nonsecretP = i >= nonsecretPStart;
+      const shortValue = words[i - 1] === "-p" && (!nonsecretP || mixedReference(word));
+      const secretValue = SECRET_FLAGS.has(words[i - 1]) || shortValue;
+      const redacted = secretValue && !isEnvVarRef(word) ? MARKER : redactWord(word, knownTokens, nonsecretP);
       if (redacted !== word) changed = true;
       return redacted;
     });
