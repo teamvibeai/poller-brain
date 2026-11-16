@@ -2,6 +2,7 @@
 // Original redaction regressions plus shell-aware cases.
 // Run: node hooks/__tests__/bash-telemetry-redact.test.mjs
 
+import assert from "node:assert/strict";
 import { redactSecrets } from "../lib/bash-telemetry-redact.mjs";
 
 let passed = 0;
@@ -162,6 +163,21 @@ for (const command of [
 
 // Long labels must stay bounded even if no '=' follows the label.
 assertUnchanged("KEY".repeat(20000), "long non-assignment");
+
+// Unsupported syntax must omit the whole input, including otherwise plain text.
+// Use unlabelled canaries so credential matching cannot hide a lexer widening.
+for (const unsupported of [
+  "echo $(printf CanarySubstitution)",
+  "echo ${REF:-CanaryExpansion}",
+  "echo CanaryRedirect > output",
+  "(echo CanaryCompound)",
+  "echo 'CanaryUnfinished",
+  "cat <<'EOF'\nCanaryHeredoc |\\\n| body\nEOF",
+  'cat <<"EOF"\nCanaryHeredoc &\\\n& body\nEOF',
+]) {
+  assert.equal(redactSecrets(`echo CanaryBefore; ${unsupported}`), "[REDACTED]");
+  passed++;
+}
 
 // Quote-decoded PEM markers must omit the WHOLE command, including other args.
 for (const marker of ['BE""GIN RSA PRIVATE KEY', 'BEGIN RSA PRIVATE KE""Y']) {
