@@ -2,13 +2,13 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const script = fileURLToPath(new URL('../brain-skills.ts', import.meta.url));
-const workspace = path.resolve(path.dirname(script), '..');
 let suiteRoot;
-before(() => { suiteRoot = fs.mkdtempSync(path.join(workspace, '.skill-tests-')); });
+before(() => { suiteRoot = fs.mkdtempSync(path.join(tmpdir(), '.skill-tests-')); });
 after(() => { if (suiteRoot) fs.rmSync(suiteRoot, { recursive: true, force: true }); });
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); }
 function cmd(command, args, cwd, env = {}) {
@@ -76,6 +76,7 @@ test('allowlisted local add delegates to the installer and writes agreeing locks
   const f = fixture(), data = f.cli(['add', `${f.upstream}#demo`]);
   assert.equal(data.sha, f.sha); assert.equal(data.path, 'demo'); assert.equal(data.ref, 'main');
   assert.equal(data.source, fs.realpathSync(f.upstream)); assert.equal(data.upstream_pr, null);
+  assert.equal(Object.hasOwn(data, 'source_url'), false);
   const tool = JSON.parse(fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8'));
   assert.equal(tool.version, 1); assert.equal(tool.skills.demo.sourceType, 'local');
   assert.equal(tool.skills.demo.computedHash, data.content_hash);
@@ -222,6 +223,9 @@ const credentialSources = [
   'https://fixture.invalid/upstream.git?%61pi_key=synthetic-secret-592-abcdefgh',
   'https://fixture.invalid/upstream.git#token=synthetic-secret-592-abcdefgh',
   'https://fixture.invalid/upstream.git#X-Amz-Signature=synthetic-secret-592-abcdefgh',
+  'https://user:synthetic-secret-592-abcdefgh@github.com/fixture/upstream.git',
+  'ssh://git:synthetic-secret-592-abcdefgh@github.com/fixture/upstream.git',
+  'ssh://git@github.com/fixture/upstream?access_token=synthetic-secret-592-abcdefgh',
 ];
 for (const source of ['ssh://git@fixture.invalid/upstream.git', 'git@fixture.invalid:upstream.git']) {
   test(`review1 P5: username-only SSH source installs: ${source}`, () => {
@@ -230,13 +234,14 @@ for (const source of ['ssh://git@fixture.invalid/upstream.git', 'git@fixture.inv
     write(path.join(f.brain, '.claude/skills/allowlist.yaml'), JSON.stringify({ sources: [source] }));
     const data = f.cli(['add', `${source}#demo`]);
     assert.equal(data.source, source);
+    assert.equal(data.source_url, source);
     assert.equal(data.sha, f.sha);
     assertLayout(f);
     f.cli(['lint']);
   });
   test(`review1 P5: stored username-only SSH provenance works: ${source}`, () => {
     const f = fixture(); f.add();
-    const provenance = f.readLock(); provenance.skills.demo.source = source;
+    const provenance = f.readLock(); provenance.skills.demo.source = source; delete provenance.skills.demo.source_url;
     write(f.lockFile, JSON.stringify(provenance));
     f.env.GIT_CONFIG_VALUE_0 = source;
     write(path.join(f.brain, '.claude/skills/allowlist.yaml'), JSON.stringify({ sources: [source] }));
@@ -263,11 +268,133 @@ process.exit(91);
   }
   return () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : [];
 }
+function records(file) {
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+}
+function captureGit(f) {
+  const log = path.join(f.root, 'git-args.jsonl');
+  const git = process.env.PATH.split(path.delimiter).map(dir => path.join(dir, 'git')).find(file => fs.existsSync(file));
+  const file = path.join(f.root, 'bin/git');
+  write(file, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n');
+process.exit(require('node:child_process').spawnSync(${JSON.stringify(git)}, args, {stdio:'inherit'}).status ?? 92);
+`);
+  fs.chmodSync(file, 0o755);
+  return () => records(log);
+}
+const githubIdentity = 'github.com/fixture/upstream';
+const githubForms = [
+  ['Fixture/Upstream', 'https://github.com/Fixture/Upstream.git'],
+  ['github.com/Fixture/Upstream', 'https://github.com/Fixture/Upstream.git'],
+  ['https://github.com/Fixture/Upstream', 'https://github.com/Fixture/Upstream.git'],
+  ['https://github.com/Fixture/Upstream.git', 'https://github.com/Fixture/Upstream.git'],
+  ['git@github.com:Fixture/Upstream.git', 'git@github.com:Fixture/Upstream.git'],
+  ['git@github.com:Fixture/Upstream', 'git@github.com:Fixture/Upstream'],
+  ['ssh://git@github.com/Fixture/Upstream.git', 'ssh://git@github.com/Fixture/Upstream.git'],
+  ['ssh://git@github.com/Fixture/Upstream', 'ssh://git@github.com/Fixture/Upstream'],
+];
+for (const [index, [source, url]] of githubForms.entries()) {
+  test(`GitHub identity equivalence and reverse allowlist spelling: ${source}`, () => {
+    const f = fixture(); f.env.GIT_CONFIG_VALUE_0 = url;
+    // Cycle through every spelling as policy as well as as the requested source.
+    const policy = githubForms[(index + 6) % githubForms.length][0].toLowerCase();
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), JSON.stringify({ sources: [policy] }));
+    const calls = captureGit(f), data = f.cli(['add', `${source}#demo`]);
+    assert.equal(data.source, githubIdentity); assert.equal(data.source_url, url);
+    assert.equal(calls().find(args => args[0] === 'ls-remote')[2], url);
+    assert.equal(records(f.env.INSTALL_CALL_LOG)[0][3], `${url}#${f.sha}`);
+    f.cli(['lint']);
+  });
+}
+for (const [source, url] of githubForms.filter(([source]) => /^(ssh:|git@)/.test(source))) {
+  test(`GitHub SSH survives add/reload/status/report/sync/ensure/push: ${source}`, () => {
+    const f = fixture(); f.env.GIT_CONFIG_VALUE_0 = url;
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), 'sources: ["fixture/upstream"]\n');
+    const calls = captureGit(f);
+    f.cli(['add', `${source}#demo`]);
+    const before = fs.readFileSync(f.lockFile, 'utf8');
+    const toolBefore = fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8');
+    assert.equal(f.state(), 'current'); f.cli(['report']); f.cli(['lint']);
+    assert.equal(f.cli(['ensure', 'demo', 'fixture/upstream#demo']).changed, false);
+    assert.equal(fs.readFileSync(f.lockFile, 'utf8'), before);
+    assert.equal(fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8'), toolBefore);
+    const updated = f.update(); f.cli(['sync']);
+    fs.unlinkSync(path.join(f.brain, '.claude/skills/demo'));
+    f.cli(['ensure', 'demo', 'fixture/upstream#demo']);
+    assert.equal(f.readLock().skills.demo.source_url, url);
+    const toolRestored = fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8');
+    f.edit(); f.fakeGh(); f.cli(['push', 'demo']); f.cli(['lint']);
+    assert.equal(fs.readFileSync(path.join(f.brain, 'skills-lock.json'), 'utf8'), toolRestored);
+    assert.equal(f.readLock().skills.demo.source_url, url);
+    const remoteCalls = calls().filter(args => ['ls-remote', 'clone'].includes(args[0]));
+    assert.ok(remoteCalls.some(args => args[0] === 'clone'));
+    for (const args of remoteCalls) assert.equal(args[args.indexOf('--') + 1], url);
+    assert.deepEqual(records(f.env.INSTALL_CALL_LOG).map(args => args[3]),
+      [`${url}#${f.sha}`, `${url}#${updated}`, `${url}#${updated}`]);
+  });
+}
+for (const source of [
+  'https://github.com.evil/fixture/upstream.git',
+  'ssh://git@github.com.evil/fixture/upstream.git',
+  'ssh://git@github.com.evil/fixture/upstream',
+  'git@github.com.evil:fixture/upstream.git',
+  'git@github-alias:fixture/upstream.git',
+  'ssh://git@github.com:2222/fixture/upstream.git',
+  'https://github.com:443/fixture/upstream.git',
+  'ssh://other@github.com/fixture/upstream.git',
+  'ssh://GIT@github.com/fixture/upstream.git',
+  'git@github.com:/fixture/upstream.git',
+  'ssh://git@github.com/fixture/upstream.git?ref=main',
+  'ssh://git@github.com/extra/fixture/upstream.git',
+  'ssh://git@github.com/fixture/../upstream.git',
+]) {
+  test(`GitHub allowlist does not collapse host/path/endpoint: ${source}`, () => {
+    const f = fixture(), calls = stubSourceCommands(f);
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), 'sources: ["fixture/upstream"]\n');
+    assert.match(f.cli(['add', `${source}#demo`], 1), /outside.*allowlist|Use owner\/repo/);
+    assert.deepEqual(calls(), []);
+  });
+}
+for (const source of [githubIdentity, 'ssh://git@github.com/fixture/upstream.git', 'git@github.com:fixture/upstream.git']) {
+  test(`legacy lock retains fallback transport without read-time migration: ${source}`, () => {
+    const f = fixture(); f.add(); const value = f.readLock();
+    value.skills.demo.source = source; delete value.skills.demo.source_url;
+    write(f.lockFile, JSON.stringify(value));
+    const url = source === githubIdentity ? 'https://github.com/fixture/upstream.git' : source;
+    f.env.GIT_CONFIG_VALUE_0 = url;
+    write(path.join(f.brain, '.claude/skills/allowlist.yaml'), 'sources: ["fixture/upstream"]\n');
+    const calls = captureGit(f), before = fs.readFileSync(f.lockFile, 'utf8');
+    f.cli(['status']); f.cli(['report']); f.cli(['ensure', 'demo', 'fixture/upstream#demo']);
+    assert.equal(fs.readFileSync(f.lockFile, 'utf8'), before);
+    f.cli(['sync']); f.cli(['lint']);
+    assert.equal(f.readLock().skills.demo.source, githubIdentity);
+    assert.equal(f.readLock().skills.demo.source_url, url);
+    for (const args of calls().filter(args => ['ls-remote', 'clone'].includes(args[0]))) {
+      assert.equal(args[args.indexOf('--') + 1], url);
+    }
+  });
+}
+for (const source_url of ['ssh://git@github.com/other/repo.git', 42, null, ...credentialSources]) {
+  test(`invalid stored source_url rejected on every command: ${JSON.stringify(source_url)}`, () => {
+    const f = fixture(); f.add(); const value = f.readLock();
+    value.skills.demo.source_url = source_url; write(f.lockFile, JSON.stringify(value));
+    const calls = captureGit(f), before = snapshot(f.brain);
+    for (const args of [['status'], ['report'], ['sync'], ['push', 'demo'], ['lint'],
+      ['ensure', 'demo', `${f.source}#demo`], ['add', '--new', 'own-demo']]) {
+      const error = f.cli(args, 1);
+      assert.match(error, typeof source_url === 'string' && credentialSources.includes(source_url) ? /Credential-bearing/ : /source_url/);
+      assert.ok(!error.includes('synthetic-secret-592-abcdefgh'));
+      assert.deepEqual(calls(), [], 'lock validation precedes every subprocess');
+      assert.deepEqual(snapshot(f.brain), before);
+    }
+  });
+}
 for (const [index, source] of credentialSources.entries()) {
   test(`credential source ${index + 1} refuses before git/npx without echoing credentials`, () => {
     const f = fixture();
     write(path.join(f.brain, '.claude/skills/allowlist.yaml'), JSON.stringify({ sources: [source] }));
-    const calls = stubSourceCommands(f);
+    const calls = captureGit(f);
     for (const args of [['add', source], ['ensure', 'demo', source]]) {
       const error = f.cli(args, 1);
       assert.match(error, /credential.*URL.*helper.*env/i);
@@ -277,9 +404,9 @@ for (const [index, source] of credentialSources.entries()) {
   });
   test(`stored credential source ${index + 1} refuses before git/npx`, () => {
     const f = fixture(); f.add();
-    const provenance = f.readLock(); provenance.skills.demo.source = source;
+    const provenance = f.readLock(); provenance.skills.demo.source = source; delete provenance.skills.demo.source_url;
     write(f.lockFile, JSON.stringify(provenance));
-    const calls = stubSourceCommands(f);
+    const calls = captureGit(f);
     for (const args of [['status'], ['report'], ['sync'], ['push', 'demo'], ['ensure', 'demo', `${f.source}#demo`]]) {
       const error = f.cli(args, 1);
       assert.match(error, /credential.*URL.*helper.*env/i);
@@ -417,7 +544,7 @@ test('lint detects local content hash drift and both-lock hash/source drift', ()
   tool.skills.demo.computedHash = f.readLock().skills.demo.content_hash; tool.skills.demo.source = 'tampered'; write(file, JSON.stringify(tool));
   assert.match(f.cli(['lint'], 1), /source\/ref\/path drift/);
   tool.skills.demo.source = f.source; write(file, JSON.stringify(tool));
-  const provenance = f.readLock(); provenance.skills.demo.source = 'https://other.invalid/repo.git'; write(f.lockFile, JSON.stringify(provenance));
+  const provenance = f.readLock(); provenance.skills.demo.source = 'https://other.invalid/repo.git'; delete provenance.skills.demo.source_url; write(f.lockFile, JSON.stringify(provenance));
   assert.match(f.cli(['lint'], 1), /provenance drift/);
 });
 test('ref/path traversal, unknown flags and accidental add overwrite refuse', () => {

@@ -137,10 +137,15 @@ function yaml(text) {
 function lock() {
   const value = fs.existsSync(lockPath) ? yaml(fs.readFileSync(lockPath, 'utf8')) : { skills: {} };
   if (!object(value) || !object(value.skills)) fail('Invalid skills.lock.yaml: expected skills mapping');
+  // Redact unsafe provenance before any other entry diagnostics can expose it.
+  for (const entry of Object.values(value.skills)) {
+    refuseCredentialUrl(entry?.source);
+    refuseCredentialUrl(entry?.source_url);
+  }
   for (const [name, entry] of Object.entries(value.skills)) {
     validName(name);
     if (!object(entry) || !['source', 'path', 'ref', 'sha', 'content_hash'].every(k => typeof entry[k] === 'string') || !/^[0-9a-f]{40}$/.test(entry.sha) || !/^[0-9a-f]{64}$/.test(entry.content_hash) || !(entry.upstream_pr === null || typeof entry.upstream_pr === 'string')) fail(`Invalid provenance entry: ${name}`);
-    refuseCredentialUrl(entry.source);
+    entryInfo(entry);
     if (entry.path !== '.') safeRelative(entry.path);
   }
   return value;
@@ -220,10 +225,25 @@ function sourceInfo(source) {
     const local = fs.realpathSync(source.startsWith('file://') ? new URL(source) : path.resolve(cwd, source));
     return { identity: local, url: local, local: true };
   }
-  let value = source.replace(/^github\.com\//, '').replace(/^https:\/\/github\.com\//, '').replace(/^git@github\.com:/, '').replace(/\.git$/, '').replace(/\/$/, '');
-  if (/^[\w.-]+\/[\w.-]+$/.test(value)) return { identity: `github.com/${value.toLowerCase()}`, url: `https://github.com/${value}.git`, local: false };
+  // Match the entire standard GitHub endpoint. Aliases, ports, extra path
+  // components and lookalike hosts must keep their independent identities.
+  const github = /^(?:(?:https:\/\/)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(source);
+  const sshUser = /^(?:ssh:\/\/)?([^@/:]+)@/i.exec(source)?.[1];
+  if (github && (!sshUser || sshUser === 'git') && !github.slice(1).some(part => part === '.' || part === '..')) {
+    const value = `${github[1]}/${github[2]}`;
+    return { identity: `github.com/${value.toLowerCase()}`,
+      url: /^(ssh:\/\/|git@)/i.test(source) ? source : `https://github.com/${value}.git`, local: false };
+  }
   if (!/^(https:\/\/[^\s?#]+\.git|ssh:\/\/[^\s?#]+\.git|git@[^\s:]+:[^\s?#]+\.git)$/.test(source)) fail('Use owner/repo, a git URL ending .git, or a local git path');
   return { identity: source.replace(/\/$/, ''), url: source, local: false };
+}
+function entryInfo(entry) {
+  const source = sourceInfo(entry.source);
+  if (!Object.hasOwn(entry, 'source_url')) return source;
+  if (typeof entry.source_url !== 'string') fail('Invalid source_url: expected a string');
+  const info = sourceInfo(entry.source_url);
+  if (info.identity !== entry.source) fail('Stored source_url identity does not match source');
+  return info;
 }
 function allowed(source) {
   const info = sourceInfo(source), file = path.join(skillsDir, 'allowlist.yaml');
@@ -275,7 +295,7 @@ function status() {
     let valid = true;
     try { skillLink(name); } catch { valid = false; }
     const modified = !valid || contentModified(name, entry);
-    const upstream_sha = remoteSha(sourceInfo(entry.source), entry.ref);
+    const upstream_sha = remoteSha(entryInfo(entry), entry.ref);
     const state = entry.upstream_pr ? 'waiting-upstream' : modified ? 'modified' : upstream_sha !== entry.sha ? 'outdated' : 'current';
     entries.push({ name, ...entry, state, upstream_sha, modified });
   }
@@ -343,7 +363,7 @@ function install(source, subpath, ref, requestedName, replacing = false) {
       const tool = json(toolLockPath, null)?.skills?.[name];
       if (!tool || tool.computedHash !== content_hash) fail('npx skills did not write the expected content lock');
       const value = lock();
-      value.skills[name] = { source: info.identity, path: selectedPath, ref, sha, upstream_pr: null, content_hash,
+      value.skills[name] = { source: info.identity, ...(!info.local ? { source_url: info.url } : {}), path: selectedPath, ref, sha, upstream_pr: null, content_hash,
         installer: metadata(tool) };
       saveLock(value);
       return { name, ...value.skills[name] };
@@ -362,10 +382,10 @@ function sync(name, force) {
   // Preflight all targets before overwriting any of them.
   for (const item of names) {
     const entry = value.skills[item]; if (!entry) fail(`No vendored skill: ${item}`);
-    allowed(entry.source);
+    allowed(entryInfo(entry).url);
     if (contentModified(item, entry) && !entry.upstream_pr && !force) fail(`${item} is locally modified; push it upstream or use --force`);
   }
-  return names.map(item => { const entry = value.skills[item]; return install(entry.source, entry.path === '.' ? undefined : entry.path, entry.ref, item, true); });
+  return names.map(item => { const entry = value.skills[item]; return install(entryInfo(entry).url, entry.path === '.' ? undefined : entry.path, entry.ref, item, true); });
 }
 function lint() {
   const errors = [], seen = new Set(), value = lock(), toolLock = json(toolLockPath, { version: 1, skills: {} });
@@ -399,7 +419,7 @@ function lint() {
       if (actual !== entry.content_hash && !entry.upstream_pr) errors.push(`Content hash drift: ${name}`);
       if (!tool || tool.computedHash !== entry.content_hash) errors.push(`Two-lock hash drift: ${name}`);
       if (tool && entry.installer && JSON.stringify(metadata(tool)) !== JSON.stringify(metadata(entry.installer))) errors.push(`Two-lock source/ref/path drift: ${name}`);
-      const source = sourceInfo(entry.source);
+      const source = entryInfo(entry);
       if (tool && !source.local) {
         const toolSource = sourceInfo(tool.sourceUrl || tool.source);
         const toolPath = tool.skillPath ? path.posix.dirname(tool.skillPath) : null;
@@ -415,7 +435,7 @@ function push(name) {
   validName(name); const value = lock(), entry = value.skills[name];
   if (!entry) fail(`No vendored skill: ${name}`);
   if (entry.upstream_pr) return { name, upstream_pr: entry.upstream_pr, changed: false };
-  const info = allowed(entry.source), vendored = skillLink(name);
+  const info = allowed(entryInfo(entry).url), vendored = skillLink(name);
   function identity(key, fallback) {
     const result = spawnSync('git', ['config', key], { cwd, env, encoding: 'utf8' });
     if (result.error || (result.status !== 0 && result.status !== 1)) fail(`git config ${key} failed: ${result.error?.message || result.stderr.trim()}`);
@@ -442,11 +462,16 @@ function push(name) {
     write(body, `Apply the vendored ${name} changes from the brain, based on ${entry.sha}.\n\nBrain owner review required.\n`);
     const url = run('gh', ['pr', 'create', '--base', entry.ref, '--head', branch, '--title', `fix(${name}): apply brain skill improvements`, '--body-file', body], repo);
     if (!/^https:\/\/[^\s]+\/pull\/\d+$/.test(url)) fail('gh pr create did not return a PR URL');
+    entry.source = info.identity;
+    if (!info.local) entry.source_url = info.url;
     entry.upstream_pr = url; saveLock(value);
     return { name, upstream_pr: url, branch, author, changed: true };
   });
 }
 function main(args) {
+  // Validate source arguments and stored transport before even the root probe.
+  for (const arg of args) refuseCredentialUrl(arg);
+  lock();
   const root = run('git', ['rev-parse', '--show-toplevel']);
   if (fs.realpathSync(root) !== fs.realpathSync(cwd)) fail('Run brain-skills from the brain repository root');
   refuseBaseBrain(fs.realpathSync(root));
@@ -477,15 +502,17 @@ function main(args) {
   if (command === 'add' || command === 'ensure') {
     const name = command === 'ensure' ? validName(positional[0]) : options['--name'];
     const parsed = parseSourceArg(positional[command === 'ensure' ? 1 : 0]);
-    allowed(parsed.source);
-    if (command === 'ensure' && lock().skills[name] && fs.existsSync(path.join(skillsDir, name, 'SKILL.md'))) {
+    const requested = allowed(parsed.source);
+    const entry = command === 'ensure' ? lock().skills[name] : undefined;
+    const recorded = entry ? entryInfo(entry) : undefined;
+    if (entry && fs.existsSync(path.join(skillsDir, name, 'SKILL.md'))) {
       const copied = fs.lstatSync(path.join(skillsDir, name)).isDirectory();
       if (copied) transaction(name, () => normalizeLayout(name));
       else skillLink(name);
       return { name, changed: copied };
     }
-    const replacing = command === 'ensure' && Boolean(lock().skills[name]);
-    return { ...install(parsed.source, parsed.subpath, options['--ref'] || 'main', name, replacing), changed: true };
+    const source = recorded?.identity === requested.identity ? recorded.url : parsed.source;
+    return { ...install(source, parsed.subpath, options['--ref'] || 'main', name, Boolean(entry)), changed: true };
   }
   if (command === 'sync') { const entries = sync(positional[0], options['--force']); return { entries }; }
   if (command === 'push') return push(positional[0]);
