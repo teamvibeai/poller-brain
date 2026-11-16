@@ -1,12 +1,13 @@
 /**
  * Default bash deny-list — typo/accident protection, NOT adversarial
  * defense. See docs/bash-security-hardening.md and teamvibeai/teamvibe.ai#340.
- * Only literal simple commands are understood; uncertain syntax fails open.
+ * Only literal simple commands are understood. Uncertain separator grammar
+ * fails closed; existing unsupported wrappers/expansions remain out of scope.
  * Shell wrappers, expansions, etc. remain accepted bypasses. The enforcement
  * boundary is tracked separately as teamvibeai/teamvibe.ai#344.
  */
 
-import { simpleCommands } from "./shell-tokenizer.mjs";
+import { parseSimpleCommands } from "./shell-tokenizer.mjs";
 
 const READ_COMMANDS = new Set([
   "cat", "less", "more", "head", "tail", "strings", "xxd", "hexdump", "od", "base64",
@@ -25,7 +26,7 @@ const RULES = [
   {
     id: "pipe-to-shell",
     matches: ([cmd], next, separator) =>
-      ["curl", "wget"].includes(cmd) && separator === "|" &&
+      ["curl", "wget"].includes(cmd) && ["|", "|&"].includes(separator) &&
       ["sh", "bash", "zsh"].includes(next?.words[0]),
     reason: "piping a network download directly into a shell interpreter",
   },
@@ -51,11 +52,14 @@ const RULES = [
 ];
 
 export function checkBashCommand(command) {
-  const commands = simpleCommands(command);
+  const { commands, status } = parseSimpleCommands(command);
   for (const rule of RULES) {
     if (commands.some(({ words, separator }, i) => rule.matches(words, commands[i + 1], separator))) {
       return { denied: true, ruleId: rule.id, reason: rule.reason };
     }
+  }
+  if (status === "uncertain") {
+    return { denied: true, ruleId: "uncertain-shell-grammar", reason: "cannot safely classify shell separator grammar" };
   }
   return { denied: false };
 }

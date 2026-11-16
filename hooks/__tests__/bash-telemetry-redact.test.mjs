@@ -3,6 +3,8 @@
 // Run: node hooks/__tests__/bash-telemetry-redact.test.mjs
 
 import { redactSecrets } from "../lib/bash-telemetry-redact.mjs";
+import assert from "node:assert/strict";
+import { validSeparatorContexts, uncertainSeparatorContexts, secretSeparatorContexts, invalidStderrPipelines } from "./fixtures/shell-separator-contexts.mjs";
 
 let passed = 0;
 function assertRedacted(cmd, mustNotContain, label) {
@@ -172,6 +174,44 @@ for (const marker of ['BE""GIN RSA PRIVATE KEY', 'BEGIN RSA PRIVATE KE""Y']) {
     process.exit(1);
   }
   passed++;
+}
+
+// Malformed grammar must omit the WHOLE command, including an otherwise
+// unlabelled canary which signature-based redaction alone would retain.
+for (const command of [
+  "; echo SeparatorCanary",
+  "echo SeparatorCanary | ; true",
+  "echo SeparatorCanary | | true",
+  "echo SeparatorCanary ;; true",
+  "echo SeparatorCanary & ; true",
+  "echo SeparatorCanary &&\n\n",
+  "echo SeparatorCanary ||",
+  "echo SeparatorCanary |",
+]) {
+  assert.equal(redactSecrets(command), "[REDACTED]", "invalid separators must omit the canary");
+  passed++;
+}
+for (const command of [
+  "sudo echo $REF;",
+  "sudo echo ${REF} &\n\n",
+  "echo $REF |\n\ncat",
+  "echo $REF &&\ntrue",
+  "echo $REF ||\ntrue",
+]) assertUnchanged(command, "valid separators preserve literal environment references");
+assert.equal(redactSecrets("sudo echo --token SeparatorCanary"), "sudo echo --token [REDACTED]");
+passed++;
+
+for (const [command, , expected] of validSeparatorContexts) {
+  // Comments and secret-shaped -p arguments keep their existing redaction.
+  assert.equal(redactSecrets(command), expected ?? (command.includes("#") ? "[REDACTED]" : command), command);
+  passed++;
+}
+for (const command of [...uncertainSeparatorContexts, ...invalidStderrPipelines]) {
+  assert.equal(redactSecrets(command), "[REDACTED]", command);
+  passed++;
+}
+for (const [command, fragment] of secretSeparatorContexts) {
+  assertRedacted(command, fragment, "separator context secret");
 }
 
 console.log(`OK: ${passed} redaction assertions passed`);
