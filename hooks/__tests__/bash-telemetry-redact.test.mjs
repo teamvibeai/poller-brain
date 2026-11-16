@@ -4,6 +4,7 @@
 
 import { redactSecrets } from "../lib/bash-telemetry-redact.mjs";
 import assert from "node:assert/strict";
+import { validSeparatorContexts, uncertainSeparatorContexts, secretSeparatorContexts, invalidStderrPipelines } from "./fixtures/shell-separator-contexts.mjs";
 
 let passed = 0;
 function assertRedacted(cmd, mustNotContain, label) {
@@ -199,5 +200,18 @@ for (const command of [
 ]) assertUnchanged(command, "valid separators preserve literal environment references");
 assert.equal(redactSecrets("sudo echo --token SeparatorCanary"), "sudo echo --token [REDACTED]");
 passed++;
+
+for (const [command, , expected] of validSeparatorContexts) {
+  // Comments and secret-shaped -p arguments keep their existing redaction.
+  assert.equal(redactSecrets(command), expected ?? (command.includes("#") ? "[REDACTED]" : command), command);
+  passed++;
+}
+for (const command of [...uncertainSeparatorContexts, ...invalidStderrPipelines]) {
+  assert.equal(redactSecrets(command), "[REDACTED]", command);
+  passed++;
+}
+for (const [command, fragment] of secretSeparatorContexts) {
+  assertRedacted(command, fragment, "separator context secret");
+}
 
 console.log(`OK: ${passed} redaction assertions passed`);

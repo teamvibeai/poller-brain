@@ -10,7 +10,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { checkBashCommand } from "../lib/bash-deny-list-core.mjs";
-import { simpleCommands } from "../lib/shell-tokenizer.mjs";
+import { simpleCommands, parseSimpleCommands } from "../lib/shell-tokenizer.mjs";
+import { validSeparatorContexts, uncertainSeparatorContexts, secretSeparatorContexts, invalidStderrPipelines } from "./fixtures/shell-separator-contexts.mjs";
 
 let passed = 0;
 function assertDenied(cmd, expectedRuleId) {
@@ -230,4 +231,42 @@ test("separator grammar: hook silently allows invalid input and denies valid mat
     }
   }
   console.log(`separator cases: ${validSeparators.length} valid / ${invalidSeparators.length} invalid`);
+});
+
+test("separator contexts: every new fixture is valid Bash syntax", () => {
+  for (const command of [...validSeparatorContexts, ...secretSeparatorContexts].map(([command]) => command).concat(uncertainSeparatorContexts)) {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-n"], { input: command, encoding: "utf8" });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, `${JSON.stringify(command)}: ${result.stderr}`);
+    assert.equal(result.stderr, "", JSON.stringify(command));
+  }
+});
+
+test("separator contexts: matcher and hook retain denials across pipelines and conditionals", () => {
+  for (const [command, ruleId] of validSeparatorContexts) {
+    assert.equal(checkBashCommand(command).ruleId ?? null, ruleId, JSON.stringify(command));
+    const stdout = runHook(JSON.stringify({ tool_name: "Bash", tool_input: { command } }));
+    if (ruleId === null) assert.equal(stdout, "", JSON.stringify(command));
+    else assert.equal(JSON.parse(stdout).hookSpecificOutput.permissionDecision, "deny", JSON.stringify(command));
+  }
+});
+
+test("separator contexts: uncertain classification fails closed", () => {
+  for (const command of uncertainSeparatorContexts) {
+    assert.equal(parseSimpleCommands(command).status, "uncertain", JSON.stringify(command));
+    assert.equal(checkBashCommand(command).denied, true, JSON.stringify(command));
+    const stdout = runHook(JSON.stringify({ tool_name: "Bash", tool_input: { command } }));
+    assert.equal(JSON.parse(stdout).hookSpecificOutput.permissionDecision, "deny", JSON.stringify(command));
+  }
+});
+
+test("separator contexts: incomplete stderr pipelines remain invalid and fail open", () => {
+  for (const command of invalidStderrPipelines) {
+    const syntax = spawnSync("bash", ["--noprofile", "--norc", "-n"], { input: command, encoding: "utf8" });
+    assert.ifError(syntax.error);
+    assert.notEqual(syntax.status, 0, JSON.stringify(command));
+    assert.equal(parseSimpleCommands(command).status, "invalid", JSON.stringify(command));
+    assert.deepEqual(checkBashCommand(command), { denied: false }, JSON.stringify(command));
+    assert.equal(runHook(JSON.stringify({ tool_name: "Bash", tool_input: { command } })), "", JSON.stringify(command));
+  }
 });
