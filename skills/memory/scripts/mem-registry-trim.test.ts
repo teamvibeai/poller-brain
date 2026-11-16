@@ -372,7 +372,7 @@ for (const columns of [4, 5]) {
     const rowFor = (description: string) =>
       `|  ${key} | PROMOTED  | 2026-11-13 |${columns === 5 ? " old-source:7  |" : ""}  ${description}  |`;
     const destinations = [{ file: "semantic/reviewed.md", text:
-      `### Preserve the reviewed lesson\n[${key}] ${pointerBody}` }];
+      `### Preserve the reviewed lesson [${key}]\n[${key}] ${pointerBody}` }];
     const staleApprovals = findTrimCandidates(rowFor(pointerBody), destinations).candidates;
     assert(staleApprovals.length === 1, `#482 ${columns} columns ${key}: fixture has a reviewed narrative candidate`);
     for (const description of pointerDescriptions) {
@@ -399,24 +399,24 @@ for (const columns of [4, 5]) {
     }
     const prose = narrativeDescriptions[0];
     assert(findTrimCandidates(rowFor(prose), [{ file: "semantic/narrative.md", text:
-      `### Preserve the operational guide narrative\n[${key}] ${prose}` }]).candidates.length === 1,
+      `### Preserve the operational guide narrative [${key}]\n[${key}] ${prose}` }]).candidates.length === 1,
     `#482 ${columns} columns ${key}: fully covered narrative still receives citation review`);
 
     // Round-trip actual trim-writer output rather than only hand-built pointers.
     for (const file of ["core/team rules.md", "semantic/team guide.md",
       "episodic/2026 recap/incident  notes.md", "procedural/Český tým/run_book-v2.1 guide (final).md",
       "semantic/team — rules.md", "semantic/team\u00a0guide.md", "procedural/team\u202fguide.md"]) {
-      const destinations = [{ file, text: `### Preserve the reviewed lesson\n[${key}] ${pointerBody}` }];
+      const destinations = [{ file, text: `### Preserve the reviewed lesson [${key}]\n[${key}] ${pointerBody}` }];
       const approved = findTrimCandidates(rowFor(pointerBody), destinations).candidates;
       const written = applyTrimCandidates(rowFor(pointerBody), approved);
       assert(written.stats.trimmedRows === 1 && written.registry.includes(`see ${file} — Preserve the reviewed lesson`),
         `#482 writer ${columns} columns ${key}: emits spaced ${file} verbatim`);
       assert(written.registry === rowFor(pointerBody).replace(
         `${columns === 5 ? " old-source:7  |" : ""}  ${pointerBody}  |`,
-        `${columns === 5 ? ` ${file}:2 |` : ""} see ${file} — Preserve the reviewed lesson |`),
+        `${columns === 5 ? ` ${file}:1 |` : ""} see ${file} — Preserve the reviewed lesson |`),
       `#482 writer ${columns} columns ${key}: output is byte-identical to the canonical writer format for ${file}`);
       if (columns === 5) {
-        assert(written.registry.includes(`| ${file}:2 |`), `#482 writer: :line belongs only in Obsoleted for ${file}`);
+        assert(written.registry.includes(`| ${file}:1 |`), `#482 writer: :line belongs only in Obsoleted for ${file}`);
       }
       verifyTrimStats(written.stats);
       const repeated = findTrimCandidates(written.registry, destinations);
@@ -433,7 +433,7 @@ for (const columns of [4, 5]) {
     // line-qualified target that the narrative tests above deliberately reject.
     for (const file of ["semantic/team\tguide.md", "semantic/team:notes guide.md",
       "semantic/guide.md:12 — Read another guide.md"]) {
-      const destinations = [{ file, text: `### Preserve another guide.md — Reviewed lesson\n[${key}] ${pointerBody}` }];
+      const destinations = [{ file, text: `### Preserve another guide.md — Reviewed lesson [${key}]\n[${key}] ${pointerBody}` }];
       const approved = findTrimCandidates(rowFor(pointerBody), destinations).candidates;
       assert(approved.length === 1, `#482 writer: collector-valid ${JSON.stringify(file)} has a candidate`);
       const retained = applyTrimCandidates(rowFor(pointerBody), approved);

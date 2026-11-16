@@ -911,13 +911,13 @@ for (const marker of ["##", "###", "####", "#####", "######", "-"]) {
       const provenance = withSource ? " (Source: test author, 2026-11-15, [MEM-99])" : "";
       const entry = `${marker} [MEM-99] Incident lesson\n\n${"Original incident narrative. ".repeat(30)}${provenance}`;
       fs.writeFileSync(source, prefix + entry + suffix);
-      fs.writeFileSync(path.join(root, "memory/semantic/topic.md"), "### Complete promoted incident lesson\nEvidence [MEM-99]\n");
+      fs.writeFileSync(path.join(root, "memory/semantic/topic.md"), "### Complete promoted incident lesson [MEM-99]\nEvidence [MEM-99]\n");
       const beforeProposal = snapshotFixture(root);
       const proposal = runLearningsCli(root);
       assert(proposal.status === 0, `${label}: proposal succeeds: ${proposal.stderr}`);
       assert(snapshotFixture(root) === beforeProposal, `${label}: proposal preserves every fixture file and directory`);
       const preview = proposal.stdout.split("\n").find((line) => line.startsWith("  proposed pointer: "))?.slice("  proposed pointer: ".length);
-      const expected = `${marker} [MEM-99] → see semantic/topic.md:2 — Complete promoted incident lesson${withSource ? " (Source: test author, 2026-11-15)" : ""}`;
+      const expected = `${marker} [MEM-99] → see semantic/topic.md:1 — Complete promoted incident lesson${withSource ? " (Source: test author, 2026-11-15)" : ""}`;
       assert(preview === expected, `${label}: preview includes the original marker, destination line, hook and optional provenance`);
       const applied = runLearningsCli(root, "--apply", "--only", "MEM-99");
       assert(applied.status === 0, `${label}: apply succeeds: ${applied.stderr}`);
@@ -947,7 +947,7 @@ try {
   const target = `## [MEM-99] Selected candidate\n\n${"Replace only this narrative. ".repeat(20)}(Source: selected author, [MEM-99])`;
   const suffix = "\n\n# Footer é\n\n\tUntouched footer.\n";
   fs.writeFileSync(source, prefix + target + suffix);
-  fs.writeFileSync(path.join(previewSelectionRoot, "memory/semantic/topic.md"), "### Complete promoted incident lesson\nEvidence [MEM-99]\nEvidence [MEM-143]\n");
+  fs.writeFileSync(path.join(previewSelectionRoot, "memory/semantic/topic.md"), "### Complete promoted incident lesson [MEM-99]\nEvidence [MEM-99]\n### Complete promoted incident lesson [MEM-143]\nEvidence [MEM-143]\n");
   const before = snapshotFixture(previewSelectionRoot);
   const proposal = runLearningsCli(previewSelectionRoot);
   assert(proposal.status === 0 && proposal.stdout.includes("candidates=3"), "#612 selection: three candidates are proposed");
@@ -955,7 +955,7 @@ try {
   const lines = proposal.stdout.split("\n");
   const selectedIndex = lines.findIndex((line) => line.startsWith(`MEM-99@${startLine} (`));
   const selectedPointer = selectedIndex >= 0 ? lines[selectedIndex + 2]?.slice("  proposed pointer: ".length) : undefined;
-  const expected = "## [MEM-99] → see semantic/topic.md:2 — Complete promoted incident lesson (Source: selected author)";
+  const expected = "## [MEM-99] → see semantic/topic.md:1 — Complete promoted incident lesson (Source: selected author)";
   assert(selectedPointer === expected, "#612 selection: the displayed span selector maps to that entry's own marker and source");
   const ambiguous = runLearningsCli(previewSelectionRoot, "--apply", "--only", "MEM-99");
   assert(ambiguous.status === 1 && ambiguous.stderr.includes("ambiguous"), "#612 selection: a bare key still refuses multiple candidates");

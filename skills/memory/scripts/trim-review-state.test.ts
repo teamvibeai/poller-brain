@@ -88,7 +88,7 @@ const registry = "memory/MEM_REGISTRY.md";
 const body = "Record the deployment SHA and rollback command before releasing. ".repeat(5).trim();
 const source = `- **Preserve deployment evidence** — ${body} [MEM-124]\n\n- **Dated lesson** — ${body} [${key}]\n`;
 const rows = `| Key | Status | Created | Description |\n|---|---|---|---|\n| MEM-125 | ACTIVE | 2026-09-01 | ${body} |\n| ${registryKey} | ACTIVE | 2026-11-01 | ${body} |\n`;
-const dest = `### Deployment safety policy\n[MEM-124] ${body}\n[${key}] ${body}\n[MEM-125] ${body}\n[${registryKey}] ${body}\n`;
+const dest = `### Deployment safety policy [MEM-124]\n[MEM-124] ${body}\n### Deployment safety policy [${key}]\n[${key}] ${body}\n### Deployment safety policy [MEM-125]\n[MEM-125] ${body}\n### Deployment safety policy [${registryKey}]\n[${registryKey}] ${body}\n`;
 const destination = "memory/semantic/deployment.md";
 try {
   write("CLAUDE.md", "Fixture\n"); write(learning, source); write(registry, rows); write(destination, dest);
@@ -171,7 +171,7 @@ try {
     for (const kind of ["learnings", "registry"]) cached(kind, 0);
   }
   write(destination, dest);
-  write("memory/semantic/zzz-new.md", "### New alternate evidence\nAdditional narrative [MEM-124]\n");
+  write("memory/semantic/zzz-new.md", "### New alternate evidence [MEM-124]\nAdditional narrative [MEM-124]\n");
   for (const kind of ["learnings", "registry"]) cached(kind, 0);
   fs.unlinkSync(path.join(root, "memory/semantic/zzz-new.md"));
   fs.renameSync(path.join(root, destination), path.join(root, "memory/semantic/renamed.md"));
@@ -281,7 +281,7 @@ try {
 
   // Original #530 incidental citation is reviewable but #505 still rejects it
   // for registry trimming. Existing index/multi-key shapes remain ineligible.
-  const incidental = [{ file: "episodic/cycle.md", text: "### Consolidation bookkeeping\nReviewed the deployment checklist per [MEM-124]; no trim approved.\n" }];
+  const incidental = [{ file: "episodic/cycle.md", text: "### Consolidation bookkeeping [MEM-124]\nReviewed the deployment checklist per [MEM-124]; no trim approved.\n" }];
   check(findLearningsTrimCandidates(source, incidental).candidates.length === 1, "original incidental proposal still requires explicit review");
   const guarded = findTrimCandidates(rows.replace("MEM-125", "MEM-124"), incidental);
   check(guarded.candidates.length === 0 && guarded.contentCoverage[0].missingTokens[0] === "no-literal-match", "#505 literal-match rejection unchanged");
