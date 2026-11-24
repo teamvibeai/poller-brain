@@ -498,6 +498,38 @@ test('wrong-date and lookalike final subjects do not satisfy the citation guard'
   assert.equal(state(dir).status, 0)
 })
 
+for (const hasMarker of [true, false]) {
+  test(`non-canonical + reflection final stays blocked with audited recovery guidance (marker=${hasMarker})`, t => {
+    const { dir, git, checkpoint, pair, commit } = history(t)
+    const cycleDate = dateAgo(1)
+    if (hasMarker) assert.equal(markerStart(dir, cycleDate).status, 0)
+    checkpoint(cycleDate)
+    pair(cycleDate)
+    git('add', '-A')
+    commit(`chore: consolidate memory checkpoint (${cycleDate}) — steps 10-12`)
+    commit(`chore: consolidate memory + reflection (${cycleDate})`)
+
+    const inspection = state(dir)
+    const result = guard(dir)
+    assert.equal(inspection.status, 1, inspection.stdout)
+    assert.equal(result.status, 1, result.stdout)
+    assert.match(result.stdout, /consolidation_inspect: true.*consolidation_state: blocked/)
+    assert.doesNotMatch(result.stdout, /consolidation_needed: true/)
+    assert.ok(result.stdout.includes(inspection.stdout.trim()), 'guard must forward state guidance unchanged')
+    assert.ok(result.stdout.includes(`expected exact subject: \`chore: consolidate memory (${cycleDate})\``), result.stdout)
+    assert.match(result.stdout, /MAINTENANCE\.md#non-canonical-final-recovery/)
+    if (hasMarker) {
+      assert.match(result.stdout, /marker present.*matching INSPECT_CAPTURE.*REVIEW_NOTES.*Archives inspected:.*Reports inspected:/)
+      assert.ok(result.stdout.includes('bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" repair . INSPECT_CAPTURE REVIEW_NOTES'), result.stdout)
+      assert.match(result.stdout, /repair does not establish completion/)
+    } else {
+      assert.match(result.stdout, /marker absent: manually reconcile/)
+      assert.match(result.stdout, /do not create a replacement marker or run repair/)
+      assert.doesNotMatch(result.stdout, /repair \. INSPECT_CAPTURE REVIEW_NOTES/)
+    }
+  })
+}
+
 test('edited completed report requires inspection; missing history is explicitly unknown', t => {
   const { dir, git, checkpoint, pair, commit } = history(t)
   checkpoint()

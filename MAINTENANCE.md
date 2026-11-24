@@ -271,6 +271,40 @@ assumed. Do not write new entries to `PENDING_ISSUES.md`.
 
     **`daily-log-exists-today` self-assessment rule:** Set `daily-log-exists-today: true` only if `memory/daily/YYYY-MM-DD.md` for today is non-empty — an archive created from an empty TODAY.md fails this criterion. **Pre-archive check:** Before archiving TODAY.md, verify it contains at least one substantive entry. If TODAY.md is empty or contains only reset-template content, write one entry first: `npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "maintenance: consolidation session"`. This ensures the archive is never empty — the consolidation report itself counts as session activity, so the criterion is always applicable when consolidation runs.
 
+## Non-canonical final recovery
+
+An exact `chore: consolidate memory (YYYY-MM-DD)` subject after the cycle's start/latest checkpoint is required. A subject such as `chore: consolidate memory + reflection (YYYY-MM-DD)` remains blocked even with committed reports. Use the **blocked cycle's original UTC date**, not today's date. This is an explicit audited recovery procedure, not permission to resume an interrupted skill or repeat archive/reset steps.
+
+1. From the affected brain root, run `bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .` and inspect `git status --short`. Capture marker inspection (exit 0 = absent, 1 = valid marker, 2 = inspection required):
+
+   ```bash
+   bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" inspect . > "$(git rev-parse --git-path consolidation-start).inspect.txt"
+   ```
+
+2. Audit the original marker date/starting HEAD, checkpoint/final ancestry, TODAY.md/daily archives, progress ledger, all required consolidation steps, report drafts and committed markdown/JSON evidence. Reconcile prior writes and remove or label unsupported completion citations as incomplete. Save genuine findings in a separate Git-metadata file with non-empty `Archives inspected: <findings>` and `Reports inspected: <findings>` lines. The repair helper checks these attestations, not their correctness.
+3. Choose the applicable branch:
+   - **Valid original marker and only the final subject is missing:** canonical finalization is applicable only when the audit establishes that all required steps actually finished, integrity alarms are resolved, and pending allowed-path changes are reviewed consolidation work. The original starting HEAD must be an ancestor of the checkpoint/report evidence and current HEAD; dates and cycle identities must agree. Require the exact cycle's valid history append against its starting-HEAD archive and committed report pair with valid `consolidationHistory` v1 metadata at HEAD or the exact `steps 10-12` checkpoint. Markdown must remain on disk without unfinished report edits. Never recreate consumed JSON. Keep the original marker in place for the read-only preflight and final helper:
+
+     ```bash
+     # Only after the audit above; final runs only if preflight succeeds:
+     node "$CLAUDE_CONFIG_DIR/scripts/consolidation-history.mjs" . YYYY-MM-DD --final &&
+       bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-commit.sh" . YYYY-MM-DD final
+     bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .
+     ```
+
+     Apply the skill's Checkpoint Rules: the helper may commit allowed memory/report changes, so inspect them first. It creates the canonical final, including an empty final when appropriate; do not substitute an unconditional `git commit --allow-empty`. Require exit 0 **and** `consolidation_state: complete` before `bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" clear .`. The clear helper rechecks completion and retains the marker on failure.
+   - **Marker present, but finalization is inapplicable or rejected:** stop and inspect the reported failure. Missing/conflicting history or report metadata, incompatible legacy reports, unavailable ancestry, or a malformed marker are not authorization to invent metadata, backfill history, bypass validation, or force a final commit. Legacy completions may be readable by state inspection while the current final helper still requires v1 metadata and a valid original marker. If the audited decision is to retire the interrupted marker, use the matching capture and review notes from steps 1–2 (replace the placeholders with their actual paths):
+
+     ```bash
+     bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" repair . INSPECT_CAPTURE REVIEW_NOTES
+     bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .
+     ```
+
+     Keep the `.broken` backup, adjacent `.audit`, and repair log. Repair changes no commits/reports and does not establish completion or bypass unfinished checkpoint/report evidence. If state remains blocked/unknown, continue manual reconciliation; do not start a fresh cycle or claim completion.
+   - **Marker absent:** manually reconcile checkpoint history, archives and reports. Repair requires an existing marker, and the final helper requires a valid original marker; do not create a replacement marker to satisfy it. Preserve evidence and resolve incompatible/legacy history through explicit review rather than assuming this recipe can complete it. Rerun state inspection after reconciliation; no marker needs clearing. A `none` result permits no completion claim for the old cycle.
+
+Only verified `consolidation_state: complete` supports completion citations. Never manually remove an unfinished marker. A fresh start still requires definitive state and the normal maintenance guard/start protocol.
+
 ## Twice Weekly
 
 - **Memory reflection**: Run `bash "$CLAUDE_CONFIG_DIR/scripts/reflection-guard.sh"` first. If it exits 0, reflection is due — run the memory-reflect skill to assess memory quality. **Produce a report.** If it exits non-zero, skip it (no reflection report needed) — either not yet due, or idle-skipped because no consolidation report since the last reflection promoted anything (`reflectionStatus.idleSkipped`, poller-brain#391).

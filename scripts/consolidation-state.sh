@@ -122,7 +122,12 @@ if [ -z "$CHECKPOINT" ] && [ "$MARKER_STATUS" -eq 0 ]; then
   exit 0
 fi
 FINAL=$(final_for_date "$CYCLE_DATE" "${CHECKPOINT_SHA:-$START_HEAD}..HEAD") || unknown "cannot read final history"
-REASON="matching final commit missing after cycle start/checkpoint"
+REASON="matching final commit missing after cycle start/checkpoint; expected exact subject: \`chore: consolidate memory ($CYCLE_DATE)\`; see MAINTENANCE.md#non-canonical-final-recovery"
+if [ "$MARKER_STATUS" -eq 1 ]; then
+  REASON+='; after archive/report audit, with marker present, matching INSPECT_CAPTURE and REVIEW_NOTES containing non-empty Archives inspected: and Reports inspected: lines, run `bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" repair . INSPECT_CAPTURE REVIEW_NOTES`; repair does not establish completion'
+else
+  REASON+='; marker absent: manually reconcile checkpoint history, archives and reports; do not create a replacement marker or run repair'
+fi
 if [ -n "$FINAL" ]; then
   if [ "$MARKER_STATUS" -eq 1 ]; then
     git -C "$BRAIN_DIR" merge-base --is-ancestor "$START_HEAD" "$FINAL" 2>/dev/null ||
