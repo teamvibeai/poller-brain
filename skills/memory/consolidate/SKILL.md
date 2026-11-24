@@ -121,6 +121,26 @@ Inspect is read-only: exit 0 means absent, 1 prints `v1 YYYY-MM-DD START_HEAD` (
 3. Run `bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" repair . INSPECT_CAPTURE REVIEW_NOTES` (paths are relative to the brain root, or absolute). The helper locks lifecycle changes and requires the captured output to match current inspection and both review notes. It preserves the marker by moving it to a timestamped `consolidation-start.*.broken` path, saves the inspection/notes in the adjacent `.audit`, and logs request/completion in `consolidation-start.repair.log`.
 4. Rerun state inspection and reconcile unfinished archives/reports before a new `start`. Repair changes no archive, report, index or commit and does not establish completion. Keep the backup and audit. Use `consolidation-marker.sh repair . INSPECT_CAPTURE REVIEW_NOTES` instead of manually removing or overwriting a marker.
 
+#### Non-canonical final recovery
+
+A final such as `chore: consolidate memory + reflection (YYYY-MM-DD)` does not match the required exact `chore: consolidate memory (YYYY-MM-DD)` subject. Follow [MAINTENANCE.md — Non-canonical final recovery](../../../MAINTENANCE.md#non-canonical-final-recovery) from the affected brain root, using the blocked cycle's original UTC date. This explicit audit is required before any recovery write; a marker alone never authorizes resuming the skill.
+
+- Capture `consolidation-marker.sh inspect` output and review status, checkpoint/final lineage, TODAY.md/daily archives, progress ledger, required steps, report drafts, and committed report evidence. Save genuine findings with non-empty `Archives inspected:` and `Reports inspected:` lines in a separate Git-metadata file; reconcile unsupported completion citations.
+- **Valid original marker, only canonical final missing:** only if all required steps actually finished, alarms are resolved, allowed-path changes are reviewed, and original date/starting HEAD, ancestry, history append and committed report metadata agree, run the read-only preflight below. Require the committed pair at HEAD or the exact Step 12a checkpoint, valid `consolidationHistory` v1 metadata, and markdown on disk without unfinished edits. Never recreate consumed JSON. Keep the original marker for validation; apply **Checkpoint Rules** before finalization.
+
+  ```bash
+  # Only after the audit above; final runs only if preflight succeeds:
+  node "$CLAUDE_CONFIG_DIR/scripts/consolidation-history.mjs" . YYYY-MM-DD --final &&
+    bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-commit.sh" . YYYY-MM-DD final
+  bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-state.sh" .
+  ```
+
+  The helper can create an empty canonical final when appropriate; this is not an unconditional empty-commit remedy. Require exit 0 and `consolidation_state: complete` before `bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" clear .`; clear rechecks and retains the marker on failure.
+- **Marker present, finalization inapplicable/rejected:** stop on missing/conflicting history, metadata or ancestry, malformed markers, and incompatible legacy reports. State can recognize legacy evidence that the current final helper rejects; do not fabricate v1 metadata/history, bypass checks or force a final. If retiring the interrupted marker after review, use the audited repair procedure above: `bash "$CLAUDE_CONFIG_DIR/scripts/consolidation-marker.sh" repair . INSPECT_CAPTURE REVIEW_NOTES`, with an existing marker, matching current capture and actual review notes. Keep the `.broken` backup, `.audit` and repair log. Recheck state; repair alone does not establish completion or bypass checkpoint/report evidence.
+- **Marker absent:** manually reconcile checkpoint history, archives and reports. Do not run repair or create a replacement marker for the final helper, which requires a valid original marker. Preserve incompatible/legacy evidence for explicit review. Recheck state after reconciliation; there is nothing to clear, and `none` does not prove the old cycle complete.
+
+Remain stopped on blocked/unknown state. Completion citations and clearing require verified `complete`; fresh starts still require the normal guard/start protocol. Never remove an unfinished marker manually or repeat archive/reset blindly.
+
 **No forward completion citations:** Until the final commit and report pair are verified, SUMMARY.md/episodic history may describe this run only as "in progress" with existing checkpoint SHAs. Do not write "Commit: see chore: consolidate memory (YYYY-MM-DD)" or a completed-history report link before that evidence exists. Defer completion citations until after the final commit; commit any subsequent citation edits separately.
 
 ### Checkpoint Rules (apply to every checkpoint and the final commit)
