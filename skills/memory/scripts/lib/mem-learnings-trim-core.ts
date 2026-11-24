@@ -79,7 +79,7 @@
  * real brain's memory/.
  */
 
-import { MEM_ID_PATTERN, MEM_CITATION_PATTERN, compareMemIds, isMemId } from "./mem-id.js";
+import { MEM_ID_PATTERN, compareMemIds, isMemId } from "./mem-id.js";
 
 import {
   type DestinationFile,
@@ -311,6 +311,7 @@ export interface FindLearningsCandidatesResult {
   alreadyPointer: number;
   /** Destination lines skipped as index/pointer-shaped, not narrative evidence — surfaced so coverage loss is never silent. */
   indexRejections: import("./citation-detect.js").IndexRejection[];
+  ownershipRejections: import("./citation-detect.js").OwnershipRejection[];
   /** Keys with a genuine citation but an unreliable extracted hook — excluded from `candidates`, surfaced so coverage loss is never silent. */
   unreliableHooks: UnreliableHook[];
   /** Ambiguous/unsupported spans are preserved for manual review, never proposed. */
@@ -337,7 +338,7 @@ export function findLearningsTrimCandidates(
     );
   }
 
-  const { citations, indexRejections } = firstCitations(destinations);
+  const { citations, indexRejections, ownershipRejections } = firstCitations(destinations);
   const { entries, lines } = parseEntries(learnings);
   const candidates: LearningsTrimCandidate[] = [];
   const unreliableHooks: UnreliableHook[] = [];
@@ -370,10 +371,7 @@ export function findLearningsTrimCandidates(
     if (!citation) continue; // no genuine single-key citation found — not (yet) promoted anywhere
 
     const hook = extractHook(citation);
-    // Keep lifecycle-tagged destination headings ineligible, as on the
-    // legacy reader, even though extractHook now recognises their tags.
-    const lifecycleHeading = new RegExp(String.raw`\b${MEM_CITATION_PATTERN}:obsolete\b`).test(citation.heading ?? "");
-    if (lifecycleHeading || hook === null || !isReliableHook(hook)) {
+    if (hook === null || !isReliableHook(hook)) {
       unreliableHooks.push({
         key,
         file: citation.file,
@@ -402,6 +400,7 @@ export function findLearningsTrimCandidates(
     multiKeyEntries,
     alreadyPointer,
     indexRejections,
+    ownershipRejections,
     unreliableHooks,
     skippedEntries,
   };

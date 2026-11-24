@@ -51,17 +51,21 @@ function startCycle(date: string): string {
   return head;
 }
 let openCycle: string | undefined;
+// Keep fixture reports away from today's UTC date: the state checker also
+// inspects today's report and would compare an older cycle to the active marker.
+const cycleYear = new Date().getUTCFullYear() - 1;
+const firstCycleDate = `${cycleYear}-11-01`;
 let cycle = 0;
 function nextDate(): string {
   let date: string;
-  do date = `2026-11-${String(++cycle).padStart(2, "0")}`; while (startedCycles.has(date));
+  do date = `${cycleYear}-11-${String(++cycle).padStart(2, "0")}`; while (startedCycles.has(date));
   return date;
 }
 function complete(consume = false): string {
   // Finish an already-started cycle (as production does) before starting a new one.
   const date = openCycle ?? nextDate();
   const startingHead = startCycle(date);
-  const history = path.join(root, "memory/episodic/archive/consolidation-history-2026-H2.md");
+  const history = path.join(root, `memory/episodic/archive/consolidation-history-${cycleYear}-H2.md`);
   fs.mkdirSync(path.dirname(history), { recursive: true });
   fs.appendFileSync(history, `\n## Consolidation ${date} / ${startingHead}\nStatus: in progress\nWork performed: Reviewed trim proposals; zero promotions.\n<!-- /consolidation-history -->\n`);
   write(`reports/${date}-memory-consolidation.md`, "# Completed fixture\n");
@@ -84,7 +88,7 @@ const registry = "memory/MEM_REGISTRY.md";
 const body = "Record the deployment SHA and rollback command before releasing. ".repeat(5).trim();
 const source = `- **Preserve deployment evidence** — ${body} [MEM-124]\n\n- **Dated lesson** — ${body} [${key}]\n`;
 const rows = `| Key | Status | Created | Description |\n|---|---|---|---|\n| MEM-125 | ACTIVE | 2026-09-01 | ${body} |\n| ${registryKey} | ACTIVE | 2026-11-01 | ${body} |\n`;
-const dest = `### Deployment safety policy\n[MEM-124] ${body}\n[${key}] ${body}\n[MEM-125] ${body}\n[${registryKey}] ${body}\n`;
+const dest = `### Deployment safety policy [MEM-124]\n[MEM-124] ${body}\n### Deployment safety policy [${key}]\n[${key}] ${body}\n### Deployment safety policy [MEM-125]\n[MEM-125] ${body}\n### Deployment safety policy [${registryKey}]\n[${registryKey}] ${body}\n`;
 const destination = "memory/semantic/deployment.md";
 try {
   write("CLAUDE.md", "Fixture\n"); write(learning, source); write(registry, rows); write(destination, dest);
@@ -101,8 +105,8 @@ try {
     check(read(kind === "learnings" ? learning : registry) === bytes, `${kind}: rejection never trims source`);
     check(refs(cached(kind, 0)).length === 2, `${kind}: pending state never suppresses review`);
   }
-  startCycle("2026-11-01");
-  checkpoint("2026-11-01", "steps 8-9");
+  startCycle(firstCycleDate);
+  checkpoint(firstCycleDate, "steps 8-9");
   check(git("show", `HEAD:${REVIEW_STATE_PATH}`) === read(REVIEW_STATE_PATH).trimEnd(), "normal memory checkpoint persists the exact ledger");
   for (const kind of ["learnings", "registry"]) cached(kind, 0);
   let completedAt = complete(true);
@@ -167,7 +171,7 @@ try {
     for (const kind of ["learnings", "registry"]) cached(kind, 0);
   }
   write(destination, dest);
-  write("memory/semantic/zzz-new.md", "### New alternate evidence\nAdditional narrative [MEM-124]\n");
+  write("memory/semantic/zzz-new.md", "### New alternate evidence [MEM-124]\nAdditional narrative [MEM-124]\n");
   for (const kind of ["learnings", "registry"]) cached(kind, 0);
   fs.unlinkSync(path.join(root, "memory/semantic/zzz-new.md"));
   fs.renameSync(path.join(root, destination), path.join(root, "memory/semantic/renamed.md"));
@@ -186,7 +190,7 @@ try {
   check(items.every((i, n) => i.id !== policyChanged[n].id), "policy version invalidates every decision");
   const policyRecords = completedRejections(root).records;
   check(policyRecords.length > 0 && policyChanged.every(i => !policyRecords.some(r => r.id === i.id)), "changed policy has no reusable completed verdict");
-  write("memory/episodic/consolidation-progress-2026-11-01.md", "### Bookkeeping\nUnrelated review tally [MEM-124]\n");
+  write(`memory/episodic/consolidation-progress-${firstCycleDate}.md`, "### Bookkeeping\nUnrelated review tally [MEM-124]\n");
   check(JSON.stringify(collectTrimDestinations(root, ["semantic", "episodic", "procedural"])) === JSON.stringify(destinations), "progress bookkeeping excluded from inventory and evidence");
   cached("learnings", 2);
 
@@ -277,7 +281,7 @@ try {
 
   // Original #530 incidental citation is reviewable but #505 still rejects it
   // for registry trimming. Existing index/multi-key shapes remain ineligible.
-  const incidental = [{ file: "episodic/cycle.md", text: "### Consolidation bookkeeping\nReviewed the deployment checklist per [MEM-124]; no trim approved.\n" }];
+  const incidental = [{ file: "episodic/cycle.md", text: "### Consolidation bookkeeping [MEM-124]\nReviewed the deployment checklist per [MEM-124]; no trim approved.\n" }];
   check(findLearningsTrimCandidates(source, incidental).candidates.length === 1, "original incidental proposal still requires explicit review");
   const guarded = findTrimCandidates(rows.replace("MEM-125", "MEM-124"), incidental);
   check(guarded.candidates.length === 0 && guarded.contentCoverage[0].missingTokens[0] === "no-literal-match", "#505 literal-match rejection unchanged");

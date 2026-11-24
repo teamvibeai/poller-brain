@@ -16,10 +16,11 @@
  * destination file.
  *
  * The content-coverage guard (#505) requires case-sensitive equality between
- * the complete normalized Description and a whole line in the selected file,
+ * the complete normalized Description and a whole line in the accepted owned section,
  * optionally removing one leading prefix for the same key.
  * Both modes print an additive `contentCoverage: <JSON array>` field;
- * Rejections carry a single `no-literal-match` reason in `missingTokens`.
+ * Rejections carry `no-literal-match` or `uncertain-section` in `missingTokens`.
+ * Raw heading conflicts are also reported in `ownershipRejections` in both modes.
  * Rejected rows must not be hand-trimmed before moving the missing content.
  *
  * Applying is a separate, explicit, opt-in step — pass the exact keys you
@@ -48,6 +49,7 @@
  *   npx tsx mem-registry-trim.ts --apply --only MEM-1,MEM-5  # apply exactly these approved keys
  */
 
+import { printOwnershipRejections } from "./lib/citation-detect.js";
 import { isMemId } from "./lib/mem-id.js";
 import * as fs from "fs";
 import { brainPath, resolveBrainRoot } from "./lib/brain-root.js";
@@ -177,7 +179,7 @@ function main(): void {
 
   const registryBefore = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const destinations = collectDestinations();
-  const { candidates, duplicateKeys, totalDataRows, alreadyPointer, indexRejections, unreliableHooks, contentCoverage } = findTrimCandidates(
+  const { candidates, duplicateKeys, totalDataRows, alreadyPointer, indexRejections, ownershipRejections, unreliableHooks, contentCoverage } = findTrimCandidates(
     registryBefore,
     destinations
   );
@@ -186,6 +188,7 @@ function main(): void {
     console.log(`Duplicate registry keys rejected; all rows with these keys are retained: ${duplicateKeys.join(", ")}`);
   }
   printContentCoverage(contentCoverage);
+  printOwnershipRejections(ownershipRejections);
 
   if (!apply) {
     printIndexRejections(indexRejections);

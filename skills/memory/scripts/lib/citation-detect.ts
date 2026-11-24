@@ -5,6 +5,11 @@
  * reuse the exact same hard-won heuristic instead of re-deriving it and
  * re-discovering the same false-positive shapes.
  *
+ * Destination ownership is required: the nearest visible heading must name
+ * exactly the cited key, with no obsolete owner. Generic/unkeyed nested
+ * headings do not inherit ownership. A separate raw-source guard rejects
+ * sections containing foreign MEM headings even inside comments or fences.
+ *
  * Detection is content-based, not status-based: a citation is only trusted
  * as evidence if its line cites EXACTLY ONE distinct MEM-N key, OR cites 2+
  * keys but exactly one of them sits in the line's leading SUBJECT position
@@ -26,6 +31,9 @@
  * real brain's memory/.
  */
 
+import { fromMarkdown } from "mdast-util-from-markdown";
+import type { Nodes, Heading } from "mdast";
+
 import { MEM_ID_PATTERN, MEM_CITATION_PATTERN, compareMemIds } from "./mem-id.js";
 
 /** A destination file's content, path relative to `memory/` (e.g. "semantic/foo.md"). */
@@ -39,8 +47,8 @@ export interface Citation {
   line: number;
   lineText: string;
   /**
-   * Nearest markdown heading (`#` through `######`) above `line` within the
-   * same destination file, text with the `#` markers stripped — null if no
+   * Nearest CommonMark heading (ATX or Setext) above `line` within the
+   * same destination file, text without heading markers — null if no
    * heading precedes this line. Governs until the NEXT heading (standard
    * markdown section semantics), regardless of blank lines in between — a
    * real entry is routinely `### Title` / blank / `**Rule:** ...` / blank /
@@ -54,6 +62,29 @@ export interface Citation {
   heading: string | null;
 }
 
+/** Accepted evidence includes only visible text in its nearest heading's section. */
+export interface OwnedCitation extends Citation {
+  sectionText: string;
+}
+
+export interface OwnershipRejection {
+  key: string;
+  file: string;
+  line: number;
+  lineText: string;
+  heading: string | null;
+  owners: string[];
+  reason: "missing-heading" | "missing-key" | "multi-key" | "foreign-key" | "obsolete-owner" | "uncertain-section";
+  /** Raw boundary that prevents trusting the visible scanner's ownership. */
+  rawHeading?: RawHeading;
+}
+
+interface RawHeading {
+  line: number;
+  lineText: string;
+  owners: string[];
+}
+
 /** A single-key destination line skipped because it looks like an index/pointer row, not narrative. */
 export interface IndexRejection {
   key: string;
@@ -63,7 +94,8 @@ export interface IndexRejection {
 }
 
 export interface CitationScan {
-  citations: Map<string, Citation>;
+  citations: Map<string, OwnedCitation>;
+  ownershipRejections: OwnershipRejection[];
   /**
    * Single-key lines that were skipped for being index-shaped, reported so
    * a caller never silently loses coverage (DevGuru catch, poller-brain#300
@@ -152,60 +184,163 @@ export function distinctCitedKeysInLine(line: string): string[] {
   return [...keys];
 }
 
-const HEADING_LINE_RE = /^#{1,6}\s+(.+?)\s*$/;
+const OBSOLETE_OWNER_RE = new RegExp(String.raw`\b${MEM_CITATION_PATTERN}:obsolete\b`);
 
-/**
- * Nearest heading text governing `lineIdx` (0-indexed) in `lines`, `#`
- * markers stripped — null if none precedes it anywhere in the file. A
- * heading governs everything below it up to the next heading (or end of
- * file) — plain markdown section scoping, not a heuristic — so blank
- * lines/paragraph breaks in between do NOT end its reach (poller-brain#300
- * review round 4: the correct boundary is the next heading, not a blank
- * line; bounding on blank lines rejected the governing heading for the
- * routine `### Title` / blank / `**Rule:**` / blank / `**How to
- * apply:**` shape). Trade-off accepted deliberately: a stray unrelated
- * paragraph inside a heading's section (no heading of its own) inherits
- * that heading as its hook too — imprecise but never garbage, which is the
- * property this function optimizes for.
+interface Section {
+  start: number;
+  headingEnd: number;
+  end: number;
+  heading: string | null;
+}
+
+/** Only CommonMark heading nodes own/end sections; literal nodes never do.
+ * Keep source offsets/line endings intact when masking excluded nodes so the
+ * existing line-based citation and literal-coverage rules retain their meaning.
+ * No Markdown syntax is recognized here: micromark/mdast owns all parsing.
  */
-function nearestHeading(lines: string[], lineIdx: number): string | null {
-  for (let i = lineIdx; i >= 0; i--) {
-    const m = HEADING_LINE_RE.exec(lines[i]);
-    if (m) return m[1].trim();
+function parseDestination(text: string): { lines: string[]; sections: Section[] } {
+  const tree = fromMarkdown(text);
+  const headings: Heading[] = [];
+  const excluded: { start: number; end: number }[] = [];
+  function visit(node: Nodes): void {
+    if (node.type === "code" || node.type === "html" || node.type === "definition") {
+      excluded.push({ start: node.position!.start.offset!, end: node.position!.end.offset! });
+      return;
+    }
+    if (node.type === "inlineCode") return; // literal inline text, never block syntax
+    if (node.type === "heading") headings.push(node);
+    if ("children" in node) for (const child of node.children) visit(child);
   }
-  return null;
+  visit(tree);
+  let offset = 0;
+  const visible: string[] = [];
+  for (const range of excluded) {
+    visible.push(text.slice(offset, range.start), text.slice(range.start, range.end).replace(/[^\r\n]/g, " "));
+    offset = range.end;
+  }
+  visible.push(text.slice(offset));
+  const visibleText = visible.join("");
+  const lines = visibleText.split(/\r\n|[\n\r]/u);
+  function headingText(node: Heading): string {
+    // AST child positions omit ATX/Setext delimiters. Read the original source
+    // so literal escapes (notably \| in registry pointer hooks) survive. HTML
+    // children have already been masked; inlineCode stays literal inline text.
+    if (!node.children.length) return "";
+    const first = node.children[0].position!.start.offset!;
+    const last = node.children[node.children.length - 1].position!.end.offset!;
+    return visibleText.slice(first, last).replace(/\r\n|[\n\r]/g, " ").trim();
+  }
+  const sections: Section[] = headings.map((node) => ({
+    start: node.position!.start.line - 1,
+    headingEnd: node.position!.end.line,
+    end: lines.length,
+    heading: headingText(node),
+  }));
+  if (!sections.length || sections[0].start > 0) sections.unshift({ start: 0, headingEnd: 0, end: lines.length, heading: null });
+  for (let i = 0; i + 1 < sections.length; i++) sections[i].end = sections[i + 1].start;
+  return { lines, sections };
 }
 
 /**
- * First citation location for every MEM-N key found across `destinations`,
- * scanned in file-path order then line order — deterministic so repeated
- * runs pick the same citation (idempotence). A single-key line always
- * counts as evidence; a 2+-key line counts ONLY for whichever key (if any)
- * sits in leading subject position — see `subjectPositionKey` and the
- * module doc (poller-brain#334). Index-shaped lines are excluded from
- * `citations` but reported in `indexRejections`, never silently dropped.
+ * Safety boundaries, NOT a Markdown parser: inspect every raw line, including
+ * code/comments, without consulting the AST or any parser state. Accept
+ * possible container/indentation prefixes conservatively and include Setext
+ * shapes. False positives may reject a trim; visibility bugs cannot authorize
+ * one by hiding a foreign owner or borrowing text past a raw heading.
+ */
+function rawHeadings(lines: string[]): (RawHeading | null)[] {
+  const content = lines.map((line) => line.replace(/^\ufeff/, "")
+    .replace(/^(?:[ \t>]|(?:[-+*]|\d+[.)])(?=[ \t]))*/, ""));
+  const underline = (line: string) => /^(?:=+|-+)[ \t]*$/.test(line);
+  const titleOwners = new Set<string>();
+  return lines.map((lineText, idx) => {
+    const atx = /^#{1,6}(?:[ \t]|$)/.test(content[idx]);
+    // Blank lines and definite raw heading boundaries end a possible title
+    // span. Everything else remains in it: guessing whether a comment, fence,
+    // container or other ambiguous raw line interrupts a paragraph could hide
+    // an earlier owner again. This deliberately over-approximates the title,
+    // independently of AST visibility, in one pass through all its lines.
+    if (atx || content[idx].trim() === "" || underline(content[idx])) {
+      titleOwners.clear();
+      return atx ? { line: idx + 1, lineText, owners: distinctCitedKeysInLine(lineText) } : null;
+    }
+    for (const owner of distinctCitedKeysInLine(lineText)) titleOwners.add(owner);
+    // Keep the boundary at the final title line, inside any visible Setext
+    // heading's section, but veto using owners from the ENTIRE possible span.
+    return underline(content[idx + 1] ?? "")
+      ? { line: idx + 1, lineText, owners: [...titleOwners] } : null;
+  });
+}
+
+/**
+ * First eligible citation per key in file/line order. A line must pass the
+ * single-key/leading-subject and index rules AND its nearest visible heading
+ * must name exactly that key. Headings can themselves cite their own key.
+ * Unkeyed nested headings do not inherit ownership from an ancestor.
+ * Rejections never consume the key: a later correctly owned section can win.
  */
 export function firstCitations(destinations: DestinationFile[]): CitationScan {
-  const found = new Map<string, Citation>();
+  const found = new Map<string, OwnedCitation>();
   const indexRejections: IndexRejection[] = [];
+  const ownershipRejections: OwnershipRejection[] = [];
   const sorted = [...destinations].sort((a, b) => a.file.localeCompare(b.file));
   for (const { file, text } of sorted) {
-    const lines = text.split("\n");
-    lines.forEach((lineText, idx) => {
-      const keysOnLine = distinctCitedKeysInLine(lineText);
-      if (keysOnLine.length === 0) return; // no citation at all
-      const key = keysOnLine.length === 1 ? keysOnLine[0] : subjectPositionKey(lineText);
-      if (key === null) return; // 2+ keys, no unambiguous subject — ambiguous cross-reference
-      if (isIndexShapedLine(lineText)) {
-        indexRejections.push({ key, file, line: idx + 1, lineText });
-        return;
+    const rawLines = text.split(/\r\n|[\n\r]/u);
+    const raw = rawHeadings(rawLines);
+    const { lines, sections } = parseDestination(text);
+    for (const section of sections) {
+      const { start, end: sectionEnd, heading } = section;
+      const owners = distinctCitedKeysInLine(heading ?? "");
+      let evidenceEnd = sectionEnd;
+      let conflict: RawHeading | undefined;
+      // Independent fix2 invariant: inspect the WHOLE section before accepting
+      // even its heading citation, including excluded code/HTML/inlineCode.
+      for (let i = start; i < sectionEnd; i++) {
+        const boundary = raw[i];
+        if (!boundary) continue;
+        if (i >= section.headingEnd && i > start) evidenceEnd = Math.min(evidenceEnd, i);
+        if (!conflict && boundary.owners.some((key) => !owners.includes(key))) conflict = boundary;
       }
-      if (!found.has(key)) {
-        found.set(key, { file, line: idx + 1, lineText, heading: nearestHeading(lines, idx) });
-      }
-    });
+      lines.slice(start, sectionEnd).forEach((visible, relative) => {
+        const idx = start + relative;
+        const keysOnLine = distinctCitedKeysInLine(visible);
+        if (keysOnLine.length === 0) return;
+        const key = keysOnLine.length === 1 ? keysOnLine[0] : subjectPositionKey(visible);
+        if (key === null) return; // ambiguous cross-reference, no sole subject
+        const lineText = rawLines[idx];
+        if (isIndexShapedLine(visible)) {
+          indexRejections.push({ key, file, line: idx + 1, lineText });
+          return;
+        }
+        const reason = heading === null ? "missing-heading"
+          : owners.length === 0 ? "missing-key"
+          : owners.length > 1 ? "multi-key"
+          : owners[0] !== key ? "foreign-key"
+          : OBSOLETE_OWNER_RE.test(heading) ? "obsolete-owner"
+          : null;
+        if (reason) {
+          ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners, reason });
+          return;
+        }
+        const uncertain = conflict ?? (idx >= evidenceEnd ? raw[evidenceEnd] : null);
+        if (uncertain) {
+          ownershipRejections.push({ key, file, line: idx + 1, lineText, heading, owners,
+            reason: "uncertain-section", rawHeading: uncertain });
+          return;
+        }
+        if (!found.has(key)) {
+          found.set(key, { file, line: idx + 1, lineText, heading,
+            sectionText: lines.slice(start, evidenceEnd).join("\n") });
+        }
+      });
+    }
   }
-  return { citations: found, indexRejections };
+  return { citations: found, indexRejections, ownershipRejections };
+}
+
+/** Always emitted by trim CLIs, including when the stricter ownership gate rejects nothing. */
+export function printOwnershipRejections(rejections: OwnershipRejection[]): void {
+  console.log(`ownershipRejections: ${JSON.stringify(rejections)}`);
 }
 
 /**

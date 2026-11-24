@@ -300,6 +300,7 @@ export interface FindMistakesCandidatesResult {
   multiKeyEntries: number;
   alreadyPointer: number;
   indexRejections: import("./citation-detect.js").IndexRejection[];
+  ownershipRejections: import("./citation-detect.js").OwnershipRejection[];
   unreliableHooks: UnreliableHook[];
   /**
    * Fraction (0..1) of `mistakes`' bytes covered by a recognized entry span.
@@ -333,7 +334,7 @@ export function findMistakesTrimCandidates(
     );
   }
 
-  const { citations, indexRejections } = firstCitations(destinations);
+  const { citations, indexRejections, ownershipRejections } = firstCitations(destinations);
   const { entries, lines, diagnostics } = parseEntries(mistakes);
   const candidates: MistakesTrimCandidate[] = [];
   const unreliableHooks: UnreliableHook[] = [];
@@ -359,10 +360,7 @@ export function findMistakesTrimCandidates(
     if (!citation) continue;
 
     const hook = extractHook(citation);
-    // Keep lifecycle-tagged destination headings ineligible, as on the
-    // legacy reader, even though extractHook now recognises their tags.
-    const lifecycleHeading = new RegExp(String.raw`\b${MEM_CITATION_PATTERN}:obsolete\b`).test(citation.heading ?? "");
-    if (lifecycleHeading || hook === null || !isReliableHook(hook)) {
+    if (hook === null || !isReliableHook(hook)) {
       unreliableHooks.push({
         key,
         file: citation.file,
@@ -397,6 +395,7 @@ export function findMistakesTrimCandidates(
     multiKeyEntries,
     alreadyPointer,
     indexRejections,
+    ownershipRejections,
     unreliableHooks,
     coverageRatio,
     structuralDiagnostics: diagnostics,

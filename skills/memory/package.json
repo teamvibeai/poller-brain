@@ -1,0 +1,8 @@
+{
+  "name": "poller-brain-memory",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mdast-util-from-markdown": "2.0.2"
+  }
+}

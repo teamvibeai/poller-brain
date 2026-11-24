@@ -18,6 +18,258 @@ const input = command => ({ tool_name: "Bash", tool_input: { command }, cwd: "/t
 const decode = command => simpleCommands(command, { allowEnvReferences: true, stripSudo: false })
   .flatMap(({ words }) => words).join(" ");
 
+test("#585 bracket paths and all six reported commands survive byte-for-byte", () => {
+  const commands = [
+    "git ls-files 'src/file[ab].ts'",
+    "git log --format=%h -- src/file[ab].ts",
+    "npm run test -- --testPathPattern=hooks/lib/file[ab].mjs",
+    "git log -p HEAD~1..HEAD",
+    "curl -p --proxy http://localhost:8080 https://example.invalid",
+    "npm run test -- --passWithNoTests=true",
+    'git ls-files "src/file[ab].ts"',
+    "git ls-files src/file[ab].ts",
+    "git ls-files src/fi''le[ab].ts",
+    "git ls-files src/file[ab]=value.ts",
+    "git ls-files 'file[ab].ts=value'",
+    "git ls-files 'file[ab].ts' 'file[cd]=value.ts'",
+    "git ls-files 'file[ab].ts=TOKEN[1 + 2].ts'",
+    "echo file[ab].ts && git status",
+    "git ls-files src/file[ab].ts; curl -p --proxy http://localhost:8080",
+    "echo " + "file[ab].ts ".repeat(4000),
+    "echo " + "--".repeat(30000),
+    "echo " + "a[".repeat(20000),
+  ];
+  for (const command of commands) assert.equal(redactSecrets(command), command);
+  console.log(`#585 unchanged commands=${commands.length}`);
+});
+
+test("#585 short -p exceptions use only resolved curl and git log contexts", () => {
+  const commands = [
+    "git log -pHEAD~1..HEAD",
+    "git log -p $REF", "curl -p$REF", "git log -p HEAD -- src/file[ab].ts",
+    "MODE=plain git log -p HEAD", "sudo git log -p HEAD",
+    "command curl -p --proxy http://localhost:8080", "env MODE=plain curl -p --proxy localhost",
+    "git -C /project log -p HEAD", "git --no-pager log -p HEAD",
+    "git log -p HEAD && mysql -p $REF", "curl -p --proxy localhost; git log -pHEAD",
+    "curl --proxy http://localhost:8080 -p https://example.invalid",
+    "curl --user $REF -p --proxy localhost",
+  ];
+  for (const command of commands) assert.equal(redactSecrets(command), command);
+  console.log(`#585 nonsecret -p commands=${commands.length}`);
+});
+
+test("#585 full boolean option names precede generic sensitive-name matching", () => {
+  let checks = 0;
+  for (const name of ["--passWithNoTests", "--pass-with-no-tests"]) {
+    for (const value of ["true", "false", '"true"', "tr''ue", "$REF", "${REF}"]) {
+      const command = `npm run test -- ${name}=${value}`;
+      assert.equal(redactSecrets(command), command);
+      checks++;
+    }
+  }
+  console.log(`#585 nonsecret option checks=${checks}`);
+});
+
+test("#585 exceptions retain credential protection and omit uncertain assignment extents", () => {
+  let checks = 0;
+  const protectedCommands = [
+    "mysql -p CanaryPassword", "mysql -pCanaryPassword", "unknown -p CanaryPassword",
+    "unknown -pCanaryPassword", "git status -p CanaryPassword", "git status -pCanaryPassword",
+    "npm run test -- -p CanaryPassword", "npm run test -- -pCanaryPassword",
+    "wrapper git log -p CanaryPassword", "git -c alias.log=mysql log -p CanaryPassword",
+    "sudo -u root curl -p CanaryPassword", "env -S 'curl -p CanaryPassword'",
+    "echo curl git log -p CanaryPassword", "curl -p --password CanaryPassword",
+    "git log -p HEAD && mysql -pCanaryPassword", "mysql -pCanaryPassword; curl -p --proxy localhost",
+    "curl -p 'outer=plain TOKEN=CanaryNested'", "git log -p '--password=CanaryNested'",
+    "npm run test -- --passWithNoTests=CanaryPassword", "npm --passWithNoTests=trueCanaryTail",
+    "npm --passWithNoTests=$REF-CanaryTail", "npm --pass-with-no-tests=${REF}CanaryTail",
+    "npm --custom-api-key=CanaryPassword", "npm --monkey=CanaryPassword",
+    "npm --custom-passWithNoTests=trueCanaryTail", "BYPASS=CanaryPassword npm test",
+    "declare passWithNoTests=CanaryPassword", "echo 'outer=plain --custom-token=CanaryNested'",
+    "echo 'nested:TOKEN[1 + 2]=CanaryAssignment trailingCanary'",
+    "echo 'nested:TOKEN[1 + 2]+=CanaryAssignment trailingCanary'",
+    "TOKEN['a]b']='CanaryAssignment trailingCanary'",
+    "declare -A TOKEN[1 + 'a] b']='CanaryAssignment trailingCanary'",
+    "curl -p -H 'Authorization: Basic CanaryHeader trailingCanary'",
+    "git log -p -H 'Cookie: CanaryHeader trailingCanary'",
+    "npm --passWithNoTests='Authorization: Bearer CanaryHeader trailingCanary'",
+    "git log -p xoxb-CanarySignature", "curl -pxoxb-CanarySignature",
+    "npm --passWithNoTests=xoxb-CanarySignature",
+    "git log -p $REF-CanaryTail", "curl -p${REF}CanaryTail",
+    "echo src/file[ab].ts --token CanaryPassword",
+    "npm --passWithNoTests=true --token CanaryPassword",
+    'git log -p "-----BE""GIN PRIVATE KEY----- CanaryPem"',
+    "curl -p '-----BEGIN PRIVATE KEY----- CanaryPem'",
+  ];
+  for (const prefix of ["", "export ", "declare -a ", "local ", "readonly ", "echo 'outer=plain "]) {
+    for (const assignment of ["TOKEN[0]=", "PASSWORD+=", "TOKEN[i]+=", "TOKEN[1 + 2]=", "TOKEN[1 + 2]+=", "TOKEN[a[0]]="]) {
+      protectedCommands.push(`${prefix}${assignment}\"CanaryAssignment trailingCanary\"${prefix.startsWith("echo") ? "'" : ""}`);
+    }
+  }
+  for (const command of protectedCommands) {
+    const result = redactSecrets(command);
+    assert.ok(!/Canary/.test(result), `${command}: ${result}`);
+    assert.match(result, /\[REDACTED/);
+    checks++;
+  }
+  for (const signature of ["AKIAABCDEFGHIJKLMNOP", "ASIAABCDEFGHIJKLMNOP", "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+    "github_pat_abcdefghijklmnopqrstuv012345", "xoxb-CanarySignature"]) {
+    for (const prefix of ["git log -p ", "git log -p", "curl -p ", "curl -p", "npm --passWithNoTests="]) {
+      assert.ok(!redactSecrets(prefix + signature).includes(signature));
+      checks++;
+    }
+  }
+  for (const command of ["git log -p " + TOKEN, "curl -p" + TOKEN,
+    "npm --passWithNoTests=true", "npm --pass-with-no-tests=false"]) {
+    const knownTokens = command.includes(TOKEN) ? [TOKEN] : [command.endsWith("true") ? "true" : "false"];
+    assert.match(redactSecrets(command, { knownTokens }), /\[REDACTED/);
+    checks++;
+  }
+  for (const command of ["npm --passWithNoTests+=true", "npm --passWithNoTests[0]=true",
+    "npm --pass-with-no-tests+=false", "npm --custom-passWithNoTests=true",
+    "passWithNoTests=true", "declare passWithNoTests=true", "BYPASS=true"]) {
+    assert.match(redactSecrets(command), /\[REDACTED/);
+    checks++;
+  }
+  assert.equal(redactSecrets("echo keep && TOKEN[1 + 2]='CanaryAssignment trailingCanary'; git status"),
+    "echo keep && [REDACTED] ; git status");
+  assert.equal(redactSecrets("echo src/file[ab].ts --token CanaryPassword"), "echo src/file[ab].ts --token [REDACTED]");
+  console.log(`#585 protection checks=${checks + 2}`);
+});
+
+// Review1: decoded subscripts and option arguments must never widen exemptions.
+const review1Commands = {
+  arrays: [
+    "declare -A TOKEN; TOKEN['public[0']='CanaryPassword trailingCanary'",
+    "declare -A TOKEN; TOKEN['public[0']+='CanaryPassword trailingCanary'",
+    "declare -A TOKEN; TOKEN['public[0']=$REF-CanaryPassword",
+    "TOKEN[0]=$REF TOKEN['public[0']='CanaryPassword trailingCanary'",
+    "TOKEN['outer[inner[0']='CanaryPassword trailingCanary'",
+  ],
+  optionValues: [
+    "curl --user '-p:CanaryPassword' https://example.invalid",
+    "curl --proxy-user '-p:CanaryPassword' https://example.invalid",
+    "curl -u '-p:CanaryPassword' https://example.invalid",
+    "curl -U '-p:CanaryPassword' https://example.invalid",
+    "curl -p --user '-p:CanaryPassword' https://example.invalid",
+    "curl --proxy localhost --proxy-user '-p:CanaryPassword' https://example.invalid",
+    "curl --unknown '-p:CanaryPassword' https://example.invalid",
+    "curl -- '-p:CanaryPassword'",
+    "curl --data '-p CanaryPassword trailingCanary'",
+    "curl '-p CanaryPassword trailingCanary'",
+  ],
+};
+for (const [kind, commands] of Object.entries(review1Commands)) {
+  test(`#585 review1 ${kind}: redact direct output and telemetry metadata`, () => {
+    for (const command of commands) {
+      const { event } = prepareBashTelemetryHook(input(command), env);
+      assert.ok(event);
+      for (const result of [redactSecrets(command), event.metadata.command]) {
+        assert.ok(!/Canary/.test(result), `${command}: ${result}`);
+        assert.match(result, /\[REDACTED/);
+      }
+    }
+    console.log(`#585 review1 ${kind} checks=${commands.length * 2}`);
+  });
+}
+
+function protectBoth(command) {
+  const { event } = prepareBashTelemetryHook(input(command), env);
+  assert.ok(event);
+  for (const result of [redactSecrets(command), event.metadata.command]) {
+    assert.ok(!/Canary/.test(result), `${command}: ${result}`);
+    assert.match(result, /\[REDACTED/);
+  }
+}
+
+test("#585 review2 curl bundles consume attached/separate credential arguments", { timeout: 5000 }, () => {
+  let commands = 0;
+  // Enumerate all placements of p and other no-value flags before u/U.
+  // Anything after u/U is its attached argument, even another flag letter.
+  const prefixes = new Set(["", "p", "ps", "sp", "pIs", "sIp", "IpS"]);
+  for (const flag of ["s", "I", "L", "k", "v", "g", "N", "4", "6"]) {
+    prefixes.add(`p${flag}`);
+    prefixes.add(`${flag}p`);
+  }
+  for (const prefix of prefixes) for (const credential of ["u", "U"]) {
+    for (const value of [" '-p:CanaryPassword trailingCanary'", "-p:CanaryPassword", " CanaryPassword"]) {
+      protectBoth(`curl -${prefix}${credential}${value} https://example.invalid`);
+      commands++;
+    }
+    // u/U first: the following p belongs to the credential value.
+    protectBoth(`curl -${credential}${prefix}CanaryPassword https://example.invalid`);
+    commands++;
+  }
+  const uncertainCommands = ["curl --data -- -pu CanaryPassword", "curl --data -X -pU CanaryPassword",
+    "curl --unknown -H -puCanaryPassword", "curl --unknown -H --user CanaryPassword"];
+  for (const command of ["curl -px '-p:CanaryPassword'", "curl -pX '-p:CanaryPassword'",
+    "curl -phttp://CanaryPassword", "curl https://example.invalid -spu CanaryPassword",
+    "curl --user=CanaryPassword", "curl --proxy-user=-p:CanaryPassword", ...uncertainCommands]) {
+    protectBoth(command);
+    commands++;
+  }
+  for (const command of ["curl -sIp --proxy localhost https://example.invalid", "curl -p -u $REF",
+    "curl -p -sU ${REF}", "curl -x localhost -p https://example.invalid"]) {
+    assert.equal(redactSecrets(command), command);
+    assert.equal(prepareBashTelemetryHook(input(command), env).event.metadata.command, command);
+  }
+  console.log(`#585 review2 curl matrix commands=${commands}, paths=2`);
+});
+
+test("#585 review2 indexed assignment depths, punctuation, quotes and uncertainty", { timeout: 5000 }, () => {
+  let commands = 0;
+  for (const punctuation of ["", "nested-", "nested.", "nested/", "nested:"]) {
+    for (const depth of [0, 1, 2, 4, 16]) for (const operator of ["=", "+="]) {
+      const index = "a[".repeat(depth) + "1 + 2" + "]".repeat(depth);
+      protectBoth(`echo '${punctuation}TOKEN[${index}]${operator}CanaryPassword trailingCanary'`);
+      commands++;
+    }
+  }
+  for (const index of ["a b", "a[0]", "a[0", "a]b", '"a]b"', '"a[b"', "'a]b'", "[broken", "broken"]) {
+    for (const operator of ["=", "+="]) {
+      protectBoth(`echo 'nested-TOKEN[${index}]${operator}CanaryPassword trailingCanary'`);
+      commands++;
+    }
+  }
+  for (const command of ["TOKEN[broken=CanaryPassword", "TOKEN[broken+=CanaryPassword",
+    "TOKEN[0][1]+=CanaryPassword", "TOKEN[0]=$REF TOKEN[a[0]]=CanaryPassword"]) {
+    protectBoth(command);
+    commands++;
+  }
+  console.log(`#585 review2 assignment matrix commands=${commands}, paths=2`);
+});
+
+test("#585 review2 scanner stress stays bounded at telemetry's input limit", { timeout: 5000 }, () => {
+  const start = performance.now();
+  let worst = 0;
+  for (const size of [16000, 32000, 64000]) {
+    for (const part of ["KEY", "--", "a[", "long-label-", "a=", "a-", "'a[", "a[0]."]) {
+      const command = "echo " + part.repeat(Math.floor(size / part.length));
+      const before = performance.now();
+      redactSecrets(command);
+      worst = Math.max(worst, performance.now() - before);
+    }
+    protectBoth("echo 'TOKEN[" + "a[".repeat(size / 4) + "]=" + "CanaryPassword'");
+  }
+  assert.ok(performance.now() - start < 3000, "matrix exceeded three seconds");
+  assert.ok(worst < 1000, `individual input took ${worst}ms`);
+  console.log(`#585 review2 stress worst_ms=${worst.toFixed(2)}`);
+});
+
+test("#585 bracket cwd and benign commands survive telemetry preparation", () => {
+  let checks = 0;
+  for (const cwd of ["/project/src/file[ab]", "/project/file[ab]=value", "/project/fi''le[ab]"]) {
+    const command = "git ls-files 'src/file[ab].ts' && npm test -- --passWithNoTests=true";
+    const { event } = prepareBashTelemetryHook({ ...input(command), cwd }, env);
+    assert.equal(event.metadata.cwd, cwd);
+    assert.equal(event.metadata.command, command);
+    checks += 2;
+  }
+  const { event } = prepareBashTelemetryHook({ ...input("git log -p HEAD"), cwd: `/project/file[ab]/${TOKEN}` }, env);
+  assert.ok(!event.metadata.cwd.includes(TOKEN));
+  console.log(`#585 metadata checks=${checks + 1}`);
+});
+
 test("credential headers redact every scheme and the complete quoted/multiline value", () => {
   let checks = 0;
   for (const header of ["Authorization: Basic", "Authorization: token", "Authorization: CustomScheme",
