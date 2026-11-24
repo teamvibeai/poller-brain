@@ -449,3 +449,185 @@ for (const operation of ["write", "delete"]) {
     });
   }
 }
+
+// Move only after exclusive creation (empty) or the real populated write. Track
+// descriptors in the child so process exit cannot hide a missing explicit close.
+function cleanupFixture(t, scenario, boundary = "populated") {
+  const f = fixture(t);
+  const target = ".claude/skills/slot/CLAUDE.md";
+  const absolute = f.write(target);
+  f.write(".claude/skills/slot/keep.md", "sibling must survive\n");
+  f.write(".claude/skills/slot/.brain-write-unowned.tmp", "unowned temp must survive\n");
+  const slot = path.dirname(absolute);
+  const moved = slot + "-moved";
+  const outside = path.join(f.temporary, "outside");
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "CLAUDE.md"), "outside must survive\n");
+  const outsideBefore = snapshot(outside);
+  const audit = path.join(f.temporary, "cleanup-audit.json");
+  const preload = path.join(f.temporary, "cleanup.mjs");
+  fs.writeFileSync(preload, `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { syncBuiltinESMExports } from 'node:module';
+    const original = { ...fs };
+    const slot = ${JSON.stringify(slot)};
+    const outside = ${JSON.stringify(outside)};
+    const scenario = ${JSON.stringify(scenario)};
+    const boundary = ${JSON.stringify(boundary)};
+    const directories = new Set();
+    const state = { fired: false, tempName: null, tempStats: 0, originalPathStats: 0, reopened: [], unlinks: [] };
+    let tempFd;
+    function fault() {
+      state.fired = true;
+      if (['move', 'symlink', 'replacement'].includes(scenario)) {
+        original.renameSync(slot, slot + '-moved');
+        if (scenario === 'symlink') original.symlinkSync(outside, slot);
+        if (scenario === 'replacement') {
+          original.mkdirSync(slot);
+          original.writeFileSync(path.join(slot, state.tempName), 'replacement sentinel\\n');
+          original.writeFileSync(path.join(slot, 'CLAUDE.md'), 'replacement target\\n');
+        }
+      } else if (scenario === 'write-error' || scenario === 'cleanup-error') {
+        throw new Error('primary write failure');
+      }
+    }
+    fs.openSync = function(file, flags, ...args) {
+      if (state.fired && typeof flags === 'number' && (flags & fs.constants.O_DIRECTORY)) state.reopened.push(String(file));
+      if (scenario === 'exclusive-open-failure' && flags === 'wx') {
+        state.fired = true;
+        state.tempName = path.basename(file);
+        original.writeFileSync(file, 'foreign temp sentinel');
+        throw new Error('primary temp create failure');
+      }
+      const fd = original.openSync(file, flags, ...args);
+      if (typeof flags === 'number' && (flags & fs.constants.O_DIRECTORY)) directories.add(fd);
+      if (typeof file === 'string' && path.basename(file).startsWith('.brain-write-') && flags === 'wx') {
+        tempFd = fd;
+        state.tempName = path.basename(file);
+        if (boundary === 'empty') fault();
+      }
+      return fd;
+    };
+    fs.closeSync = function(fd) {
+      const result = original.closeSync(fd);
+      directories.delete(fd);
+      if (fd === tempFd) tempFd = undefined;
+      return result;
+    };
+    fs.writeFileSync = function(file, ...args) {
+      const result = original.writeFileSync(file, ...args);
+      if (file === tempFd && !state.fired) fault();
+      return result;
+    };
+    fs.renameSync = function(file, ...args) {
+      if (path.basename(String(file)) === state.tempName) throw new Error('primary rename failure');
+      return original.renameSync(file, ...args);
+    };
+    fs.readdirSync = function() { throw new Error('cleanup must never scan a directory'); };
+    fs.lstatSync = function(file, ...args) {
+      if (state.fired && file === slot) state.originalPathStats++;
+      if (state.tempName && path.basename(String(file)) === state.tempName) state.tempStats++;
+      return original.lstatSync(file, ...args);
+    };
+    fs.unlinkSync = function(file, ...args) {
+      state.unlinks.push({
+        file: String(file), openDirectories: directories.size, tempOpen: tempFd !== undefined,
+        parent: original.realpathSync(path.dirname(file)),
+      });
+      if (scenario === 'cleanup-error' || scenario === 'rename-cleanup-error') throw new Error('secondary unlink failure');
+      // Disappear at the unlink boundary, rather than before a possible lstat gate.
+      if (scenario === 'absent-temp') original.unlinkSync(file);
+      return original.unlinkSync(file, ...args);
+    };
+    process.on('exit', () => original.writeFileSync(${JSON.stringify(audit)}, JSON.stringify({
+      ...state, openDirectories: [...directories], tempOpen: tempFd !== undefined,
+    })));
+    syncBuiltinESMExports();
+  `);
+  f.env.BRAIN_WRITE_TEST_PRELOAD = preload;
+  return { ...f, target, slot, moved, outside, outsideBefore, audit };
+}
+
+function cleanupFailure(f, reason) {
+  const result = f.run([f.target], "populated replacement\n");
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(result.stdout, "", "failures must not print a success summary");
+  assert.match(result.stderr, reason);
+  const audit = JSON.parse(fs.readFileSync(f.audit, "utf8"));
+  assert.equal(audit.fired, true, "the deterministic fault must execute");
+  assert.ok(audit.tempName, "the temp basename must be recorded");
+  assert.deepEqual(audit.openDirectories, [], "explicitly close every parent fd before exit");
+  assert.equal(audit.tempOpen, false, "explicitly close the temp fd before exit");
+  assert.deepEqual(audit.reopened, [], "never reopen or discover the moved parent by name");
+  const parent = fs.existsSync(f.moved) ? f.moved : f.slot;
+  assert.equal(fs.readFileSync(path.join(parent, ".brain-write-unowned.tmp"), "utf8"), "unowned temp must survive\n");
+  assert.deepEqual(snapshot(f.outside), f.outsideBefore, "outside sentinels must be unchanged");
+  return { result, audit };
+}
+
+for (const boundary of ["empty", "populated"]) {
+  for (const scenario of ["move", "symlink", "replacement"]) {
+    test(`owned ${boundary} temp cleanup after parent ${scenario}`, (t) => {
+      const f = cleanupFixture(t, scenario, boundary);
+      const { result, audit } = cleanupFailure(f, /Target parent changed|ENOENT/);
+      assert.equal(fs.readFileSync(path.join(f.moved, "CLAUDE.md"), "utf8"), "original\n");
+      assert.equal(fs.readFileSync(path.join(f.moved, "keep.md"), "utf8"), "sibling must survive\n");
+      const owned = path.join(f.moved, audit.tempName);
+      if (process.platform === "linux") {
+        assert.equal(fs.existsSync(owned), false, "clean the owned temp through the still-open parent fd");
+        assert.equal(audit.unlinks.length, 1);
+        assert.equal(audit.originalPathStats, 1, "cleanup must not reverify the original pathname on Linux");
+        assert.equal(audit.tempStats, 0, "unlink directly without a temp lstat gate");
+        assert.match(audit.unlinks[0].file, /^\/proc\/self\/fd\/\d+\/\.brain-write-/);
+        assert.equal(audit.unlinks[0].parent, f.moved);
+        assert.equal(audit.unlinks[0].openDirectories, 4);
+        assert.equal(audit.unlinks[0].tempOpen, false);
+        assert.doesNotMatch(result.stderr, /temporary cleanup failed/);
+      } else {
+        assert.equal(audit.unlinks.length, 0, "portable verification must refuse the changed pathname");
+        assert.equal(audit.originalPathStats, 2, "portable cleanup must reverify the original pathname");
+        assert.match(result.stderr, /temporary cleanup failed/);
+        if (fs.existsSync(owned)) {
+          assert.equal(fs.readFileSync(owned, "utf8"), boundary === "empty" ? "" : "populated replacement\n");
+        }
+      }
+      if (scenario === "replacement") {
+        assert.equal(fs.readFileSync(path.join(f.slot, audit.tempName), "utf8"), "replacement sentinel\n");
+        assert.equal(fs.readFileSync(path.join(f.slot, "CLAUDE.md"), "utf8"), "replacement target\n");
+      }
+    });
+  }
+}
+
+for (const scenario of ["write-error", "rename-error", "absent-temp", "cleanup-error", "rename-cleanup-error"]) {
+  test(`owned temp cleanup handles ${scenario} and closes fds`, (t) => {
+    const f = cleanupFixture(t, scenario);
+    const primary = scenario === "write-error" || scenario === "cleanup-error" ? "write" : "rename";
+    const { result, audit } = cleanupFailure(f, new RegExp(`brain-write: primary ${primary} failure`));
+    assert.equal(fs.readFileSync(path.join(f.slot, "CLAUDE.md"), "utf8"), "original\n");
+    assert.equal(fs.readFileSync(path.join(f.slot, "keep.md"), "utf8"), "sibling must survive\n");
+    assert.equal(audit.tempStats, 0, "unlink directly without a temp lstat gate");
+    assert.equal(audit.unlinks.length, 1);
+    assert.equal(audit.unlinks[0].openDirectories, 4, "keep parent fds open until cleanup finishes");
+    assert.equal(audit.unlinks[0].tempOpen, false);
+    if (scenario === "cleanup-error" || scenario === "rename-cleanup-error") {
+      assert.match(result.stderr, /brain-write: temporary cleanup failed: secondary unlink failure/);
+      assert.equal(fs.readFileSync(path.join(f.slot, audit.tempName), "utf8"), "populated replacement\n");
+    } else {
+      assert.equal(fs.existsSync(path.join(f.slot, audit.tempName)), false);
+      assert.doesNotMatch(result.stderr, /temporary cleanup failed/);
+    }
+  });
+}
+
+test("failed exclusive temp creation never cleans another invocation's file", (t) => {
+  const f = cleanupFixture(t, "exclusive-open-failure");
+  const { result, audit } = cleanupFailure(f, /brain-write: primary temp create failure/);
+  assert.equal(audit.unlinks.length, 0);
+  assert.equal(audit.tempStats, 0);
+  assert.equal(fs.readFileSync(path.join(f.slot, audit.tempName), "utf8"), "foreign temp sentinel");
+  assert.equal(fs.readFileSync(path.join(f.slot, "CLAUDE.md"), "utf8"), "original\n");
+  assert.doesNotMatch(result.stderr, /temporary cleanup failed/);
+});
