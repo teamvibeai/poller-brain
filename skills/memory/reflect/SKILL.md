@@ -64,6 +64,8 @@ Scan all memory files for information that may be outdated:
 
 **Action:** Mark stale entries with `[STALE?]` or archive to `memory/episodic/archive/`
 
+Archives under `memory/episodic/archive/` are append-only: create the file if missing; otherwise append all new headers and entries at EOF without changing existing content, because existing `:line` pointers depend on stable line numbers (see [consolidation Step 5c](../consolidate/SKILL.md#5c-learningsmd-gradual-reduction)).
+
 ### 2. Contradiction Check
 
 Look for conflicting information across memory files:
