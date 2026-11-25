@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path'
 // they answer the same question for the same files.
 import { lifecycleOf, parseStatus, secretArgEnvName } from './bg-task.mjs'
 export { secretArgEnvName }
+import { assessCompletion } from './completion-contract.mjs'
 
 const TAIL_BYTES = 1500
 const NOTE_CHARS = 1000 // see noteOf: the note is the only agent-authored field in the payload
@@ -188,7 +189,7 @@ export function noteOf(dir, limit = NOTE_CHARS) {
 
 export function buildPrompt({
   name, state, rc, ttl, dir, tail, cmd = [], elapsedSec, siblings = 0,
-  note = '', fence = 'bg-task-output', killedBy, signalSent, childRc, residualCleanup,
+  note = '', fence = 'bg-task-output', killedBy, signalSent, childRc, residualCleanup, completion,
 }) {
   const why = state === 'timed-out'
     ? `hit its ${ttl}s TTL and was killed`
@@ -213,6 +214,10 @@ export function buildPrompt({
   const cleanup = residualCleanup
     ? `\nResidual descendants: found; group cleanup ${residualCleanup}`
     : ''
+  const outcome = completion
+    ? `\nMode: evidence-v1\nTask outcome: ${completion.taskOutcome} (reason=${completion.reason})` +
+      `\nAssessment: ${completion.assessmentRef}\nNotification delivery: see terminal_drop in ${join(dir, 'status')} (inbox write only)`
+    : ''
   const also = siblings > 0
     ? `\n\nStill running: ${siblings} other background task${siblings === 1 ? '' : 's'} — expect further wake messages.`
     : ''
@@ -231,7 +236,7 @@ export function buildPrompt({
 
 Task: ${name}
 Command: ${cmd.join(' ') || '(unknown)'}
-State: ${state}${rcLine}${killed}${elapsed}${cleanup}
+State: ${state}${rcLine}${killed}${elapsed}${cleanup}${outcome}
 Directory: ${dir}   (full output: ${join(dir, 'output.log')})${intent}
 
 Pick the work back up from here. Report the real outcome — if it failed or timed out,
@@ -333,7 +338,7 @@ export function writeInboxMessage(threadId, text, dir, dry) {
 }
 
 async function main() {
-  const { dir, ttl, name, threadId, dryRun, notifyOn, quietCheckpoints, checkpointInterval, eagerCheckpoints, cmd, cwd, stdinFile, note: taskNote } =
+  const { dir, ttl, name, threadId, dryRun, notifyOn, quietCheckpoints, checkpointInterval, eagerCheckpoints, cmd, cwd, stdinFile, note: taskNote, completionContract } =
     parseRunnerArgs(process.argv.slice(2))
   const dry = dryRun ? '1' : '0'
   const statusPath = join(dir, 'status')
@@ -349,6 +354,7 @@ async function main() {
 
   const startedAt = Date.now()
   note([`started=${stamp()}`, `pid=${process.pid}`, `sid=${sessionId()}`, `ttl=${ttl}s`])
+  if (completionContract) note(['mode=evidence-v1', 'task_outcome=pending'])
   if (dry === '1') note(['dry_run=1'])
   if (quietCheckpointsOn) note(['quiet_checkpoints=1'])
   if (checkpointIntervalMs > 0) note([`checkpoint_interval=${checkpointIntervalSec}s`])
@@ -364,12 +370,17 @@ async function main() {
       ...(childRc === null || childRc === undefined ? [] : [`child_rc=${childRc}`]),
       `ended=${stamp()}`,
     ])
+    let completion
+    if (completionContract) {
+      completion = assessCompletion(completionContract, dir, { rc, timedOut, killedBy })
+      note([`task_outcome=${completion.taskOutcome}`, `outcome_reason=${completion.reason}`, `assessment=${completion.assessmentRef}`])
+    }
     const finalPrompt = buildPrompt({
       name, state, rc, ttl, dir, tail: tailOf(logPath), cmd: command,
       elapsedSec: Math.round((Date.now() - startedAt) / 1000),
       siblings: countRunningSiblings(dirname(dir), dir), note: noteOf(dir),
       fence: `bg-task-output-${randomBytes(4).toString('hex')}`,
-      killedBy, signalSent, childRc, residualCleanup,
+      killedBy, signalSent, childRc, residualCleanup, completion,
     })
     const result = writeInboxMessage(threadId, finalPrompt, dir, dry)
     note([
@@ -412,7 +423,9 @@ async function main() {
   const out = openSync(logPath, 'a')
   // detached so the command gets its own process group, cleaned up on leader exit
   // as well as TTL. Descendants that create a new session escape this group.
-  const child = spawn(cmd[0], cmd.slice(1), { cwd, stdio: [stdinFile ? 'pipe' : 'ignore', out, out], detached: true })
+  const child = spawn(cmd[0], cmd.slice(1), { cwd, stdio: [stdinFile ? 'pipe' : 'ignore', out, out], detached: true,
+    ...(completionContract ? { env: { ...process.env, BG_TASK_CONTRACT_PATH: join(dir, 'contract.json') } } : {}),
+  })
   const pgid = child.pid // Capture once; never read a pgid from the spec/status files.
   if (pgid) note([`workload_pgid=${pgid}`])
   closeSync(out)
