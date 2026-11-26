@@ -1,13 +1,14 @@
 #!/usr/bin/env npx tsx
 /**
- * Append a log entry to memory/TODAY.md.
+ * Append a short-term memory note to memory/TODAY.md.
  *
- * Use this for routine session logs (events, triage, status updates).
+ * Write only information worth remembering later: facts, findings, preferences,
+ * and non-obvious context; event records and session state belong in their originating systems.
  * For important items that need tracking, use mem-write.ts instead.
  *
  * Usage:
- *   npx tsx log-write.ts "heartbeat: klidný den, žádné pending issues"
- *   npx tsx log-write.ts "triage: 3 nové emaily, žádný urgentní"
+ *   npx tsx log-write.ts "project: staging database resets every Sunday"
+ *   npx tsx log-write.ts "finding: deploy requires SSO login first"
  *
  * Output:
  *   Logged to memory/TODAY.md
@@ -15,7 +16,7 @@
 
 import * as fs from "fs";
 import { brainPath } from "./lib/brain-root.js";
-import { computeRollover } from "./lib/today-md-core.js";
+import { computeRollover, todayMdCapMessage } from "./lib/today-md-core.js";
 
 const TODAY_PATH = brainPath("memory/TODAY.md");
 
@@ -43,9 +44,18 @@ function main(): void {
     console.error('Usage: npx tsx log-write.ts "category: detail"');
     console.error("");
     console.error("Examples:");
-    console.error('  npx tsx log-write.ts "heartbeat: klidný den"');
-    console.error('  npx tsx log-write.ts "triage: 3 nové emaily, žádný urgentní"');
+    console.error('  npx tsx log-write.ts "project: staging database resets every Sunday"');
+    console.error('  npx tsx log-write.ts "finding: deploy requires SSO login first"');
     process.exit(1);
+  }
+
+  if (fs.existsSync(TODAY_PATH)) {
+    const message = todayMdCapMessage(fs.statSync(TODAY_PATH).size, process.env.TODAY_MD_MAX_BYTES);
+    if (message) {
+      console.error(message);
+      process.exitCode = 2;
+      return;
+    }
   }
 
   ensureToday();
