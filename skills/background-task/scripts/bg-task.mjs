@@ -14,6 +14,7 @@ import { ChildProcess, spawn } from 'node:child_process'
 import { closeSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { freezeCompletionContract, readCompletionContract, taskOutcomeOf } from './completion-contract.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const RUNNER = join(HERE, 'bg-task-runner.mjs')
@@ -63,8 +64,8 @@ export function parseArgs(argv, env = {}) {
   for (; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--') { i++; break }
-    if (a === '--list') return { list: true }
-    const needsValue = ['--name', '--ttl', '--note', '--notify-on', '--checkpoint-interval', '--stdin-file'].includes(a)
+    if (a === '--list') return { list: true, ...(argv.includes('--outcomes') ? { outcomes: true } : {}) }
+    const needsValue = ['--name', '--ttl', '--note', '--notify-on', '--checkpoint-interval', '--stdin-file', '--completion-contract'].includes(a)
     if (needsValue && i + 1 >= argv.length) return { error: `${a} needs a value` }
     switch (a) {
       case '--name': opts.name = argv[++i]; break
@@ -73,6 +74,9 @@ export function parseArgs(argv, env = {}) {
       case '--stdin-file':
         if (!argv[i + 1]) return { error: '--stdin-file needs a nonempty path' }
         opts.stdinFile = resolve(argv[++i]); break
+      case '--completion-contract':
+        if (!argv[i + 1]) return { error: '--completion-contract needs a nonempty path' }
+        opts.completionContract = resolve(argv[++i]); break
       case '--notify-on': opts.notifyOn = argv[++i]; break
       case '--quiet-checkpoints': opts.quietCheckpoints = true; break
       case '--checkpoint-interval': opts.checkpointInterval = argv[++i]; opts.checkpointIntervalGiven = true; break
@@ -255,6 +259,8 @@ export function taskRow(id, statusText, opts = {}) {
   // never be read a few milliseconds apart and disagree about how old it is.
   const now = opts.now ?? Date.now()
   const state = lifecycleOf(kv, { ...opts, now })
+  // Admission metadata must not turn an empty process status into an abandoned task.
+  if (!kv.mode && opts.contractMode) kv.mode = opts.contractMode
   let elapsed = ''
   if (kv.started && kv.ended) {
     const secs = Math.round((Date.parse(kv.ended) - Date.parse(kv.started)) / 1000)
@@ -268,6 +274,7 @@ export function taskRow(id, statusText, opts = {}) {
     ended: kv.ended || '',
     elapsed,
     wake: wakeStateOf(kv, state, now),
+    ...taskOutcomeOf(kv, state),
   }
 }
 
@@ -288,15 +295,27 @@ export function listTasks(root, opts = {}) {
       try {
         status = readFileSync(join(root, id, 'status'), 'utf8')
       } catch { /* dir without status yet — still worth listing as running */ }
-      return taskRow(id, status, at)
+      // Frozen admission survives even if the runner died before its first status write.
+      let contractMode
+      if (!parseStatus(status).mode) {
+        try {
+          if (JSON.parse(readFileSync(join(root, id, 'contract.json'), 'utf8')).mode === 'evidence-v1') contractMode = 'evidence-v1'
+        } catch { /* old task directory */ }
+      }
+      return taskRow(id, status, { ...at, contractMode })
     })
     .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
 }
 
-export function formatTaskList(rows) {
+export function formatTaskList(rows, { outcomes = false } = {}) {
   if (!rows.length) return 'no background tasks recorded for this channel'
   const head = { name: 'NAME', state: 'STATE', rc: 'RC', elapsed: 'RAN', ended: 'ENDED', wake: 'WAKE' }
   const cols = ['name', 'state', 'rc', 'elapsed', 'ended', 'wake']
+  // Keep legacy-only listings byte-identical unless the reader opts into outcomes.
+  if (outcomes || rows.some(row => row.mode === 'evidence-v1')) {
+    Object.assign(head, { mode: 'MODE', taskOutcome: 'TASK_OUTCOME', outcomeReason: 'REASON', assessment: 'ASSESSMENT' })
+    cols.push('mode', 'taskOutcome', 'outcomeReason', 'assessment')
+  }
   const width = {}
   for (const c of cols) {
     width[c] = Math.max(head[c].length, ...rows.map((r) => String(r[c]).length))
@@ -320,7 +339,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // be gated behind the launch-path validation (a command, a thread to report back to).
   if (parsed.list) {
     if (!process.env.TEAMVIBE_CHANNEL_ID) die('missing environment variable TEAMVIBE_CHANNEL_ID', 2)
-    console.log(formatTaskList(listTasks(taskRoot(process.env))))
+    console.log(formatTaskList(listTasks(taskRoot(process.env)), { outcomes: parsed.outcomes }))
     process.exit(0)
   }
 
@@ -334,6 +353,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   if (!process.env.TEAMVIBE_CHANNEL_ID) {
     die('missing environment variable TEAMVIBE_CHANNEL_ID — cannot namespace task storage', 2)
+  }
+
+  let completionContract
+  if (opts.completionContract) {
+    try { completionContract = readCompletionContract(opts.completionContract) }
+    catch (e) { die(e.message) }
   }
 
   const root = taskRoot(process.env)
@@ -355,6 +380,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   let ownsSpec = true
   let launchFailed = false
   try {
+    if (completionContract) opts.completionContract = freezeCompletionContract(completionContract, id, dir)
     writeFileSync(specPath, JSON.stringify({ ...opts, dir, cwd: process.cwd(), envNames: Object.keys(process.env) }),
       { mode: 0o600, flag: 'wx' })
 

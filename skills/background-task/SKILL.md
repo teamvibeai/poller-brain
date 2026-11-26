@@ -152,6 +152,7 @@ describe a timeout as a success.
 | `--name NAME` | `task` | Shows up in every drop. Use something you'll recognise. |
 | `--ttl SECONDS` | `900` | 30–21600 (6 h). The task is **killed** at this limit — set it above the realistic worst case. Also sets the eager checkpoint ceiling — see *Interim output*. |
 | `--note TEXT` | — | Why you launched it and what to do with the answer. Carried into every drop. **Write one for anything you intend to continue** — see below. |
+| `--completion-contract FILE` | — | Opt into the versioned outcome contract below. Invalid input is rejected before any runner/workload spawn. This slice cannot verify success. |
 | `--stdin-file PATH` | — | Read and delete this file before spawning, then pipe its contents to the workload's stdin. A read or deletion failure records task failure and a terminal wake without starting the workload. Use a dedicated 0600 file for prompts/secrets. Without this flag, stdin is ignored. |
 | `--notify-on REGEX` | — | Opt into an immediate checkpoint when new output matches, including in default quiet mode. For output that can't wait — a device-auth URL, a confirmation prompt. |
 | `--quiet-checkpoints` | on when no interval/eager flag is given | Suppress automatic interim checkpoints; `--notify-on` matches still fire — see *Interim output*. Mutually exclusive with `--checkpoint-interval` and `--eager-checkpoints`. |
@@ -159,10 +160,79 @@ describe a timeout as a success.
 | `--eager-checkpoints` | off | Opt into fast checkpoints: flush on a 1.5s quiet period OR the TTL-derived ceiling, whichever comes first — see *Interim output*. Mutually exclusive with `--quiet-checkpoints` and `--checkpoint-interval`. |
 | `--dry-run` | off | Runs the command for real but writes drops to `inbox-drops.jsonl` in the task dir instead of `.inbox/` — nothing lands in Slack. |
 | `-- <command…>` | required | Everything after `--` is the command. Not a shell string — no pipes or redirects unless you wrap it in `bash -c "…"`. |
-| `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the terminal drop was written. Needs no environment beyond `TEAMVIBE_CHANNEL_ID`. |
+| `--list` | — | Read-only: every task for this channel with state, exit code, runtime, and whether the terminal drop was written. Adds outcome columns when a contract task is present. Needs no environment beyond `TEAMVIBE_CHANNEL_ID`. |
+| `--list --outcomes` | — | Explicitly show outcome columns even for old/process-only directories; these say `not verified`. |
 
 There is no `--thread`/`--channel` flag. Every drop goes to `INBOX_THREAD_ID` — the thread
 this session is already in — full stop; see *What you get back*.
+
+### Opt-in task outcome contract (slice 1)
+
+Process exit, task outcome and notification delivery are independent facts. `rc=0`
+means only that the workload exited zero. The launcher returning zero means admission;
+the runner returning zero means its own machinery finished. Neither verifies the work.
+`terminal_drop` / `WAKE` describes an inbox write, never consumption or downstream work.
+
+Omit `--completion-contract` to retain the existing arbitrary-command behavior,
+checkpoint policy, terminal prompt and process/WAKE status bytes. Legacy-only `--list`
+output stays unchanged; use `--list --outcomes` to see the explicit `not verified` label.
+A mixed listing shows the extra columns for every row, including legacy tasks.
+
+Pass a regular JSON file (at most 64 KiB, no symlink) with this exact supported shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "mode": "evidence-v1",
+  "scope": "Prepare the requested local report",
+  "expectedOutput": "Report and supporting check results",
+  "allowedWorkArea": "/absolute/work/area",
+  "acceptance": [{ "id": "report", "required": true, "rule": "manual-review" }],
+  "producer": { "adapter": "receipt-v1", "version": "1" },
+  "verifierPolicy": "deferred-v1"
+}
+```
+
+```bash
+node bg-task.mjs --name report --completion-contract /absolute/contract.json -- your-command
+```
+
+Unknown fields, unsupported versions/policies, wrong types and invalid paths fail
+admission before spawn. Scope and expected output must be nonempty single-line strings
+of at most 1000 characters. Paths must be absolute and at most 4096 characters.
+Acceptance has 1–64 unique IDs (1–64 letters/digits/underscore/hyphen), boolean `required`
+values, at least one required criterion, and only `manual-review` rules. Optional
+`repository` is exactly `{ "path": "/absolute/repo", "baseHead": "<40 lowercase hex>" }`.
+Keep prompts, secrets and environment values out of the contract.
+
+The launcher freezes sanitized scope, policy and optional repository identity in
+`contract.json`, with task ID, fresh attempt nonce, a SHA-256 digest of the normalized
+contract, and fixed task-relative `completion.v1.json` / `assessment.v1.json` locations.
+This record survives launching-session teardown; the runner gets it through the private
+spec and exposes its path to the workload as `BG_TASK_CONTRACT_PATH`. Changing/deleting
+the original input file cannot redefine the launch. Work-area and repository fields
+record intent; this slice does not enforce a filesystem sandbox or verify repository heads.
+The nonce prevents accidental mixing; shared-user storage is not authentication.
+
+While running, task outcome is `pending`. After workload exit and existing group cleanup,
+the runner writes a separate atomic `assessment.v1.json` bound to the frozen identity:
+
+- Nonzero workload exit, actual signal, timeout or startup failure yields `failed`, even
+  if a receipt claims completion. Existing `rc`, `child_rc` and signal meanings stay intact.
+- Zero exit without a receipt yields `unverified` / `receipt_missing`.
+- Any present receipt yields `unverified` / `verifier_unavailable`. `deferred-v1` does
+  **not** parse or validate receipts, artifacts, Codex events, or producer claims. There
+  is no `verified_success` path in this slice; `receipt-v1` names the reserved handoff
+  protocol, not an installed producer adapter. Manual review is still required.
+- Assessment write failure remains bounded (`assessment_write_failed` unless process
+  failure takes precedence), and terminal notification is still attempted. A missing
+  final assessment from a vanished runner reads as `unverified` / `runner_unavailable`.
+
+Opted-in terminal prompts put the outcome/reason and assessment reference above output;
+`--list` shows `MODE`, `TASK_OUTCOME`, `REASON`, `ASSESSMENT` alongside process and `WAKE`.
+No receipt content or log text becomes policy. No retry, downstream authorization,
+restart attribution or durability guarantee follows from this contract. Verification,
+Codex adapters and live/fleet rollout are outside this slice.
 
 ### Write a `--note` — the drops alone cannot tell you why
 
@@ -175,7 +245,7 @@ If a drop lands in a new session (yours went idle), assume it remembers nothing 
 this moment.
 
 ```
---note "gate for the pb#231 canary — if rc=0, post the verdict in the thread and open the PR"
+--note "gate for the pb#231 canary — inspect the task outcome and required evidence; report the result, then open a PR only if verified and already authorized"
 ```
 
 Skip it only for tasks whose entire meaning is the exit code. Keep it short — the note is
@@ -265,8 +335,8 @@ Two reasons to reach for this:
   running would make them running forever, and the number would grow with every restart —
   including in the "N other background tasks" line of every terminal drop.
 
-  "The task finished" and "you were told" are different facts, and only the second one
-  fails silently.
+  Process completion, verified task outcome and notification delivery are separate
+  facts. An old task directory supplies no task verification, even when `RC=0`.
 - **Running tasks are otherwise invisible.** Without this there is no way to see what is
   in flight for this channel short of reading `ps`.
 
@@ -444,6 +514,7 @@ cd "$CLAUDE_CONFIG_DIR/skills/background-task/scripts"
 node bg-task.test.mjs                       # fast cases, ~5 s, no network
 node bg-task-runner.test.mjs                # runner/launcher and inbox regressions
 node __tests__/process-group-cleanup.test.mjs # fast process-group cleanup and TTL cases
+node __tests__/completion-contract.test.mjs # opt-in admission/outcome/compatibility (CI-selected)
 BG_TASK_TEST_SLOW=1 node bg-task.test.mjs   # + real TTL-kill case, ~35 s
 ```
 
