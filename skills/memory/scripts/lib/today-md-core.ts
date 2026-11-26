@@ -36,3 +36,12 @@ export function computeRollover(
 
   return { kind: "none" };
 }
+
+/** Return a refusal message at/above the cap; invalid env values use 15 KiB. */
+export function todayMdCapMessage(sizeBytes: number, maxBytesEnv?: string): string | null {
+  const parsed = maxBytesEnv && /^[0-9]+$/.test(maxBytesEnv) ? Number(maxBytesEnv) : NaN;
+  const cap = Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15360;
+  if (sizeBytes < cap) return null;
+
+  return `TODAY.md is ${(sizeBytes / 1024).toFixed(2)} KB (cap ${(cap / 1024).toFixed(2)} KB); entry NOT written. 1) Compact TODAY.md (archive it to memory/daily/ per the memory skill) before logging more. 2) Check whether you are logging too much: TODAY.md is short-term memory — write only information worth remembering later (facts, findings, preferences, non-obvious context). Event records (decisions, acks, starts, status) already live in GitHub/git/Slack or the originating system, and session state belongs to the session, task tracker or a scheduled message. Tracked lessons can still be written with mem-write.ts.`;
+}

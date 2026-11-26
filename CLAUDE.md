@@ -182,7 +182,7 @@ If these files don't exist yet, they'll be created during the next maintenance c
 **NEVER write to `memory/TODAY.md` directly.** Always use one of these scripts:
 
 ```bash
-# Routine logs (events, triage, status updates):
+# Short-term memory notes (facts, findings, preferences, non-obvious context):
 npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "category: detail"
 
 # Tracked capture (prescriptive lessons: apply the placement decision below first):
@@ -190,7 +190,7 @@ npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/mem-write.ts" "category: detai
 ```
 
 **Where to write (regular sessions):**
-- Routine logs → `log-write.ts` (appends to TODAY.md with timestamp)
+- Short-term memory notes → `log-write.ts` (appends to TODAY.md with timestamp; event records and session state belong in their originating systems)
 - Important facts/preferences → `mem-write.ts` (tracked key in TODAY.md + MEM_REGISTRY.md; new writes allocate UTC `MEM-YYYY-MM-DD-HHMMSS-<uuid>` IDs with a full random lowercase UUID; readers accept `MEM-<n>` and `MEM-YYYY-MM-DD-HHMMSS-<uuid>`, and existing IDs are never renumbered)
 - Session capture (brainstorming, deep-dive) → `memory/semantic/{topic}.md` (see memory skill for full pattern)
 

@@ -84,15 +84,15 @@ Rules:
 
 During regular sessions (non-maintenance), you may write to these places:
 
-For prescriptive lessons (what an agent should do next time), apply [Rule Placement Before Capture](#rule-placement-before-capture) before `mem-write`. Facts, preferences, and routine logs keep their existing routes below.
+For prescriptive lessons (what an agent should do next time), apply [Rule Placement Before Capture](#rule-placement-before-capture) before `mem-write`. Facts, preferences, and short-term memory notes keep their existing routes below.
 
 ### 1. `memory/TODAY.md` — primary write target
 
-Capture new information in the daily log; for a placed rule, capture its tracked pointer rather than duplicate the policy. This includes:
+Capture information worth remembering later in short-term memory; for a placed rule, capture its tracked pointer rather than duplicate the policy. This includes:
 - Factual info about the team or project (e.g., "Alice is the frontend lead")
-- Notable events (e.g., "production went down for 2h")
+- Findings and non-obvious context (e.g., "DNS cache TTL is 2h")
 - Workflows and procedures you figured out
-- Task progress, conversation notes, routine observations
+- Useful observations worth promoting into long-term memory during consolidation
 - Corrections and prescriptive lessons — placement decision first, then a `[MEM-NNN]` pointer or full lesson as specified below
 - Preferences — use `[MEM-NNN]` tracked keys (see below)
 
@@ -129,7 +129,7 @@ This pattern also applies to **session capture** — see the section below for d
 
 ### What is NOT allowed
 
-**Do NOT write directly to `memory/core/` files** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Apply the placement decision for prescriptive lessons, then use `mem-write.ts` for tracked capture in `memory/TODAY.md`; use `log-write.ts` for routine logs.
+**Do NOT write directly to `memory/core/` files** (MISTAKES.md, PREFERENCES.md, LEARNINGS.md) during regular sessions. These files are managed exclusively by consolidation. Apply the placement decision for prescriptive lessons, then use `mem-write.ts` for tracked capture in `memory/TODAY.md`; use `log-write.ts` for short-term memory notes.
 
 **Do NOT self-promote content during regular sessions.** Self-promotion means reading old daily logs or existing memory and reorganizing them into `semantic/`, `episodic/`, or `procedural/`. That is maintenance's job — only the consolidation process curates and reorganizes existing content.
 
@@ -219,23 +219,23 @@ Critical information gets a unique, tracked key — like Jira tickets for memory
 - User states a strong preference that must persist
 - User corrects you or supplies a prescriptive lesson — apply [Rule Placement Before Capture](#rule-placement-before-capture) first
 - You discover something critical that must not be lost
-- Do NOT tag routine observations — those go via `log-write.ts`
+- Do NOT tag untracked short-term memory notes — those go via `log-write.ts`
 
 ### Writing to TODAY.md
 
 **NEVER write to `memory/TODAY.md` directly.** Always use one of these scripts:
 
-#### `log-write.ts` — routine logs
+#### `log-write.ts` — short-term memory notes
 
-For events, triage, status updates, session notes:
+For information worth remembering later: facts, findings, preferences, and non-obvious context. Event records belong in GitHub/git/Slack or the originating system; session state belongs to the session, task tracker, or a scheduled message.
 
 ```bash
-npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "heartbeat: klidný den, žádné pending issues"
-npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "triage: 3 nové emaily, žádný urgentní"
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "project: staging database resets every Sunday"
+npx tsx "$CLAUDE_CONFIG_DIR/skills/memory/scripts/log-write.ts" "finding: deploy requires SSO login first"
 # Output: Logged to memory/TODAY.md
 ```
 
-The script appends a timestamped line: `- [HH:MM] content`
+The script appends a timestamped line: `- [HH:MM] content`. If the existing file is at or above 15360 bytes (15 KB), it writes nothing and exits 2; override with a positive integer `TODAY_MD_MAX_BYTES`. Compact/archive TODAY.md to `memory/daily/` before logging more; `mem-write.ts` remains uncapped.
 
 #### `mem-write.ts` — tracked memory
 

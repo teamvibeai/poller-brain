@@ -346,6 +346,26 @@ acceptance("CLI wiring", () => {
     check(ids.isMemId(allocator.stdout.trim()));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+acceptance("CLI tracked memory remains uncapped", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-write-uncapped-"));
+  fs.mkdirSync(path.join(root, "memory"));
+  fs.writeFileSync(path.join(root, "CLAUDE.md"), "fixture");
+  const todayPath = path.join(root, "memory/TODAY.md");
+  const before = "# 2000-01-01\n\n" + "x".repeat(15360) + "\n";
+  try {
+    fs.writeFileSync(todayPath, before);
+    const result = spawnSync(process.execPath, [...process.execArgv,
+      fileURLToPath(new URL("./mem-write.ts", import.meta.url)), content], {
+      env: { ...process.env, BRAIN_ROOT: root, TODAY_MD_MAX_BYTES: "64" }, encoding: "utf8",
+    });
+    check.equal(result.status, 0, result.stderr);
+    const id = result.stderr.match(/^MEM_ID=(.+)$/m)?.[1];
+    check(id && ids.isMemId(id));
+    check(fs.readFileSync(todayPath, "utf8").startsWith(before));
+    check(fs.readFileSync(todayPath, "utf8").includes(`- [${id}] ${content}`));
+    check(fs.readFileSync(path.join(root, "memory/MEM_REGISTRY.md"), "utf8").includes(id));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 // Reviewer content-boundary-cli.py, ported with checkbox and real-row pins.
 function retryAfterFollowingLine(following: string, status: 0 | 3): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mem-write-boundary-"));
